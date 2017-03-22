@@ -1,6 +1,6 @@
 #example GPU settings for WS281X control
 #add to end of /boot/config.txt
-#gives up to 64 * 24 universe of 1104 pixels; change as desired
+#gives up to 64 * 24 universes of 1104 pixels; change as desired
 
 #WS281X settings:
 [0xDEADBEEF]
@@ -19,7 +19,7 @@ dpi_output_format=7
 #? sdtv_aspect=1
 
 #dtdebug=on
-# dtoverlay=vga666
+# dtoverlay=vga666		(this one might also work)
 dtoverlay=dpi24
 enable_dpi_lcd=1
 display_default_lcd=1

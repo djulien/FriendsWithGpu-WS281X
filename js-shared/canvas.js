@@ -19,11 +19,11 @@ const alert = console.error;
 const BLACK = 0xff000000; //NOTE: needs alpha to take effect
 
 //const DEBUG = true;
-const SHOW_SHSRC = true; //false;
-const SHOW_VERTEX = true; //false;
-const SHOW_LIMITS = true; //false;
-const SHOW_PROGRESS = true; //false;
-const WS281X_FMT = false; //whether to apply WS281X formatting to screen (when dpi24 overlay is *not* loaded)
+//const SHOW_SHSRC = true; //false;
+//const SHOW_VERTEX = true; //false;
+//const SHOW_LIMITS = true; //false;
+//const SHOW_PROGRESS = true; //false;
+//const WS281X_FMT = false; //whether to apply WS281X formatting to screen (when dpi24 overlay is *not* loaded)
 //const VGROUP = 42; //enlarge display nodes for debug/demo; overridden when dpi24 overlay is loaded
 //const OUTMODE = 1; //Screen.gpio? 1: -1;
 
@@ -39,12 +39,13 @@ const Canvas =
 module.exports.Canvas =
 class Canvas
 {
-    constructor(title, w, h) //, vgroup)
+    constructor(title, w, h, opts) //, vgroup)
     {
-        document.setTitle(title || "WS281X demo");
+        this.opts = opts || {};
 //        if (gl) return; //only need one
 //        console.log("canvas: '%s' %d x %d", title, w, h);
         initGL.call(this);
+        document.setTitle(title || "WS281X demo");
 //        initTexture(w, h);
         this.txr = new Texture(this.gl, w, h); //, vgroup);
         glcheck("init txtr", this.getError());
@@ -54,6 +55,7 @@ class Canvas
         if (!Canvas.all) Canvas.all = [];
         Canvas.all.push(this);
         if (Canvas.all.length == 1) rAF(true); //start screen refresh loop
+        else debug("possible canvas conflict: %d".red_lt, Canvas.all.length);
 //    gl.enable(gl.DEPTH_TEST);
 //    gl.clearColor(0.0, 0.0, 0.0, 1.0); //start out blank
     }
@@ -71,9 +73,10 @@ class Canvas
     get elapsed() { return this.prior_elapsed || 0; }
     set elapsed(newval)
     {
+//console.log("elapsed", newval);
         var new_filter = this.interval? Math.floor(newval / this.duration / this.interval): newval / this.duration;
         if (new_filter == this.elapsed_filter) return;
-        debug(10, "elapsed: was %d, is now %d / %d, #rAF %d".blue_lt, this.prior_elapsed, newval, this.duration, rAF.count); //, new_filter);
+        debug(10, "elapsed: was %d, is now %d / %d, #rAF %d".blue_lt, micro(this.prior_elapsed), micro(newval), this.duration, rAF.count); //, new_filter);
 rAF.count = 0;
         this.elapsed_filter = new_filter;
         this.gl.uniform1f(this.shpgm.uniforms.elapsed, newval);
@@ -239,16 +242,16 @@ function initGL() //canvas)
         glcheck("init-1", this.getError());
 //NOTE: both of the following are needed for gl_PointCoord; https://www.opengl.org/discussion_boards/showthread.php/182248-understanding-gl_PointCoord-(always-0)
 //console.log(gl.POINT_SPRITE, gl.PROGRAM_POINT_SIZE);
-        gl.enable(gl.POINT_SPRITE); //not valid/needed on RPi?
+        if (!gl.isGLES) gl.enable(gl.POINT_SPRITE); //not valid/needed on RPi?
         glcheck("init-2", this.getError());
-        gl.enable(gl.PROGRAM_POINT_SIZE); //not valid/needed on RPi?
+        if (!gl.isGLES) gl.enable(gl.PROGRAM_POINT_SIZE); //not valid/needed on RPi?
         glcheck("init-3", this.getError());
         gl.enable(gl.DEPTH_TEST);
         glcheck("init-4", this.getError());
         gl.clearColor(R(BLACK), G(BLACK), B(BLACK), A(BLACK)); //color to clear buf to; clamped
         glcheck("init-5", this.getError());
 
-        if (!SHOW_LIMITS) return;
+        if (!this.opts.SHOW_LIMITS) return;
         debug(10, "canvas: w %s, h %s, viewport: w %s, h %s".blue_lt, canvas.width, canvas.height, gl.viewportWidth, gl.viewportHeight);
         debug(10, "glsl ver# %s, is GL ES? %s".blue_lt, gl.getParameter(gl.SHADING_LANGUAGE_VERSION), gl.isGLES);
 //        debug(10, "glsl exts".blue_lt, gl.getParameter(gl.EXTENSIONS));
@@ -325,6 +328,12 @@ PRECISION(mediump float)
 //#define IIF(expr, true, false)  ((expr) & (true) | ~(expr) & (false))
 #define IIF(expr, true, false)  mix(false, true, BOOL(expr))
 
+//compensate for lack of bit-wise ops:
+//bit-wise ops require GLSL 1.3 to be enabled; not available on RPi
+#define MASK(n)  pow(2.0, 23.0 - n)
+#define IFBIT(val, n)  LSB(floor(n / MASK(n)))
+#define LSB(val)  (floor((val) / 2.0) != (val) / 2.0)
+
 //compensate for floating point precision:
 const float FUD = 1.0e-6;
 #define NOT(expr)  (1.0 - BOOL(expr))
@@ -340,6 +349,8 @@ const float FUD = 1.0e-6;
 #define LE(lhs, rhs)  ((lhs) <= (rhs) + FUD)
 #define LT(lhs, rhs)  ((lhs) < (rhs) - FUD)
 
+const float PI = 3.1415926535897932384626433832795;
+
 //dimensions of nodes on screen:
 //const float VGROUP = float(??);
 const float SCR_WIDTH = float(??);
@@ -350,7 +361,11 @@ const float NODEBIT_WIDTH = float(SCR_WIDTH / NUM_UNIV);
 const float NODE_HEIGHT = float(SCR_HEIGHT / UNIV_LEN);
 //#define PTSIZE  max(NODEBIT_WIDTH, NODE_HEIGHT)
 const float PTSIZE = max(NODEBIT_WIDTH, NODE_HEIGHT);
+const float MAX_UNIV = NUM_UNIV - 1.0;
+const float UNIV_MAX = UNIV_LEN - 1.0;
 
+//caller options:
+//#define WS281X_FMT
 //#define PROGRESS_BAR
 
 //primary RGBA colors:
@@ -362,6 +377,7 @@ const vec4 CYAN = vec4(0.0, 1.0, 1.0, 1.0);
 const vec4 MAGENTA = vec4(1.0, 0.0, 1.0, 1.0);
 const vec4 WHITE = vec4(1.0, 1.0, 1.0, 1.0);
 const vec4 BLACK = vec4(0.0, 0.0, 0.0, 1.0);
+const vec4 GPUFX = vec4(0.0, 0.0, 0.0, 0.0); //tranparent texture color allowing GPU fx to show thru
 
 //from http://lolengine.net/blog/2013/07/27/rgb-to-hsv-in-glsl:
 vec3 rgb2hsv(vec3 c)
@@ -411,9 +427,77 @@ varying vec4 vColor;
 //varying float thing;
 
 //varying vec2 txcoord;
+vec4 gpufx(vec3 selector); //fwd ref
+//tranparent value allowing GPU fx to show thru:
+//CAUTION: GLSL cpp bug is expanding the "x" in "gpufx", so use different param name
+#define SAMPLE_OR_FX(var, ex, y) \
+    var = texture2D(uSampler, vec2(ex / MAX_UNIV, y / UNIV_MAX)); \
+    var = IIF(var.a == GPUFX.a, gpufx(var.rgb), var)
+#define SAMPLE_OR_FX_BIT(var, x, y, bit) \
+    SAMPLE_OR_FX(var, x, y); \
+    var = IIF(IFBIT(var, bit), MASK(x), 0.0)
 
 void main(void)
 {
+    gl_Position = uProjection * (uModelView * vec4(vXYZ, 1.0));
+//ortho projection maps as-is to screen coordinates:
+    float x = gl_Position.x; //[0..24)
+    float y = gl_Position.y; //[0..1152)
+#ifdef WS281X_FMT //format as WS281X requires pivot of 24 adjacent bits
+//    float xmask = pow(2.0, x);
+//get one bit from other pixels on this row:
+//    vColor = IIF(vColor.a == 0.0), gpufx(vColor.rgb), vColor);
+    vec4 SAMPLE_OR_FX_BIT(nabe0, 0.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe1, 1.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe2, 2.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe3, 3.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe4, 4.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe5, 5.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe6, 6.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe7, 7.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe8, 8.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe9, 9.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe10, 10.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe11, 11.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe12, 12.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe13, 13.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe14, 14.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe15, 15.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe16, 16.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe17, 17.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe18, 18.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe19, 19.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe20, 20.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe21, 21.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe22, 22.0, y, x);
+    vec4 SAMPLE_OR_FX_BIT(nabe23, 23.0, y, x);
+//pivot 24-bit value onto 24 parallel GPIO pins:
+    vColor = 0.0;
+    vColor += nabe0 + nabe1 + nabe2 + nabe3;
+    vColor += nabe4 + nabe5 + nabe6 + nabe7;
+    vColor += nabe8 + nabe9 + nabe10 + nabe11;
+    vColor += nabe12 + nabe13 + nabe14 + nabe15;
+    vColor += nabe16 + nabe17 + nabe18 + nabe19;
+    vColor += nabe20 + nabe21 + nabe22 + nabe23;
+#else //just get one pixel
+    float hw_univ = hUNM.s;
+    float hw_node = hUNM.t;
+
+    SAMPLE_OR_FX(vColor, hw_univ, hw_node);
+#endif //def WS281X_FMT
+   gl_PointSize = PTSIZE; //max(NODEBIT_WIDTH, NODE_HEIGHT); //PTSIZE;
+}
+//effects generator:
+vec4 gpufx(vec3 selector)
+{
+//placeholder for gpufx
+    return MAGENTA;
+}
+*/}
+
+//example effects generator:
+function one_by_one(selector)
+{/*
 //hw (univ#, node#, model#):
 //these are ints, but used in floating arithmetic so just leave them as floats
     float hw_univ = hUNM.s;
@@ -425,14 +509,18 @@ void main(void)
     int model_w = int(mXYWH.w);
     int model_h = int(mXYWH.z);
 
-//    gl_Position = uProjection * uModelView * vec4(aVertexPosition, 1.0);
-    gl_Position = uProjection * (uModelView * vec4(vXYZ, 1.0));
-//    gl_Position.y = (gl_Position.y + 1.0) * VGROUP - 1.0; //gl_Position.y / 10.0; //VGROUP;
-//    gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
-//    gl_Position = vec4(vxyz, 0.0, 1.0); //just use entire screen
-//    gl_Position = vec4(vxyz, 1.0); //just use entire screen
-//    float dummy = mXYWH.x; //kludge to prevent optimizing out
-#if 0
+    vec4 color = vec4(hsv2rgb(vec3(hw_model / MAX_UNIV, 1.0, 1.0)), 1.0); //choose different color for each column
+#define round(thing)  thing  //RPi
+//       float node = round(elapsed / duration * NUMW * NUMH); //not floor
+    float node_inx = floor(elapsed / duration * (NUM_UNIV * UNIV_LEN - 1.0)); //TODO: round?
+    float nodex = floor(node_inx / UNIV_LEN), nodey = mod(node_inx, UNIV_LEN);
+    if (GT(hw_univ, nodex) || (EQ(hw_univ, nodex) && GT(hw_node, nodey))) color = BLACK;
+//color = vec4(elapsed / duration, elapsed / duration, 1.0, 1.0); //CYAN;
+    return color;
+*/}
+
+
+/*
 //no switch stmt in GLSL 1.2, so use IIF to avoid branching:
 //    int color = int(mod(hw_model, 7.0));
 //    vColor = BLACK;
@@ -443,60 +531,30 @@ void main(void)
 //    vColor = IIF(color == 4, CYAN, vColor);
 //    vColor = IIF(color == 5, MAGENTA, vColor);
 //    vColor = IIF(color == 6, WHITE, vColor);
-//pivot other pixels on this row:
-    vec4 nabe0 = texture2D(uSampler, vec2(0.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe1 = texture2D(uSampler, vec2(1.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe2 = texture2D(uSampler, vec2(2.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe3 = texture2D(uSampler, vec2(3.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe4 = texture2D(uSampler, vec2(4.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe5 = texture2D(uSampler, vec2(5.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe6 = texture2D(uSampler, vec2(6.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe7 = texture2D(uSampler, vec2(7.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe8 = texture2D(uSampler, vec2(8.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe9 = texture2D(uSampler, vec2(9.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe10 = texture2D(uSampler, vec2(10.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe11 = texture2D(uSampler, vec2(11.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe12 = texture2D(uSampler, vec2(12.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe13 = texture2D(uSampler, vec2(13.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe14 = texture2D(uSampler, vec2(14.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe15 = texture2D(uSampler, vec2(15.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe16 = texture2D(uSampler, vec2(16.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe17 = texture2D(uSampler, vec2(17.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe18 = texture2D(uSampler, vec2(18.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe19 = texture2D(uSampler, vec2(19.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe20 = texture2D(uSampler, vec2(20.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe21 = texture2D(uSampler, vec2(21.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe22 = texture2D(uSampler, vec2(22.0 / NUMW, hUNM.t / NUMH));
-    vec4 nabe23 = texture2D(uSampler, vec2(23.0 / NUMW, hUNM.t / NUMH));
-        vec4 total = 0;
-        total += nabe0 + nabe1 + nabe2 + nabe3;
-        total += nabe4 + nabe5 + nabe6 + nabe7;
-        total += nabe8 + nabe9 + nabe10 + nabe11;
-        total += nabe12 + nabe13 + nabe14 + nabe15;
-        total += nabe16 + nabe17 + nabe18 + nabe19;
-        total += nabe20 + nabe21 + nabe22 + nabe23;
-        total /= 24.0;
 #endif
-    if (LT(elapsed, 0.0) || GE(elapsed, duration)) //get color from texture
-    {
+//    if (LT(elapsed, 0.0) || GE(elapsed, duration)) //get color from texture
+//    {
 //        vColor = texture2D(uSampler, vec2((hw_univ + 0.1) / NUMW, hw_node / NUMH));
-        vColor = texture2D(uSampler, vec2(hw_univ / (NUM_UNIV - 1.0), hw_node / (UNIV_LEN - 1.0))); //[0..1]
+//first check if CPU wants to set color:
+    vColor = texture2D(uSampler, vec2(hw_univ / MAX_UNIV, hw_node / UNIV_MAX)); //[0..1]
 //        txcoord = vec2(hw_univ / (NUM_UNIV - 1.0), hw_node / (UNIV_LEN - 1.0)); //[0..1]
 //no        vColor = texture2D(uSampler, vec2(hw_univ, hw_node)); //[0..size]
 //        vColor = texture2D(uSampler, vec2(0.0, 0.0)); //[0..1]
 //        vColor.a = 1.0;
 //        vColor.r = 1.0;
 //        vColor = total; // / 24.0;
-    }
-    else //use effect logic to generate color
-    {
+//    }
+//if not, then apply GPU fx:
+    vColor = IIF(vColor.a == 0.0), gpufx(vColor.rgb), vColor);
+//    else //use effect logic to generate color
+//    {
         vColor = vec4(hsv2rgb(vec3(hw_model / NUM_UNIV, 1.0, 1.0)), 1.0); //choose different color for each model
 #define round(thing)  thing  //RPi
 //       float node = round(elapsed / duration * NUMW * NUMH); //not floor
        float node_inx = round(elapsed / duration * NUM_UNIV * UNIV_LEN); //TODO: round?
        float nodex = floor(node_inx / UNIV_LEN), nodey = mod(node_inx, UNIV_LEN);
        if (GT(hw_univ, nodex) || (EQ(hw_univ, nodex) && GT(hw_node, nodey))) vColor = BLACK;
-    }
+//    }
 //    if (hUNM.y > nodey) vColor = BLACK;
 //    vColor = vec4(vxyz, 1.0);
 //    vColor = vec4(0.0, 0.5, 0.5, 1.0);
@@ -506,9 +564,7 @@ void main(void)
 //    vecpos = vec3(vxyz);
 //    if (outmode == 0.0) gl_PointSize = min(NODEBIT_WIDTH, NODE_HEIGHT);
 //    else gl_PointSize = NODEBIT_WIDTH; //TODO: screen_width / 23.25
-   gl_PointSize = PTSIZE; //max(NODEBIT_WIDTH, NODE_HEIGHT); //PTSIZE;
-}
-*/}
+*/
 
 	
 //fragment shader:
@@ -529,27 +585,22 @@ varying vec4 vColor;
 
 void main(void)
 {
+//gl_FragCoord is window space [0..size],[0..size]
     float x = gl_FragCoord.x / SCR_WIDTH; //[0..1]
     float y = gl_FragCoord.y / SCR_HEIGHT; //[0..1]
-//    gl_FragColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
-//    gl_FragColor = vec4(0.0, 0.5, 1.0, 1.0);
     gl_FragColor = vColor;
-//gl_FragColor = texture2D(uSampler, txcoord);
-//gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
 
 #ifdef PROGRESS_BAR
     if (LT(y, 0.005) && LE(x, elapsed / duration))
     {
         gl_FragColor = WHITE; //progress bar (debug)
-//    else if (LT(y, 0.13) && GT(y, 0.1) && GE(x, 0.5) && LE(x, 0.503)) gl_FragColor = WHITE;
-//    else
         return;
     }
 #endif //def PROGRESS_BAR
-//    if (EQ(outmode, 0.0)) // == 0.0) //show raw pixels like light bulbs
+
 #ifdef WS281X_FMT //format as WS281X
-   gl_FragColor = MAGENTA;
-#else //show raw pixels as light bulbs
+    gl_FragColor = MAGENTA; //TODO
+#else //format as light bulbs on screen
     const float EDGE = min(NODEBIT_WIDTH, NODE_HEIGHT) / max(NODEBIT_WIDTH, NODE_HEIGHT) / 2.0;
     vec2 coord = gl_PointCoord - 0.5; //vec2(0.5, 0.5); //from [0,1] to [-0.5,0.5]
 	float dist = sqrt(dot(coord, coord));
@@ -557,22 +608,23 @@ void main(void)
    if (GT(dist, EDGE)) discard;
    gl_FragColor *= 1.0 - dist / (1.2 * EDGE); //diffuse to look more like light bulb
 #endif //def WS281X_FMT
-//    gl_FragColor = vec4(gl_PointCoord, 0.0, 1.0);
-//    if (vecpos.x < 0.0) gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-//    gl_FragColor = vec4(gl_PointCoord.s, gl_PointCoord.t, 0.0, 1.0);
-//    vec3 st = (vecpos + 1.0) / 2.0;
-//    if ((st.t < .02) && (st.s <= progress)) gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
-//gl_FragCoord is window space [0..size],[0..size]
-//    if (gl_FragCoord.x < 100.0) gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);", //discard;
-//    if (gl_FragCoord.x > 100.0) gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);", //discard;
 }
 */}
+
+
+//    gl_FragColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+//    gl_FragColor = vec4(0.0, 0.5, 1.0, 1.0);
+//gl_FragColor = texture2D(uSampler, txcoord);
+//gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+//    else if (LT(y, 0.13) && GT(y, 0.1) && GE(x, 0.5) && LE(x, 0.503)) gl_FragColor = WHITE;
+//    else
+//    if (EQ(outmode, 0.0)) // == 0.0) //show raw pixels like light bulbs
 
 
 //var shpgm;
 
 //Canvas.prototype.initShaders = 
-function initShaders(vzoom)
+function initShaders() //vzoom)
 {
     var gl = this.gl;
     var vertexShader = getShader.call(this, gl.VERTEX_SHADER, vertex_sh); //"shader-vs");
@@ -632,6 +684,9 @@ function getShader(type, str)
 
 //prepend common defs:
     str = heredoc(preamble) + "\n" + heredoc(str);
+//console.log("pl holder", str.indexOf("placeholder"), heredoc(this.opts.gpufx));
+    if (this.opts.gpufx) //insert GPU fx
+        str = str.replace(/(placeholder for gpufx.*?)/, "$1\n" + heredoc(this.opts.gpufx));
 //expand macros:
 //    str = str.replace(/%SWIDTH%/gm, gl.viewportWidth);
 //    str = str.replace(/%SHEIGHT%/gm, gl.viewportHeight);
@@ -659,10 +714,10 @@ function getShader(type, str)
 */
 //    if (gl.isGLES) str = "#define GL_ES\n" + str;
 //    if (Screen.gpio) str = "#define WS281X_FMT\n" + str;
-//    if (SHOW_PROGRESS) str = "#define PROGRESS_BAR\n" + str;
+//    if (this.opts.SHOW_PROGRESS) str = "#define PROGRESS_BAR\n" + str;
     if (gl.isGLES) cpp.define("GL_ES", "");
-    if (Screen.gpio) cpp.define("WS281X_FMT", "");
-    if (SHOW_PROGRESS) cpp.define("PROGRESS_BAR", "");
+    if (Screen.gpio || this.opts.WS281X_FMT) cpp.define("WS281X_FMT", "");
+    if (this.opts.SHOW_PROGRESS) cpp.define("PROGRESS_BAR", "");
     str = cpp.run(str);
     cpp.clear();
 //(?<=a)b  //look-behind no worky
@@ -674,7 +729,7 @@ function getShader(type, str)
     str = str.replace(/(\WNUM_UNIV\s*=.*?)\?\?/, "$1" + this.width); //gl.viewportWidth);
     str = str.replace(/(\WUNIV_LEN\s*=.*?)\?\?/, "$1" + this.height); //gl.viewportHeight);
 //    str = str.replace(/(\WVGROUP\s*=.*?)\?\?/, "$1" + this.vgroup);
-    if (SHOW_SHSRC) showsrc(str, ShaderTypes[type]);
+    if (this.opts.SHOW_SHSRC) showsrc(str, ShaderTypes[type]);
 //process.exit(0);
 
     var shader = glcheck("shader", gl.createShader(type)); //gl.FRAGMENT_SHADER);
@@ -682,7 +737,7 @@ function getShader(type, str)
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
     {
-        if (!SHOW_SHSRC) showsrc(str, ShaderTypes[type]);
+        if (!this.SHOW_SHSRC) showsrc(str, ShaderTypes[type]);
         alert(gl.getShaderInfoLog(shader));
         return null;
     }
@@ -747,7 +802,7 @@ function initBuffers()
         for (var y = 0; y < this.height; ++y)
             {
             vertices.push((x + 0.5) / this.width, (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
-            if (SHOW_VERTEX)
+            if (this.opts.SHOW_VERTEX)
                 if (((x < 2) || (x >= this.width - 2)) && ((y < 2) || (y >= this.height - 2)))
                     console.log("vert[%s, %s]: xyz %j,  hw %j,  model %j", x, y, vertices.slice(-10, -7), vertices.slice(-7, -4), vertices.slice(-4));
             }
@@ -979,7 +1034,7 @@ txtr.circle = function(x, y, r, rgba)
 
 
 Texture.prototype.pixel = 
-function pixel(x, y, rgba)
+function pixel(x, y, argb)
 {
 //    this.init(true);
     if ((x < 0) || (x >= this.width) || (y < 0) || (y >= this.height))
@@ -987,10 +1042,10 @@ function pixel(x, y, rgba)
 //    var ofs = x + y * this.width;
     if (arguments.length > 2) //set color
     {
-//        if (this.pixels[ofs] != rgba)
+//        if (this.pixels[ofs] != argb)
 //        {
-//console.log("pixel(%d,%d): ofs %d", x, y, this.xy(x, y));
-            this.pixels[this.xy(x, y)] = rgba;
+//console.log("pixel(%d,%d): ofs %d, set color 0x%s", x, y, this.xy(x, y), argb.toString(16));
+            this.pixels[this.xy(x, y)] = argb; //>>> 0;
             this.dirty = true; //assume caller is changing it
 //        }
         return this; //fluent setter
@@ -1028,9 +1083,9 @@ function load(path)
 //            var color = this.img_pixels.readUInt32BE(ofs); //RGBA
             var color = this.img_pixels.readUInt32LE(ofs) >>> 0; //RGBA
             color = ((color & 0xFF00FF00) | R(color) | (B(color) << 16)) >>> 0; //ABGR <-> ARGB
-if (!this.seen[color])
-    console.log("pixel[%d,%d] = %s => %s", x, y, this.img_pixels.readUInt32BE(ofs).toString(16), color.toString(16));
-this.seen[color] = true;
+//if (!this.seen[color])
+//    console.log("pixel[%d,%d] = %s => %s", x, y, this.img_pixels.readUInt32BE(ofs).toString(16), color.toString(16));
+//this.seen[color] = true;
 //            return color | 0xff000000;
 //            return 0xffff00ff;
             return color;
@@ -1100,12 +1155,12 @@ function init(gl, width, height, want_pixels)
 
 //    if ((width != gl.viewportWidth) || (height != gl.viewportHeight))
 //        console.log("
-debug(10, "cre txtr %dx%d pixels? %s, id %s %j %s".blue_lt, this.width, this.height, want_pixels, typeof this.txtr, this.txtr, this.id);
+    debug(10, "cre txtr %dx%d pixels? %s, id %s".blue_lt, this.width, this.height, !!want_pixels, this.txtr._); //typeof this.txtr, this.txtr, this.txtr._);
     gl.activeTexture(gl.TEXTURE0); //redundant?
     gl.bindTexture(gl.TEXTURE_2D, this.txtr);
     glcheck("bind txtr", this.getError());
 //    gl.activeTexture(gl.TEXTURE0); //redundant?
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); //make Y orientation consistent; no worky in X Windows?
+    if (gl.isGLES) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); //make Y orientation consistent; no worky in X Windows?
     glcheck("flip txtr", this.getError()); //invalid?
 //    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, pixels); //do this later
 //allow textures that are not power of 2 (don't need mipmaps):
@@ -1124,7 +1179,7 @@ debug(10, "cre txtr %dx%d pixels? %s, id %s %j %s".blue_lt, this.width, this.hei
     this.pixels = new Uint32Array(buf);
     this.pixels[0] = 0x11223344; //check byte order
     var ordbuf = new Uint8Array(buf);
-console.log("byte order", ordbuf[0].toString(16), ordbuf[1].toString(16), ordbuf[2].toString(16), ordbuf[3].toString(16));
+    debug(10, "byte order: %s %s %s %s".blue_lt, ordbuf[0].toString(16), ordbuf[1].toString(16), ordbuf[2].toString(16), ordbuf[3].toString(16));
 //NOTE: OpenGL ES doesn't support BGR(A)??
     this.fmt = (ordbuf[0] == 0x11)? gl.RGBA: (ordbuf[0] == 0x44)? gl.BGRA: 1/0; //throw error if can't figure out byte order
 //this.fmt = gl.RGBA;
@@ -1233,6 +1288,9 @@ function clamp(val, minval, maxval)
 {
     return Math.min(Math.max(val, minval), maxval);
 }
+
+
+function micro(val) { return Math.floor(val * 1e6) / 1e6; }
 
 
 //simulate GPU floating precision (for debug):
