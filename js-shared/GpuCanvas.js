@@ -1,16 +1,20 @@
-//create graphics canvas:
+//create graphics GPU canvas:
 //wrapper for OpenGL and shaders
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
+const fs = require('fs');
+const path = require('path');
 const WebGL = require('node-webgl'); //NOTE: for RPi must be lukaaash/node-webg or djulien/node-webgl version, not mikeseven/node-webgl version
 const {mat4} = require('node-webgl/test/glMatrix-0.9.5.min.js');
 //const Preproc = require("preprocessor");
-const cpp = require("./cpp-1.0").create();
+const cpp = require("./cpp-1.0").create(); //https://github.com/acgessler/cpp.js
 //require('buffer').INSPECT_MAX_BYTES = 1600;
 
 const {debug} = require('./debug');
 const {Screen} = require('./screen');
+const {caller} = require("./caller");
+const {atexit} = require('./blocking');
 
 const document = WebGL.document();
 const Image = WebGL.Image;
@@ -18,12 +22,19 @@ const alert = console.error;
 
 const BLACK = 0xff000000; //NOTE: needs alpha to take effect
 
-//const DEBUG = true;
-//const SHOW_SHSRC = true; //false;
-//const SHOW_VERTEX = true; //false;
-//const SHOW_LIMITS = true; //false;
-//const SHOW_PROGRESS = true; //false;
-//const WS281X_FMT = false; //whether to apply WS281X formatting to screen (when dpi24 overlay is *not* loaded)
+const DEFAULT_OPTS =
+{
+    DEBUG: false,
+    SHOW_SHSRC: false, //show shader source code
+    SHOW_VERTEX: false, //show vertex info (corners)
+    SHOW_LIMITS: false, //show various GLES/GLSL limits
+    SHOW_PROGRESS: false, //show progress bar at bottom of screen
+    WS281X_FMT: false, //force WS281X formatting on screen (when dpi24 overlay is *not* loaded)
+    WS281X_DEBUG: false, //show timing debug info
+    gpufx: null, //generate fx on GPU instead of CPU
+    VERTEX_SHADER: path.resolve(__dirname, "vertex.glsl"),
+    FRAGMENT_SHADER: path.resolve(__dirname, "fragment.glsl"),
+};
 //const VGROUP = 42; //enlarge display nodes for debug/demo; overridden when dpi24 overlay is loaded
 //const OUTMODE = 1; //Screen.gpio? 1: -1;
 
@@ -34,16 +45,21 @@ const BLACK = 0xff000000; //NOTE: needs alpha to take effect
 //
 
 //var gl, isGLES;
+//var all = [];
 
-const Canvas =
-module.exports.Canvas =
-class Canvas
+const GpuCanvas =
+module.exports.GpuCanvas =
+class GpuCanvas
 {
     constructor(title, w, h, opts) //, vgroup)
     {
-        this.opts = opts || {};
+//        this.opts = opts || {};
+        pushable.call(this, Object.assign(DEFAULT_OPTS, opts || {}));
+        if (Screen.gpio) this.WS281X_FMT = true;
 //        if (gl) return; //only need one
 //        console.log("canvas: '%s' %d x %d", title, w, h);
+//        console.log("canvas opts: fmt %j", this.WS281X_FMT);
+//        console.log("canvas opts: limits %j", this.SHOW_LIMITS);
         initGL.call(this);
         document.setTitle(title || "WS281X demo");
 //        initTexture(w, h);
@@ -52,19 +68,24 @@ class Canvas
         initShaders.call(this);
         initBuffers.call(this);
         initProjection.call(this);
-        if (!Canvas.all) Canvas.all = [];
-        Canvas.all.push(this);
-        if (Canvas.all.length == 1) rAF(true); //start screen refresh loop
-        else debug("possible canvas conflict: %d".red_lt, Canvas.all.length);
+        if (!GpuCanvas.all) GpuCanvas.all = [];
+//        GpuCanvas.all.push(this);
+//        if (isNaN(++all.uniqid)) all.uniqid = 1;
+//        this.id = all.uniqid;
+        GpuCanvas.all.push(this);
+        if (GpuCanvas.all.length == 1) rAF(true); //start screen refresh loop
+        else debug("possible canvas conflict: %d".red_lt, GpuCanvas.all.length);
 //    gl.enable(gl.DEPTH_TEST);
 //    gl.clearColor(0.0, 0.0, 0.0, 1.0); //start out blank
+        atexit(this.destroy.bind(this)); //stop rAF loop for clean exit
     }
 
     destroy() //dtor
     {
-        var inx = Canvas.all.indexOf(this);
-        if (inx != -1) Canvas.all.splice(inx, 1);
-        if (!Canvas.all.length) rAF(false); //cancel screen refresh loop
+        var inx = GpuCanvas.all.indexOf(this); //findIndex(function(that) { return that.id == this.id; }.bind(this)); //all.indexOf(this);
+        debug("destroy: found? %d, #canv %d".yellow_lt, inx, GpuCanvas.all.length);
+        if (inx != -1) GpuCanvas.all.splice(inx, 1);
+        if (!GpuCanvas.all.length) rAF(false); //cancel screen refresh loop
     }
 
     getError() { var err = this.gl.getError(); return err? -1: err; }
@@ -101,7 +122,7 @@ rAF.count = 0;
 };
 
 
-Canvas.prototype.clear = 
+GpuCanvas.prototype.clear = 
 function clear(color)
 {
     var gl = this.gl;
@@ -112,7 +133,7 @@ function clear(color)
 }
 
 
-Canvas.prototype.render = 
+GpuCanvas.prototype.render = 
 function render(want_clear)
 {
 //    if (!this.txr.dirty) return; //NOTE: RPi needs refresh each time
@@ -175,7 +196,7 @@ console.log("progress", timeslot);
 
 
 /*
-//Canvas.prototype.first = 
+//GpuCanvas.prototype.first = 
 function setup()
 {
 //    if (this.not_first) return; //only need to set this once since it doesn't change
@@ -227,7 +248,7 @@ function setup()
 */
 
 
-//Canvas.prototype.initGL = 
+//GpuCanvas.prototype.initGL = 
 function initGL() //canvas)
 {
     try
@@ -251,7 +272,7 @@ function initGL() //canvas)
         gl.clearColor(R(BLACK), G(BLACK), B(BLACK), A(BLACK)); //color to clear buf to; clamped
         glcheck("init-5", this.getError());
 
-        if (!this.opts.SHOW_LIMITS) return;
+        if (!this.SHOW_LIMITS) return;
         debug(10, "canvas: w %s, h %s, viewport: w %s, h %s".blue_lt, canvas.width, canvas.height, gl.viewportWidth, gl.viewportHeight);
         debug(10, "glsl ver# %s, is GL ES? %s".blue_lt, gl.getParameter(gl.SHADING_LANGUAGE_VERSION), gl.isGLES);
 //        debug(10, "glsl exts".blue_lt, gl.getParameter(gl.EXTENSIONS));
@@ -305,330 +326,17 @@ function initGL() //canvas)
 //To avoid branches one should always use functions like mix, step, smoothstep, etc.
 
 
-//include this before other shader code:
-function preamble()
-{/*
-//broken   #version 130 //bit-wise ops require GLSL 1.3 to be enabled
-//nice analysis of precision: http://litherum.blogspot.com/2013/04/precision-qualifiers-in-opengl-es.html
-#ifdef GL_ES
-   #version 100 //GLSL ES 1.0 ~= GLSL 1.2
-   #define lowp //10-bit float
-   #define mediump //16-bit float: 1 sign + 5 exp + 10 mantissa
-   #define highp //32-bit float: 1 sign + 8 exp + 23 mantissa
-//   precision mediump float;
-   #define PRECISION(stmt)  stmt;
-#else
-   #version 120 //gl_PointCoord requires GLSL 1.2 to be enabled
-   #define PRECISION(stmt)
-#endif
-PRECISION(mediump float)
-
-//try to avoid conditional branches:
-//NOTE: bit-wise ops require GLSL 1.3
-//#define IIF(expr, true, false)  ((expr) & (true) | ~(expr) & (false))
-#define IIF(expr, true, false)  mix(false, true, BOOL(expr))
-
-//compensate for lack of bit-wise ops:
-//bit-wise ops require GLSL 1.3 to be enabled; not available on RPi
-#define MASK(n)  pow(2.0, 23.0 - n)
-#define IFBIT(val, n)  LSB(floor(n / MASK(n)))
-#define LSB(val)  (floor((val) / 2.0) != (val) / 2.0)
-
-//compensate for floating point precision:
-const float FUD = 1.0e-6;
-#define NOT(expr)  (1.0 - BOOL(expr))
-#define BOOL(value)  float(value) //convert bool expr to 0/1
-#define EQ(lhs, rhs)  (abs((lhs) - (rhs)) < FUD)
-#define NE(lhs, rhs)  (abs((lhs) - (rhs)) >= FUD)
-//#define GE(lhs, rhs)  step(rhs - FUD, lhs) //convert lhs >= rhs to 0/1
-//#define GT(lhs, rhs)  step(lhs + FUD, lhs)
-//#define LE(lhs, rhs)  step(lhs + FUD, rhs)
-//#define LT(lhs, rhs)  step(lhs - FUD, rhs)
-#define GE(lhs, rhs)  ((lhs) >= (rhs) - FUD)
-#define GT(lhs, rhs)  ((lhs) > (rhs) + FUD)
-#define LE(lhs, rhs)  ((lhs) <= (rhs) + FUD)
-#define LT(lhs, rhs)  ((lhs) < (rhs) - FUD)
-
-const float PI = 3.1415926535897932384626433832795;
-
-//dimensions of nodes on screen:
-//const float VGROUP = float(??);
-const float SCR_WIDTH = float(??);
-const float SCR_HEIGHT = float(??);
-const float NUM_UNIV = float(??);
-const float UNIV_LEN = float(??); //SCR_HEIGHT; // / VGROUP; //float(??);
-const float NODEBIT_WIDTH = float(SCR_WIDTH / NUM_UNIV);
-const float NODE_HEIGHT = float(SCR_HEIGHT / UNIV_LEN);
-//#define PTSIZE  max(NODEBIT_WIDTH, NODE_HEIGHT)
-const float PTSIZE = max(NODEBIT_WIDTH, NODE_HEIGHT);
-const float MAX_UNIV = NUM_UNIV - 1.0;
-const float UNIV_MAX = UNIV_LEN - 1.0;
-
-//caller options:
-//#define WS281X_FMT
-//#define PROGRESS_BAR
-
-//primary RGBA colors:
-const vec4 RED = vec4(1.0, 0.0, 0.0, 1.0);
-const vec4 GREEN = vec4(0.0, 1.0, 0.0, 1.0);
-const vec4 BLUE = vec4(0.0, 0.0, 1.0, 1.0);
-const vec4 YELLOW = vec4(1.0, 1.0, 0.0, 1.0);
-const vec4 CYAN = vec4(0.0, 1.0, 1.0, 1.0);
-const vec4 MAGENTA = vec4(1.0, 0.0, 1.0, 1.0);
-const vec4 WHITE = vec4(1.0, 1.0, 1.0, 1.0);
-const vec4 BLACK = vec4(0.0, 0.0, 0.0, 1.0);
-const vec4 GPUFX = vec4(0.0, 0.0, 0.0, 0.0); //tranparent texture color allowing GPU fx to show thru
-
-//from http://lolengine.net/blog/2013/07/27/rgb-to-hsv-in-glsl:
-vec3 rgb2hsv(vec3 c)
-{
-//    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
-//    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
-//    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
-    vec4 K = vec4(0.0, -1.0, 2.0, -3.0) / 3.0; //TODO: make const?
-    vec4 p = IIF(GE(c.g, c.b), vec4(c.gb, K.xy), vec4(c.bg, K.wz));
-    vec4 q = IIF(GE(c.r, p.x), vec4(c.r, p.yzx), vec4(p.xyw, c.r));
-    float d = q.x - min(q.w, q.y);
-    float e = 1.0e-10;
-    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
-}
-
-vec3 hsv2rgb(vec3 c)
-{
-//    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-    vec4 K = vec4(3.0, 2.0, 1.0, 9.0) / 3.0; //TODO: make const?
-    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-}
-*/}
-
-
-//vertex shader:
-//effect generation (color selection) should be done here, *not* in fragment shader
-//runs once per vertex, which is ~ 500 - 1000x less than fragment shader
-function vertex_sh()
-{/*
-//attribute vec3 aVertexPosition;
-//attribute vec4 aVertexColor;
-//attribute vec2 aTextureCoord;
-//varying vec2 vTextureCoord;
-attribute vec3 vXYZ; //3D view (x, y, z)
-attribute vec3 hUNM; //hw (univ#, node#, model#)
-attribute vec4 mXYWH; //model (x, y, w, h)
-
-uniform mat4 uModelView;
-uniform mat4 uProjection;
-uniform float elapsed, duration; //progress
-//uniform float outmode;
-uniform sampler2D uSampler;
-
-varying vec4 vColor;
-//varying vec3 vecpos;
-//varying float thing;
-
-//varying vec2 txcoord;
-vec4 gpufx(vec3 selector); //fwd ref
-//tranparent value allowing GPU fx to show thru:
-//CAUTION: GLSL cpp bug is expanding the "x" in "gpufx", so use different param name
-#define SAMPLE_OR_FX(var, ex, y) \
-    var = texture2D(uSampler, vec2(ex / MAX_UNIV, y / UNIV_MAX)); \
-    var = IIF(var.a == GPUFX.a, gpufx(var.rgb), var)
-#define SAMPLE_OR_FX_BIT(var, x, y, bit) \
-    SAMPLE_OR_FX(var, x, y); \
-    var = IIF(IFBIT(var, bit), MASK(x), 0.0)
-
-void main(void)
-{
-    gl_Position = uProjection * (uModelView * vec4(vXYZ, 1.0));
-//ortho projection maps as-is to screen coordinates:
-    float x = gl_Position.x; //[0..24)
-    float y = gl_Position.y; //[0..1152)
-#ifdef WS281X_FMT //format as WS281X requires pivot of 24 adjacent bits
-//    float xmask = pow(2.0, x);
-//get one bit from other pixels on this row:
-//    vColor = IIF(vColor.a == 0.0), gpufx(vColor.rgb), vColor);
-    vec4 SAMPLE_OR_FX_BIT(nabe0, 0.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe1, 1.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe2, 2.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe3, 3.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe4, 4.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe5, 5.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe6, 6.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe7, 7.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe8, 8.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe9, 9.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe10, 10.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe11, 11.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe12, 12.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe13, 13.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe14, 14.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe15, 15.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe16, 16.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe17, 17.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe18, 18.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe19, 19.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe20, 20.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe21, 21.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe22, 22.0, y, x);
-    vec4 SAMPLE_OR_FX_BIT(nabe23, 23.0, y, x);
-//pivot 24-bit value onto 24 parallel GPIO pins:
-    vColor = 0.0;
-    vColor += nabe0 + nabe1 + nabe2 + nabe3;
-    vColor += nabe4 + nabe5 + nabe6 + nabe7;
-    vColor += nabe8 + nabe9 + nabe10 + nabe11;
-    vColor += nabe12 + nabe13 + nabe14 + nabe15;
-    vColor += nabe16 + nabe17 + nabe18 + nabe19;
-    vColor += nabe20 + nabe21 + nabe22 + nabe23;
-#else //just get one pixel
-    float hw_univ = hUNM.s;
-    float hw_node = hUNM.t;
-
-    SAMPLE_OR_FX(vColor, hw_univ, hw_node);
-#endif //def WS281X_FMT
-   gl_PointSize = PTSIZE; //max(NODEBIT_WIDTH, NODE_HEIGHT); //PTSIZE;
-}
-//effects generator:
-vec4 gpufx(vec3 selector)
-{
-//placeholder for gpufx
-    return MAGENTA;
-}
-*/}
-
-//example effects generator:
-function one_by_one(selector)
-{/*
-//hw (univ#, node#, model#):
-//these are ints, but used in floating arithmetic so just leave them as floats
-    float hw_univ = hUNM.s;
-    float hw_node = hUNM.t;
-    float hw_model = hUNM.p;
-//model (x, y, w, h):
-    int model_x = int(mXYWH.x);
-    int model_y = int(mXYWH.y);
-    int model_w = int(mXYWH.w);
-    int model_h = int(mXYWH.z);
-
-    vec4 color = vec4(hsv2rgb(vec3(hw_model / MAX_UNIV, 1.0, 1.0)), 1.0); //choose different color for each column
-#define round(thing)  thing  //RPi
-//       float node = round(elapsed / duration * NUMW * NUMH); //not floor
-    float node_inx = floor(elapsed / duration * (NUM_UNIV * UNIV_LEN - 1.0)); //TODO: round?
-    float nodex = floor(node_inx / UNIV_LEN), nodey = mod(node_inx, UNIV_LEN);
-    if (GT(hw_univ, nodex) || (EQ(hw_univ, nodex) && GT(hw_node, nodey))) color = BLACK;
-//color = vec4(elapsed / duration, elapsed / duration, 1.0, 1.0); //CYAN;
-    return color;
-*/}
-
-
-/*
-//no switch stmt in GLSL 1.2, so use IIF to avoid branching:
-//    int color = int(mod(hw_model, 7.0));
-//    vColor = BLACK;
-//    vColor = IIF(color == 0, RED, vColor);
-//    vColor = IIF(color == 1, GREEN, vColor);
-//    vColor = IIF(color == 2, BLUE, vColor);
-//    vColor = IIF(color == 3, YELLOW, vColor);
-//    vColor = IIF(color == 4, CYAN, vColor);
-//    vColor = IIF(color == 5, MAGENTA, vColor);
-//    vColor = IIF(color == 6, WHITE, vColor);
-#endif
-//    if (LT(elapsed, 0.0) || GE(elapsed, duration)) //get color from texture
-//    {
-//        vColor = texture2D(uSampler, vec2((hw_univ + 0.1) / NUMW, hw_node / NUMH));
-//first check if CPU wants to set color:
-    vColor = texture2D(uSampler, vec2(hw_univ / MAX_UNIV, hw_node / UNIV_MAX)); //[0..1]
-//        txcoord = vec2(hw_univ / (NUM_UNIV - 1.0), hw_node / (UNIV_LEN - 1.0)); //[0..1]
-//no        vColor = texture2D(uSampler, vec2(hw_univ, hw_node)); //[0..size]
-//        vColor = texture2D(uSampler, vec2(0.0, 0.0)); //[0..1]
-//        vColor.a = 1.0;
-//        vColor.r = 1.0;
-//        vColor = total; // / 24.0;
-//    }
-//if not, then apply GPU fx:
-    vColor = IIF(vColor.a == 0.0), gpufx(vColor.rgb), vColor);
-//    else //use effect logic to generate color
-//    {
-        vColor = vec4(hsv2rgb(vec3(hw_model / NUM_UNIV, 1.0, 1.0)), 1.0); //choose different color for each model
-#define round(thing)  thing  //RPi
-//       float node = round(elapsed / duration * NUMW * NUMH); //not floor
-       float node_inx = round(elapsed / duration * NUM_UNIV * UNIV_LEN); //TODO: round?
-       float nodex = floor(node_inx / UNIV_LEN), nodey = mod(node_inx, UNIV_LEN);
-       if (GT(hw_univ, nodex) || (EQ(hw_univ, nodex) && GT(hw_node, nodey))) vColor = BLACK;
-//    }
-//    if (hUNM.y > nodey) vColor = BLACK;
-//    vColor = vec4(vxyz, 1.0);
-//    vColor = vec4(0.0, 0.5, 0.5, 1.0);
-//    vColor = vec4(vxyz, 1.0);
-//    vTextureCoord = aTextureCoord;
-//    vecpos = aVertexPosition;
-//    vecpos = vec3(vxyz);
-//    if (outmode == 0.0) gl_PointSize = min(NODEBIT_WIDTH, NODE_HEIGHT);
-//    else gl_PointSize = NODEBIT_WIDTH; //TODO: screen_width / 23.25
-*/
-
-	
-//fragment shader:
-//format pixels for screen or WS281X
-//runs once per screen pixel; should only do screen formatting in here
-function fragment_sh()
-{/*
-//uniform sampler2D uSampler;
-uniform float elapsed, duration; //progress
-//uniform float outmode;
-//varying vec3 vecpos;
-varying vec4 vColor;
-//varying float thing;
-//varying vec2 vTextureCoord;
-
-//varying vec2 txcoord;
-//uniform sampler2D uSampler;
-
-void main(void)
-{
-//gl_FragCoord is window space [0..size],[0..size]
-    float x = gl_FragCoord.x / SCR_WIDTH; //[0..1]
-    float y = gl_FragCoord.y / SCR_HEIGHT; //[0..1]
-    gl_FragColor = vColor;
-
-#ifdef PROGRESS_BAR
-    if (LT(y, 0.005) && LE(x, elapsed / duration))
-    {
-        gl_FragColor = WHITE; //progress bar (debug)
-        return;
-    }
-#endif //def PROGRESS_BAR
-
-#ifdef WS281X_FMT //format as WS281X
-    gl_FragColor = MAGENTA; //TODO
-#else //format as light bulbs on screen
-    const float EDGE = min(NODEBIT_WIDTH, NODE_HEIGHT) / max(NODEBIT_WIDTH, NODE_HEIGHT) / 2.0;
-    vec2 coord = gl_PointCoord - 0.5; //vec2(0.5, 0.5); //from [0,1] to [-0.5,0.5]
-	float dist = sqrt(dot(coord, coord));
-//        if (dist > 0.5 * FUD) gl_FragColor = MAGENTA;", //discard;
-   if (GT(dist, EDGE)) discard;
-   gl_FragColor *= 1.0 - dist / (1.2 * EDGE); //diffuse to look more like light bulb
-#endif //def WS281X_FMT
-}
-*/}
-
-
-//    gl_FragColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
-//    gl_FragColor = vec4(0.0, 0.5, 1.0, 1.0);
-//gl_FragColor = texture2D(uSampler, txcoord);
-//gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
-//    else if (LT(y, 0.13) && GT(y, 0.1) && GE(x, 0.5) && LE(x, 0.503)) gl_FragColor = WHITE;
-//    else
-//    if (EQ(outmode, 0.0)) // == 0.0) //show raw pixels like light bulbs
-
-
 //var shpgm;
+//const vertex_sh = require("./vertex.glsl");
+//const fragment_sh = require("./fragment.glsl");
 
-//Canvas.prototype.initShaders = 
+
+//GpuCanvas.prototype.initShaders = 
 function initShaders() //vzoom)
 {
     var gl = this.gl;
-    var vertexShader = getShader.call(this, gl.VERTEX_SHADER, vertex_sh); //"shader-vs");
-    var fragmentShader = getShader.call(this, gl.FRAGMENT_SHADER, fragment_sh); //"shader-fs");
+    var vertexShader = getShader.call(this, gl.VERTEX_SHADER, this.VERTEX_SHADER); //vertex_sh); //"shader-vs");
+    var fragmentShader = getShader.call(this, gl.FRAGMENT_SHADER, this.FRAGMENT_SHADER); //fragment_sh); //"shader-fs");
 
     var shpgm = this.shpgm = glcheck("shpgm", gl.createProgram());
     gl.attachShader(shpgm, vertexShader);
@@ -667,6 +375,8 @@ function initShaders() //vzoom)
 //    shpgm.uniforms.outmode = glcheck("outmode", gl.gUL(shpgm, "outmode"));
 
     shpgm.uniforms.sampler = glcheck("uSampler", gl.gUL(shpgm, "uSampler"));
+    shpgm.uniforms.WS281X_FMT = glcheck("WS281X_FMT", gl.gUL(shpgm, "WS281X_FMT"));
+
 //    shpgm.textureCoordAttribute = gl.getAttribLocation(shpgm, "aTextureCoord");
 //    gl.enableVertexAttribArray(shpgm.textureCoordAttribute);
     gl.uniform1i(shpgm.uniforms.sampler, 0); //this.txr.id); //won't change, so set it now
@@ -674,19 +384,31 @@ function initShaders() //vzoom)
 }
 
 
-//Canvas.prototype.getShader = 
-function getShader(type, str)
+//GpuCanvas.prototype.getShader = 
+function getShader(type, filename) //str)
 {
     var gl = this.gl;
-    var ShaderTypes = {};
-    ShaderTypes[gl.FRAGMENT_SHADER] = "fragment";
-    ShaderTypes[gl.VERTEX_SHADER] = "vertex";
+    if (!getShader.ShaderTypes)
+    {
+        var gst = getShader.ShaderTypes = {};
+        gst[gl.FRAGMENT_SHADER] = "fragment";
+        gst[gl.VERTEX_SHADER] = "vertex";
+    }
 
 //prepend common defs:
-    str = heredoc(preamble) + "\n" + heredoc(str);
-//console.log("pl holder", str.indexOf("placeholder"), heredoc(this.opts.gpufx));
-    if (this.opts.gpufx) //insert GPU fx
-        str = str.replace(/(placeholder for gpufx.*?)/, "$1\n" + heredoc(this.opts.gpufx));
+//    str = heredoc(preamble) + "\n" + heredoc(str);
+    var str = fs.readFileSync(filename).toString();
+//kludge: cpp-js #includes are async, so expand them here synchronously:
+    str = str.replace(/^\s*#include\s+"([^"]+)"\s*.*$/m, function(matching, sub1, ofs, entire)
+    {
+//console.log("TODO: repl '%s' with contents".red_lt, path.resolve(__dirname, sub1));
+        var lines = entire.substr(0, ofs).split("\n");
+        return "//" + matching + "\n" + fs.readFileSync(path.resolve(__dirname, sub1)) + "\n#line " + lines.length + "\n";
+    });
+    
+//    if (this.gpufx) //insert GPU fx
+//console.log("pl holder", str.indexOf("placeholder"), heredoc(this.gpufx));
+//        str = str.replace(/(placeholder for gpufx.*?)/, "$1\n" + heredoc(this.gpufx));
 //expand macros:
 //    str = str.replace(/%SWIDTH%/gm, gl.viewportWidth);
 //    str = str.replace(/%SHEIGHT%/gm, gl.viewportHeight);
@@ -714,10 +436,17 @@ function getShader(type, str)
 */
 //    if (gl.isGLES) str = "#define GL_ES\n" + str;
 //    if (Screen.gpio) str = "#define WS281X_FMT\n" + str;
-//    if (this.opts.SHOW_PROGRESS) str = "#define PROGRESS_BAR\n" + str;
+//    if (this.SHOW_PROGRESS) str = "#define PROGRESS_BAR\n" + str;
     if (gl.isGLES) cpp.define("GL_ES", "");
-    if (Screen.gpio || this.opts.WS281X_FMT) cpp.define("WS281X_FMT", "");
-    if (this.opts.SHOW_PROGRESS) cpp.define("PROGRESS_BAR", "");
+//    if (Screen.gpio || this.WS281X_FMT) cpp.define("WS281X_FMT", ""); //allow this one to change at run-time (for test/debug)
+    if (!Screen.gpio && this.WS281X_DEBUG) cpp.define("WS281X_DEBUG", "");
+    if (!Screen.gpio && this.SHOW_PROGRESS) cpp.define("PROGRESS_BAR", "");
+    if (this.gpufx && (type == gl.VERTEX_SHADER)) //insert custom GPU fx
+    {
+        cpp.define("CUSTOM_GPUFX", "");
+        str += "\n#line 1\n" + fs.readFileSync(this.gpufx);
+    }
+    str = str.replace(/^(#line.*)$/m, "//$1"); //kludge: cpp-js doesn't like #line, so comment it out
     str = cpp.run(str);
     cpp.clear();
 //(?<=a)b  //look-behind no worky
@@ -729,7 +458,7 @@ function getShader(type, str)
     str = str.replace(/(\WNUM_UNIV\s*=.*?)\?\?/, "$1" + this.width); //gl.viewportWidth);
     str = str.replace(/(\WUNIV_LEN\s*=.*?)\?\?/, "$1" + this.height); //gl.viewportHeight);
 //    str = str.replace(/(\WVGROUP\s*=.*?)\?\?/, "$1" + this.vgroup);
-    if (this.opts.SHOW_SHSRC) showsrc(str, ShaderTypes[type]);
+    if (this.SHOW_SHSRC) showsrc(str, getShader.ShaderTypes[type]);
 //process.exit(0);
 
     var shader = glcheck("shader", gl.createShader(type)); //gl.FRAGMENT_SHADER);
@@ -737,7 +466,7 @@ function getShader(type, str)
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
     {
-        if (!this.SHOW_SHSRC) showsrc(str, ShaderTypes[type]);
+        if (!this.SHOW_SHSRC) showsrc(str, getShader.ShaderTypes[type]);
         alert(gl.getShaderInfoLog(shader));
         return null;
     }
@@ -747,12 +476,12 @@ function getShader(type, str)
 
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// Vertex buffers
+/// Vertex buffers (only sent to GPU once)
 //
 
 //var vxbuf; //, ixbuf;
 
-//Canvas.prototype.initBuffers = 
+//GpuCanvas.prototype.initBuffers = 
 function initBuffers()
 {
     var gl = this.gl;
@@ -802,7 +531,7 @@ function initBuffers()
         for (var y = 0; y < this.height; ++y)
             {
             vertices.push((x + 0.5) / this.width, (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
-            if (this.opts.SHOW_VERTEX)
+            if (this.SHOW_VERTEX)
                 if (((x < 2) || (x >= this.width - 2)) && ((y < 2) || (y >= this.height - 2)))
                     console.log("vert[%s, %s]: xyz %j,  hw %j,  model %j", x, y, vertices.slice(-10, -7), vertices.slice(-7, -4), vertices.slice(-4));
             }
@@ -842,7 +571,7 @@ console.log("index data size", i32len(1), "#items", ixbuf.numItems);
 
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// Projection matrices
+/// Projection matrices (can be updated, but demo doesn't need to)
 //
 
 //http://www.learnopengles.com/tag/projection-matrix/
@@ -899,7 +628,7 @@ function mvPopMatrix() {
 }
 */
 
-//Canvas.prototype.setMatrixUniforms = 
+//GpuCanvas.prototype.setMatrixUniforms = 
 //function setMatrixUniforms()
 function initProjection()
 {
@@ -933,7 +662,7 @@ function initProjection()
 
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// Texture handling (1 vertex for each LED pixel)
+/// Texture handling (1 vertex for each LED pixel); updated frequently by caller
 //
 
 //var txtr = {};
@@ -1195,11 +924,11 @@ function init(gl, width, height, want_pixels)
 
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// Misc helper functions
+/// Graphics helper functions
 //
 
 //screen refresh:
-//typically 60 Hz (when window is active), but controlled by browser
+//typically 60 Hz (when window is active), but controlled by browser or caller
 function rAF(onoff)
 {
     if (typeof onoff == "boolean") rAF.isrunning = onoff;
@@ -1207,7 +936,7 @@ function rAF(onoff)
 //    draw(my_draw.prog || 0);
 //    if (rAF.inner) rAF.inner();
     ++rAF.count; //for debug
-    Canvas.all.forEach(canvas =>
+    GpuCanvas.all.forEach(canvas =>
     {
 //        canvas.first();
 //        canvas.clear();
@@ -1227,36 +956,20 @@ function rAF(onoff)
 }
 
 
-function heredoc(func)
-{
-    func = func.toString();
-    var parse = func.match(/^[^]*\/\*([^]*)\*\/\}$/m);
-    return parse? parse[1]: func;
-}
-
-
-//add line numbers for easier debug:
-function showsrc(str, type)
-{
-//    var ShaderTypes = {};
-//    ShaderTypes[this.gl.FRAGMENT_SHADER] = "fragment";
-//    ShaderTypes[this.gl.VERTEX_SHADER] = "vertex";
-    if (showsrc["seen_" + type]) return; //only show it once
-    showsrc["seen_" + type] = true;
-    var lines = [];
-    str.split("\n").forEach(function(line, inx)
-    {
-        lines.push(inx + ": " + line); //add line#s for easier debug
-    });
-    debug("%s shader:\n%s".green_lt, type, lines.join("\n"));
-}
-
-
 //check for OpenGL error:
 function glcheck(desc, id)
 {
     if (id < 0) debug("bad id: %s".red_lt, desc);
     return id;
+}
+
+
+//update a uniform:
+function update(name)
+{
+//console.log("update: shpgm %j", this.shpgm);
+    if (!this.shpgm.uniforms[name]) return;
+    this.gl.uniform1i(this.shpgm.uniforms[name], this[name]);
 }
 
 
@@ -1290,9 +1003,6 @@ function clamp(val, minval, maxval)
 }
 
 
-function micro(val) { return Math.floor(val * 1e6) / 1e6; }
-
-
 //simulate GPU floating precision (for debug):
 //highp = 32-bit float: 1 sign + 23 mantissa + 8 exp
 //mediump = 16-bit float: 1 sign + 10 mantissa + 5 exp
@@ -1314,5 +1024,117 @@ function ieeefloat(val, mant_bits, max_exp)
 //console.log("float %s => %j => %s", val, {sgn, mant, exp}, newval);
     return newval;
 }
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Misc helper functions
+//
+
+//add line numbers for easier debug:
+function showsrc(str, type)
+{
+//    var ShaderTypes = {};
+//    ShaderTypes[this.gl.FRAGMENT_SHADER] = "fragment";
+//    ShaderTypes[this.gl.VERTEX_SHADER] = "vertex";
+    if (showsrc["seen_" + type]) return; //only show it once
+    showsrc["seen_" + type] = true;
+    var lines = [];
+    str.split("\n").forEach(function(line, inx)
+    {
+        lines.push(inx + ": " + line); //add line#s for easier debug
+    });
+    debug("%s shader:\n%s".green_lt, type, lines.join("\n"));
+}
+
+
+//extract source code:
+function heredoc(func)
+{
+    func = func.toString();
+    var parse = func.match(/^[^]*\/\*([^]*)\*\/\}$/m);
+    return parse? parse[1]: func;
+}
+
+
+//add push/pop for listed properties:
+function pushable(props)
+{
+//    console.log("make pushable: %j", props);
+/*
+//http://stackoverflow.com/questions/3112793/how-can-i-define-a-default-getter-and-setter-using-ecmascript-5
+    this._opts = new Proxy(this,
+    {
+        get: function(obj, name)
+        {
+            console.log("get '%s' from stack of %d", name, );
+            get: function() { return prop[prop.length - 1]; },
+        return target[name];
+    },
+    set: function(obj, name, value) {
+        console.log("you're setting property " + name);
+        target[name] = value;
+    }
+    });
+*/
+    this._pushable = {};
+//use push, pop namespace to avoid conflict with getters, setters:
+    this.push = {};
+    this.pop = {};
+//CAUTION: use let + const to force name + prop to be unique each time; see http://stackoverflow.com/questions/750486/javascript-closure-inside-loops-simple-practical-example
+    for (let name in props)
+    {
+        const prop = this._pushable[name] = [props[name]]; //create stack with initial value
+//set up getters, setters:
+//ignore underflow; let caller get error
+        Object.defineProperty(this, name,
+        {
+            get: function() { /*console.log("top of '%s' %j is %j %s", name, prop, prop.top, caller(-2))*/; return prop.top; }.bind(this), //[prop.length - 1]; },
+            set: function(newval) { prop.top = newval; update.call(this, name); /*console.log("top of '%s' %j now is %j @%s", name, prop, prop.top, caller(-2))*/; }.bind(this), //[prop.length - 1] = newval; },
+        });
+//set up push/pop:
+        this.push[name] = function(newval) { /*console.log("push '%s' %j", name, newval)*/; prop.push(newval); update.call(this, name); }.bind(this);
+        this.pop[name] = function() { /*console.log("pop '%s'", name)*/; var retval = prop.pop(); update.call(this, name); return retval; }.bind(this);
+//        prop = null;
+    }
+}
+
+
+//round off:
+function micro(val) { return Math.floor(val * 1e6) / 1e6; }
+
+
+//allow easier access to top of stack:
+if (!Array.prototype.top)
+    Object.defineProperty(Array.prototype, "top",
+    {
+        get: function() { return this[this.length - 1]; },
+        set: function(newval) { this[this.length - 1] = newval; },
+    });
+
+
+//cut down on dup console output:
+//const svlog = console.log; //equiv to this._stdout.write(`${util.format.apply(null, args)}\n`);
+const util = require('util');
+console.log = function(args)
+{
+    var outbuf = util.format.apply(null, arguments);
+    if (this._previous)
+    {
+        if (this._previous.outbuf == outbuf)
+        {
+            ++this._previous.count;
+            return this._previous.retval;
+        }
+        if (this._previous.count != 1)
+            this._stdout.write(`x${this._previous.count}\n`); //flush previous repeat count
+    }
+//    else
+//        process.on('beforeExit', console.log); //flush previous line
+    var retval = this._stdout.write(outbuf + "\n");
+    this._previous = {count: 1, retval, outbuf};
+    return retval;
+}
+
 
 //eof
