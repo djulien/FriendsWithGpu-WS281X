@@ -31,11 +31,13 @@
     "url": "https://github.com/djulien/FriendsWithGpu-WS281X/issues"
   },
   "homepage": "https://github.com/djulien/FriendsWithGpu-WS281X#readme",
-    "REMOVE-node-glfw": "lukaaash/node-glfw",
-    "REMOVE-preprocessor": "^1.4.0",
+  "REMOVE-node-glfw": "lukaaash/node-glfw",
+  "REMOVE-preprocessor": "^1.4.0",
   "dependencies": {
+    "callsite": "^1.0.0",
     "colors": "github:djulien/colors.js",
     "debug": "^2.6.0",
+    "keypress": "^0.2.1",
     "node-webgl": "github:djulien/node-webgl"
   }
 }

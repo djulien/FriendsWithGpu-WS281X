@@ -58,7 +58,7 @@ function timing(path)
     var cfg = fs.existsSync(path)? fs.readFileSync(path).toString(): "";
     if (!cfg)
     {
-        console.log("'%s' not found, using dummy values".red_lt, path);
+        console.log("RPi '%s' not found, using dummy values".red_lt, path);
         cfg =
         [
             "hdmi_timings=1488 0 12 12 24   1104 0 12 12 24    0 0 0 30 0 50000000 1",

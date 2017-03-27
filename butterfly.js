@@ -11,9 +11,10 @@
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
+const path = require('path');
 const {debug} = require('./js-shared/debug');
 const {Screen} = require('./js-shared/screen');
-const {Canvas} = require('./js-shared/canvas');
+const {GpuCanvas} = require('./js-shared/GpuCanvas');
 const {blocking, wait} = require('./js-shared/blocking');
 //const {vec3, vec4, mat4} = require('node-webgl/test/glMatrix-0.9.5.min.js');
 
@@ -34,13 +35,13 @@ const OPTS =
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
-    gpufx: gpufx, //generate fx on GPU instead of CPU
+//    gpufx: path.resolve(__dirname, "butterfly.glsl"), //generate fx on GPU instead of CPU
 };
 
 //ARGB primary colors:
-const RED = 0xffff0000;
-const GREEN = 0xff00ff00;
-const BLUE = 0xff0000ff;
+//const RED = 0xffff0000;
+//const GREEN = 0xff00ff00;
+//const BLUE = 0xff0000ff;
 //const YELLOW = 0xffffff00;
 //const CYAN = 0xff00ffff;
 //const MAGENTA = 0xffff00ff;
@@ -51,6 +52,7 @@ const GPUFX = 0; //tranparent value allowing GPU fx to show thru
 //const PALETTE = [RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA];
 
 
+//butterfly options:
 const BF_opts =
 {
 //    palette: null, //"Rainbow",
@@ -71,42 +73,29 @@ const BF_opts =
 //written with synchronous coding style to simplify timing logic
 blocking(function*()
 {
-    var canvas = new Canvas("Butterfly", NUM_UNIV, UNIV_LEN, OPTS);
+    var canvas = new GpuCanvas("Butterfly", NUM_UNIV, UNIV_LEN, OPTS);
 
     debug("begin, run for %d sec".green_lt, DURATION);
     var started = now_sec();
     canvas.duration = DURATION; //progress bar limit
-//    for (var started = now_sec(), a = 0; now_sec() < started + canvas.duration; ++a)
-    if (OPTS.gpufx) canvas.fill(GPUFX);
+    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
     for (var t = 0, ofs = 0; t <= DURATION / SPEED; ++t)
     {
         canvas.elapsed = now_sec() - started; //update progress bar
-//console.log(ofs);
-//ofs += 480;
-//        canvas.fill(BLACK);
-        if (!OPTS.gpufx) //generate on CPU instead of GPU
-        for (var x = 0; x < canvas.width; ++x)
-            for (var y = 0; y < canvas.height; ++y)
-            {
-//                var color = [RED, GREEN, BLUE][Math.floor(x / 8)];
-//                var repeat = 9 - (x % 8);
-//                canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
-                canvas.pixel(x, y, butterfly(x, y, ofs, BF_opts));
-//    canvas.pixel(x, y, color);
-//console.log("[%d,%d] => 0x%s", x, y, (color >>> 0).toString(16));
-//                if ((x < 3) && (y < 3)) canvas.pixel(x, y, GPUFX + 0x33);
-            }
-//canvas.fill(GPUFX);
-        yield wait((t + 1) * SPEED - canvas.elapsed); //avoid cumulative timing errors
         ofs += BF_opts.reverse? -BF_opts.speed: BF_opts.speed;
+        if (!OPTS.gpufx) //generate fx on CPU instead of GPU
+	        for (var x = 0; x < canvas.width; ++x)
+	            for (var y = 0; y < canvas.height; ++y)
+	                canvas.pixel(x, y, butterfly(x, y, ofs, BF_opts));
+        yield wait((t + 1) * SPEED - canvas.elapsed); //avoid cumulative timing errors
     }
     debug("end, pause 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too fast
-    canvas.destroy();
+//    canvas.destroy();
 });
 
 
-//effects generator:
+//GPU effects generator:
 function gpufx(selector)
 {/*
 //hw (univ#, node#, model#):
@@ -129,6 +118,7 @@ function gpufx(selector)
 */}
 
 
+//CPU effects generator:
 function butterfly(x, y, ofs, opts)
 {
 //    return hsv2rgb(scheme(sethue(x, y, ofs, opts), opts));
@@ -151,33 +141,6 @@ function sethue(x, y, ofs, opts)
 }
 
 
-//choose a color scheme:
-//function scheme(hue, opts)
-//{
-/*
-//    if ((opts.chunks <= 1) || (Math.floor(hue * opts.chunks) % opts.skip))
-//    {
-    if (!opts.palette) return {hue, sat: 1.0, val: 1.0};
-    var color;
-//        if (opts.palette.length < 2) color = opts.palette[0]; //not meaningful; all same color
-    var mix = hue, circular = false;
-    var color_inx = Math.min(Math.max(mix, 0.0), 0.99999) * (circular? opts.palette.length: opts.palette.length - 1);
-    var inx1 = Math.floor(color_inx), inx2 = (inx1 + 1) % opts.palette.length;
-    var color1 = opts.palette[inx1], color2 = opts.palette[inx2];
-    var ratio = color_inx - inx1;
-//wrong way to blend colors? (should use HSV)
-    color.r = color1.r + Math.floor(ratio * (color2.r - color1.r) + 0.5);
-    color.g = color1.g + Math.floor(ratio * (color2.g - color1.g) + 0.5);
-    color.b = color1.b + Math.floor(ratio * (color2.b - color1.b) + 0.5);
-    return color;
-//    }
-*/
-//    return hsv2rgb({hue, sat: 1.0, val: 1.0});
-//    return {h: hue, s: 1.0, v: 1.0};
-//    return vec3(hue, 1.0, 1.0);
-//}
-
-
 function toargb(vec)
 {
     return 0xff000000 | (Math.floor(vec[0] * 0xff) << 16) | (Math.floor(vec[1] * 0xff) << 8) | Math.floor(vec[2] * 0xff);
@@ -185,8 +148,6 @@ function toargb(vec)
 
 function hsv2rgb(h, s, v)
 {
-//    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-//    const K = div({x: 3.0, y: 2.0, z: 1.0, w: 9.0}, 3.0);
     const K = [1, 2/3, 1/3, 3]; //vec4
     var p = abs(sub(mul(fract(add([h, h, h], [1, 2/3, 1/3])), 6), [3, 3, 3]));
     return mul(mix([1/3, 1/3, 1/3], clamp(sub(p, [1, 1, 1]), 0, 1), s), v);
