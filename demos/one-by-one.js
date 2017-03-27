@@ -11,10 +11,11 @@
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
-const {debug} = require('./js-shared/debug');
-const {Screen} = require('./js-shared/screen');
-const {GpuCanvas} = require('./js-shared/GpuCanvas');
-const {blocking, wait, getchar} = require('./js-shared/blocking');
+console.log("TURN INTRO BACK ON".red_lt);
+const {debug} = require('../js-shared/debug');
+const {Screen} = require('../js-shared/screen');
+const {GpuCanvas} = require('../js-shared/GpuCanvas');
+const {blocking, wait, getchar} = require('../js-shared/blocking');
 
 //display settings:
 const VGROUP = !Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
@@ -28,7 +29,7 @@ const OPTS =
 {
 //    SHOW_INTRO: 10, //how long to show intro screen (on screen only)
 //    SHOW_SHSRC: true, //show shader source code
-//    SHOW_VERTEX: true, //show vertex info (corners)
+    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen

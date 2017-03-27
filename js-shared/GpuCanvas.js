@@ -529,12 +529,13 @@ function initBuffers()
 //console.log("init buf %d x %d", this.width, this.height);
     for (var x = 0; x < this.width; ++x)
         for (var y = 0; y < this.height; ++y)
-            {
+        {
             vertices.push((x + 0.5) / this.width, (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
-            if (this.SHOW_VERTEX)
-                if (((x < 2) || (x >= this.width - 2)) && ((y < 2) || (y >= this.height - 2)))
-                    console.log("vert[%s, %s]: xyz %j,  hw %j,  model %j", x, y, vertices.slice(-10, -7), vertices.slice(-7, -4), vertices.slice(-4));
-            }
+            if (!this.SHOW_VERTEX) continue;
+            if ((x >= 2) && (x < this.width - 2)) continue;
+            if ((y >= 2) && (y < this.height - 2)) continue;
+            console.log("vert[%s, %s]: xyz %j,  hw %j,  model %j", x, y, micro(vertices.slice(-10, -7)), vertices.slice(-7, -4), vertices.slice(-4));
+        }
 
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
     glcheck("initbufs-1", this.getError());
@@ -1101,7 +1102,17 @@ function pushable(props)
 
 
 //round off:
-function micro(val) { return Math.floor(val * 1e6) / 1e6; }
+//(mainly for display purposes, to cut down on verbosity)
+function micro(val)
+{
+    if (Array.isArray(val))
+    {
+        var retval = [];
+        val.forEach(elmt => { retval.push(micro(elmt)); });
+        return retval;
+    }
+    return Math.floor(val * 1e6) / 1e6;
+}
 
 
 //allow easier access to top of stack:

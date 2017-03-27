@@ -12,10 +12,10 @@
 'use strict'; //find bugs easier
 require('colors'); //for console output
 const path = require('path');
-const {debug} = require('./js-shared/debug');
-const {Screen} = require('./js-shared/screen');
-const {GpuCanvas} = require('./js-shared/GpuCanvas');
-const {blocking, wait} = require('./js-shared/blocking');
+const {debug} = require('../js-shared/debug');
+const {Screen} = require('../js-shared/screen');
+const {GpuCanvas} = require('../js-shared/GpuCanvas');
+const {blocking, wait} = require('../js-shared/blocking');
 //const {vec3, vec4, mat4} = require('node-webgl/test/glMatrix-0.9.5.min.js');
 
 //display settings:
@@ -35,7 +35,7 @@ const OPTS =
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
-//    gpufx: path.resolve(__dirname, "butterfly.glsl"), //generate fx on GPU instead of CPU
+    gpufx: path.resolve(__dirname, "butterfly.glsl"), //generate fx on GPU instead of CPU
 };
 
 //ARGB primary colors:

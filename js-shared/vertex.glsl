@@ -39,12 +39,12 @@ vec4 gpufx(vec3 selector); //fwd ref
 void main(void)
 {
     gl_Position = uProjection * (uModelView * vec4(vXYZ, 1.0));
-//ortho projection maps as-is to screen coordinates:
-    float x = gl_Position.x; //[0..24)
-    float y = gl_Position.y; //[0..1152)
 //#ifdef WS281X_FMT //format as WS281X requires pivot of 24 adjacent bits
     if (WS281X_FMT) //format as WS281X requires pivot of 24 adjacent bits
     {
+//ortho projection maps as-is to screen coordinates:
+        float x = floor(gl_Position.x * NUM_UNIV); //[0..24)
+        float y = floor(gl_Position.y * UNIV_LEN); //[0..1152)
 //    float xmask = pow(2.0, x);
 //get one bit from other pixels on this row:
 //    vColor = IIF(vColor.a == 0.0), gpufx(vColor.rgb), vColor);

@@ -11,10 +11,10 @@
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
-const {debug} = require('./js-shared/debug');
-const {Screen} = require('./js-shared/screen');
-const {GpuCanvas} = require('./js-shared/GpuCanvas');
-const {blocking, wait} = require('./js-shared/blocking');
+const {debug} = require('../js-shared/debug');
+const {Screen} = require('../js-shared/screen');
+const {GpuCanvas} = require('../js-shared/GpuCanvas');
+const {blocking, wait} = require('../js-shared/blocking');
 
 //display settings:
 const SPEED = 0.5; //animation speed (sec)
