@@ -11,7 +11,6 @@
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
-console.log("TURN INTRO BACK ON".red_lt);
 const {debug} = require('../js-shared/debug');
 const {Screen} = require('../js-shared/screen');
 const {GpuCanvas} = require('../js-shared/GpuCanvas');
@@ -27,13 +26,13 @@ debug("screen %d x %d, video cfg %d x %d, vgroup %d, gpio? %s".cyan_lt, Screen.w
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
 const OPTS =
 {
-//    SHOW_INTRO: 10, //how long to show intro screen (on screen only)
+    SHOW_INTRO: 10, //how long to show intro screen (on screen only)
 //    SHOW_SHSRC: true, //show shader source code
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
-    WS281X_DEBUG: true, //show timing debug info
+//    WS281X_DEBUG: true, //show timing debug info
 };
 
 //ARGB primary colors:

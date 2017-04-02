@@ -4,6 +4,10 @@
 //effect generation (color selection) should be done in here, *not* in fragment shader
 //runs once per vertex, which is ~ 500 - 1000x less than fragment shader
 
+//There is an interesting GLSL compiler/disassembler at the link below.
+//It is a Windows tool, but it seems to run okay on Wine on Ubuntu as well:
+//	http://gpuopen.com/archive/gpu-shaderanalyzer/
+
 //attribute vec3 aVertexPosition;
 //attribute vec4 aVertexColor;
 //attribute vec2 aTextureCoord;

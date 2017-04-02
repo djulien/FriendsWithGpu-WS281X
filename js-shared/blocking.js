@@ -113,7 +113,7 @@ function getchar(args)
         getchar.init = true;
     }
     process.stdin.resume();
-    console._previous = null; //kludge: defeat custom console dedup
+    if (console.log._previous) console.log._previous = null; //kludge: defeat custom console dedup
     console.log.apply(console, args? arguments: ["Any key to continue ..."]);
     return function(gen) { /*debug("save gen", gen)*/; getchar.gen = gen; } //save generator for text wakeup later
 }

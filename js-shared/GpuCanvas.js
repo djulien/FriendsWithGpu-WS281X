@@ -379,7 +379,7 @@ function initShaders() //vzoom)
     shpgm.uniforms.sampler = glcheck("uSampler", gl.gUL(shpgm, "uSampler"));
     shpgm.uniforms.WS281X_FMT = glcheck("WS281X_FMT", gl.gUL(shpgm, "WS281X_FMT"));
     debug(10, "WS281X_fmt: %s".blue_lt, this.WS281X_FMT);
-    if (this.WS281X_FMT) this.WS281X_FMT = this.WS281X_FMT; //kludge: set this *after* shaders and uniforms
+    if (this.WS281X_FMT) this.WS281X_FMT = this.WS281X_FMT; //kludge: set this *after* shaders and uniforms are created
 
 //    shpgm.textureCoordAttribute = gl.getAttribLocation(shpgm, "aTextureCoord");
 //    gl.enableVertexAttribArray(shpgm.textureCoordAttribute);
@@ -1141,7 +1141,7 @@ console.log = function(args)
     {
         if (console.log._previous.outbuf == outbuf)
         {
-            ++conosle.log._previous.count;
+            ++console.log._previous.count;
             return console.log._previous.retval;
         }
         if (console.log._previous.count != 1)
