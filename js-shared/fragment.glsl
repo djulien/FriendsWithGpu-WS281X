@@ -46,19 +46,19 @@ const float BIT_DATA_BEGIN = min(BIT_0H, BIT_1H); // * BIT_TIME; //before this t
 const float BIT_DATA_END = max(BIT_0H, BIT_1H); // * BIT_TIME; //after this time is low; %
 
 
-#define ERROR(n)  vec4(1.0, 0.2 * float(n), 1.0, 1.0) //bug if this shows up
+#define ERROR(n)  vec4(1.0, 0.2 * float(n), 1.0, 1.0) //bug exists if this shows up
 const float BORDERW = 0.05;
 const vec2 LEGEND = vec2(0.9, 0.9);
 vec4 legend(float x, float y);
 
-#define RGB(val)  _RGB(val, floor(nodebit / 8.0))
-vec4 _RGB(float val, float which)
-{
-    if (which == 3.0) return vec4(0.0, 1.0, 1.0, 1.0);
-    if ((which != 0.0) && (which != 1.0) && (which != 2.0)) return ERROR(4);
-    return vec4((which == 0.0)? val: 0.0, (which == 1.0)? val: 0.0, (which == 2.0)? val: 0.0, 1.0); //show R/G/B for debug
-}
-
+//#define RGB(val)  _RGB(val, floor(nodebit / 8.0))
+//vec4 _RGB(float val, float which)
+//{
+//    if (which == 3.0) return vec4(0.0, 1.0, 1.0, 1.0);
+//    if ((which != 0.0) && (which != 1.0) && (which != 2.0)) return ERROR(4);
+//    return vec4((which == 0.0)? val: 0.0, (which == 1.0)? val: 0.0, (which == 2.0)? val: 0.0, 1.0); //show R/G/B for debug
+//}
+#define RGB(val)  vec4(val * SELECT1of3(floor(nodebit / 8.0)), 1.0)
 
 void main(void)
 {
@@ -90,11 +90,12 @@ void main(void)
 
 //#ifdef WS281X_FMT //format as WS281X
 //format as WS281X:
-    float bitangle = fract(x * NUM_UNIV); //position within current bit timeslot
+    float bitangle = fract(x * NUM_UNIV); //position within current bit timeslot (horizontal)
 //gl_FragColor = ERROR(1);
 #ifdef WS281X_DEBUG //show timing debug info
     float nodebit = floor(x * NUM_UNIV); //bit# within node; last bit is 75% off-screen (during h sync period); use floor to control rounding (RPi was rounding UP sometimes)
     float nodemask = pow(0.5, mod(nodebit, 8.0) + 1.0); //which WS281X bit to process this time
+    float bity = fract(y * UNIV_LEN); //position with current node timeslot (vertical)
 
     if ((nodebit < 0.0) || (nodebit > 23.0)) gl_FragColor = ERROR(1); //logic error; shouldn't happen
     else if ((bitangle < 0.0) || (bitangle > 1.0)) gl_FragColor = ERROR(2); //logic error; shouldn't happen
@@ -109,7 +110,7 @@ void main(void)
     else if ((y >= 0.6) && (y < 0.65)) gl_FragColor = RGB(bitangle);
     else if ((y >= 0.65) && (y < 0.7)) gl_FragColor = RGB(nodemask);
 //    else if ((bitangle >= BIT_DATA_BEGIN) && (bitangle >= 0.65)) gl_FragColor = ((bitangle >= 0.7) && (bitangle <= 0.95))? vColor: BLACK; //original rendering; (S, T) swizzle
-    else if ((bitangle >= 0.8) && (bitangle <= 0.95)) gl_FragColor = vColor; //original pixel color; (S, T) swizzle
+    else if ((bitangle >= 0.75) && (bitangle <= 0.95) && (bity < 0.92)) gl_FragColor = vColor; //original pixel color; leave h + v gaps for easier debug
 #else
     if (false); //dummy if to satisfy "else" below
 #endif //def WS281X_DEBUG

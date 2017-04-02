@@ -142,7 +142,7 @@ function render(want_clear)
 //NOTE: need to do this each time:
     gl.drawArrays(gl.POINTS, 0, this.vxbuf.numItems); //squareVertexPositionBuffer.numItems);
     this.txr.render();
-    glcheck("render", this.getError());
+    return glcheck("render", this.getError()) >= 0;
 //    return this; //fluent
 }
 
@@ -276,8 +276,10 @@ function initGL() //canvas)
         debug(10, "canvas: w %s, h %s, viewport: w %s, h %s".blue_lt, canvas.width, canvas.height, gl.viewportWidth, gl.viewportHeight);
         debug(10, "glsl ver# %s, is GL ES? %s".blue_lt, gl.getParameter(gl.SHADING_LANGUAGE_VERSION), gl.isGLES);
 //        debug(10, "glsl exts".blue_lt, gl.getParameter(gl.EXTENSIONS));
+        debug(10, "medium float precision/range: vsh %j, fsh %j".blue_lt, gl.getShaderPrecisionFormat(gl.VERTEX_SHADER, gl.MEDIUM_FLOAT), gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.MEDIUM_FLOAT)); //[-126,127], -23 on RPi
+        debug(10, "medium int precision/range: vsh %j, fsh %j".blue_lt, gl.getShaderPrecisionFormat(gl.VERTEX_SHADER, gl.MEDIUM_INT), gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.MEDIUM_INT)); //[-126,127], 0 on RPi
         debug(10, "max viewport dims: %s".blue_lt, gl.getParameter(gl.MAX_VIEWPORT_DIMS)); //2K,2K on RPi
-        debug(10, "max #textures: %d".blue_lt, gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS)); //8 on RPi
+        debug(10, "max #textures: vertex %d, fragment %d, combined %d".blue_lt, gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS), gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS)); //8 on RPi
         debug(10, "aliased line width range: %j".blue_lt, gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)); //[0,256] on RPi
         debug(10, "aliased point size range: %j".blue_lt, gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)); //[0,256] on RPi
         debug(10, "max #var floats: %s (%d bytes)".blue_lt, gl.getParameter(gl.MAX_VERTEX_ATTRIBS), fllen(gl.getParameter(gl.MAX_VERTEX_ATTRIBS))); //8 on RPi
@@ -376,6 +378,8 @@ function initShaders() //vzoom)
 
     shpgm.uniforms.sampler = glcheck("uSampler", gl.gUL(shpgm, "uSampler"));
     shpgm.uniforms.WS281X_FMT = glcheck("WS281X_FMT", gl.gUL(shpgm, "WS281X_FMT"));
+    debug(10, "WS281X_fmt: %s".blue_lt, this.WS281X_FMT);
+    if (this.WS281X_FMT) this.WS281X_FMT = this.WS281X_FMT; //kludge: set this *after* shaders and uniforms
 
 //    shpgm.textureCoordAttribute = gl.getAttribLocation(shpgm, "aTextureCoord");
 //    gl.enableVertexAttribArray(shpgm.textureCoordAttribute);
@@ -466,7 +470,7 @@ function getShader(type, filename) //str)
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
     {
-        if (!this.SHOW_SHSRC) showsrc(str, getShader.ShaderTypes[type]);
+        if (!this.SHOW_SHSRC) showsrc(str, getShader.ShaderTypes[type], true);
         alert(gl.getShaderInfoLog(shader));
         return null;
     }
@@ -530,6 +534,8 @@ function initBuffers()
     for (var x = 0; x < this.width; ++x)
         for (var y = 0; y < this.height; ++y)
         {
+//TODO: hw (univ#, node#, model#)
+//TODO: model (x, y, w, h)
             vertices.push((x + 0.5) / this.width, (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
             if (!this.SHOW_VERTEX) continue;
             if ((x >= 2) && (x < this.width - 2)) continue;
@@ -549,7 +555,6 @@ debug("vertex: data size %s bytes, #items %d x %d = %s, %j".cyan_lt, fllen(vxbuf
     glcheck("initbufs-3", this.getError());
     gl.vertexAttribPointer(this.shpgm.vxinfo.mXYWH, 4, gl.FLOAT, false, fllen(this.vxbuf.itemSize), fllen(3+3));
     glcheck("initbufs-4", this.getError());
-
 /* don't need indexing
     ixbuf = glcheck("ixbuf", gl.createBuffer());
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ixbuf);
@@ -918,6 +923,8 @@ function init(gl, width, height, want_pixels)
 //    this.fmt = gl.BGRA;
 //GL_RGB, GL_BGR, GL_RGBA, GL_BGRA
     var fmt2 = gl.isGLES? gl.BGRA: gl.RGBA; //NOTE: RPi requires BGRA here
+    const FMTS = {}; FMTS[gl.BGRA] = "BGRA"; FMTS[gl.RGBA] = "RGBA";
+    debug(10, "fmts: %s %s".blue_lt, FMTS[this.fmt], FMTS[fmt2]);
     gl.texImage2D(gl.TEXTURE_2D, 0, fmt2, this.width, this.height, 0, this.fmt, gl.UNSIGNED_BYTE, this.pixels);
     glcheck("img txtr", this.getError()); //invalid op on RPi?
 }
@@ -949,7 +956,7 @@ function rAF(onoff)
 //		glEnableVertexAttribArray(state.texCoordLoc); ERRCHK("flush");
 //		glUniform1i(state.samplerLoc, 0); ERRCHK("flush"); //set sampler texture unit to 0
 
-        canvas.render(true);
+        if (!canvas.render(true)) rAF.isrunning = false; //stop rendering loop if error
     });
 
 //if (isNaN(++rAF.count)) rAF.count = 0;
@@ -1033,19 +1040,19 @@ function ieeefloat(val, mant_bits, max_exp)
 //
 
 //add line numbers for easier debug:
-function showsrc(str, type)
+function showsrc(str, type, error)
 {
 //    var ShaderTypes = {};
 //    ShaderTypes[this.gl.FRAGMENT_SHADER] = "fragment";
 //    ShaderTypes[this.gl.VERTEX_SHADER] = "vertex";
-    if (showsrc["seen_" + type]) return; //only show it once
+    if (!error && showsrc["seen_" + type]) return; //only show it once unless error
     showsrc["seen_" + type] = true;
     var lines = [];
     str.split("\n").forEach(function(line, inx)
     {
         lines.push(inx + ": " + line); //add line#s for easier debug
     });
-    debug("%s shader:\n%s".green_lt, type, lines.join("\n"));
+    (error? console.log: debug)("%s shader:\n%s".green_lt, type, lines.join("\n"));
 }
 
 
@@ -1130,22 +1137,34 @@ const util = require('util');
 console.log = function(args)
 {
     var outbuf = util.format.apply(null, arguments);
-    if (this._previous)
+    if (console.log._previous)
     {
-        if (this._previous.outbuf == outbuf)
+        if (console.log._previous.outbuf == outbuf)
         {
-            ++this._previous.count;
-            return this._previous.retval;
+            ++conosle.log._previous.count;
+            return console.log._previous.retval;
         }
-        if (this._previous.count != 1)
-            this._stdout.write(`x${this._previous.count}\n`); //flush previous repeat count
+        if (console.log._previous.count != 1)
+            console._stdout.write(`x${console.log._previous.count}\n`); //flush previous repeat count
     }
 //    else
 //        process.on('beforeExit', console.log); //flush previous line
-    var retval = this._stdout.write(outbuf + "\n");
-    this._previous = {count: 1, retval, outbuf};
+    var retval = console._stdout.write(outbuf + "\n");
+    console.log._previous = {count: 1, retval, outbuf};
     return retval;
 }
 
+
+//var limit = 0;
+//for (var i = 0; i < 8; ++i) { var p = Math.pow(.5, i + 1); limit += p; console.log(p); }
+//console.log(limit, 256 * limit / 255);
+
+//const RGB_BITS = 255 / 256;
+//function AND(val, mask) { return (Math.min(val, RGB_BITS) % (2 * mask)) >= mask; }
+//for (var i = 0; i <= 256; ++i)
+//{
+//    var val = i / 256;
+//    console.log("%d. %d", i, val, AND(val, 1/2), AND(val, 1/16), AND(val, 1/256));
+//}
 
 //eof

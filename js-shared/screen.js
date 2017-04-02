@@ -9,6 +9,7 @@ const WebGL = require('node-webgl'); //NOTE: for RPi must be lukaaash/node-webg 
 const document = WebGL.document();
 //const {SPEED, NUM_UNIV, UNIV_LEN} = require('./config');
 //const cfg = require('./package.json');
+//const {debug} = require('./debug');
 
 const Screen =
 module.exports.Screen = timing();
@@ -21,6 +22,8 @@ var canvas = document.createElement("ws281x-canvas"); //name needs to include "c
 //gl = canvas.getContext("experimental-webgl");
 Screen.width = canvas.width;
 Screen.height = canvas.height;
+
+//debug(10, "gpio? %d, w %d x h %d".blue_lt, Screen.gpio, Screen.width, Screen.height);
 
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -29,7 +29,7 @@ const OPTS =
 {
 //    SHOW_INTRO: 10, //how long to show intro screen (on screen only)
 //    SHOW_SHSRC: true, //show shader source code
-    SHOW_VERTEX: true, //show vertex info (corners)
+//    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
@@ -44,6 +44,7 @@ const YELLOW = 0xffffff00;
 const CYAN = 0xff00ffff;
 const MAGENTA = 0xffff00ff;
 const WHITE = 0xffffffff;
+//const WHITE = 0xFFE7DBA5; //turn off a few bits to make debug easier
 const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
 
 //const PALETTE = [RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE];

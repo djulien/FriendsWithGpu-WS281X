@@ -47,7 +47,7 @@ const OPTS =
 //const MAGENTA = 0xffff00ff;
 //const WHITE = 0xffffffff;
 const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
-const GPUFX = 0; //tranparent value allowing GPU fx to show thru
+//const GPUFX = 0; //tranparent value allowing GPU fx to show thru
 
 //const PALETTE = [RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA];
 
@@ -78,7 +78,7 @@ blocking(function*()
     debug("begin, run for %d sec".green_lt, DURATION);
     var started = now_sec();
     canvas.duration = DURATION; //progress bar limit
-    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
+//    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
     for (var t = 0, ofs = 0; t <= DURATION / SPEED; ++t)
     {
         canvas.elapsed = now_sec() - started; //update progress bar
