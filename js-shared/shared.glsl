@@ -1,4 +1,4 @@
-//include this before other shader code:
+//include this file before other shader code:
 
 //NOTES:
 //desktop GLSL version 1.20 is similar to GLSL ES version 1.00 according to:
@@ -32,21 +32,35 @@
 //Never ever branch in the fs if not absolutely avoidable.  Even on the most modern hardware fragments are evaluated in blocks of 4 and all branches that are taken in any of them forces the gpu to evaluate them for every fragment regardless of whether needed or not.
 //To avoid branches one should always use functions like mix, step, smoothstep, etc.
 
+//useful info:
+// https://www.khronos.org/opengl/wiki/GLSL_Optimizations
+// http://aras-p.info/blog/2010/09/29/glsl-optimizer/
+// http://blog.hvidtfeldts.net/index.php/2011/07/optimizing-glsl-code/
+// http://gpuopen.com/archive/gpu-shaderanalyzer/
+// https://github.com/aras-p/glsl-optimizer.git
+
+//There is an interesting GLSL compiler/disassembler at the link below.
+//It is a Windows tool, but it seems to run okay on Wine on Ubuntu as well:
+//	http://gpuopen.com/archive/gpu-shaderanalyzer/
+// http://developer.amd.com/tools-and-sdks/graphics-development/gpu-shaderanalyzer/
+
 
 //broken   #version 130 //bit-wise ops require GLSL 1.3 to be enabled
 //nice analysis of precision: http://litherum.blogspot.com/2013/04/precision-qualifiers-in-opengl-es.html
-#ifdef GL_ES
+#ifdef GL_ES //RPi
    #version 100 //GLSL ES 1.0 ~= GLSL 1.2
-   #define lowp //10-bit float
-   #define mediump //16-bit float: 1 sign + 5 exp + 10 mantissa
-   #define highp //32-bit float: 1 sign + 8 exp + 23 mantissa
+//   #define lowp //10-bit float
+//   #define mediump //16-bit float: 1 sign + 5 exp + 10 mantissa
+//   #define highp //32-bit float: 1 sign + 8 exp + 23 mantissa
 //   precision mediump float;
-   #define PRECISION(stmt)  stmt;
-#else
+//   #define PRECISION(stmt)  stmt;
+#else //desktop/laptop
    #version 120 //gl_PointCoord requires GLSL 1.2 to be enabled
-   #define PRECISION(stmt)
+//   #define PRECISION(stmt)
 #endif
-PRECISION(mediump float)
+//PRECISION(mediump float)
+//NOTE: Support for a high precision floating-point format is mandatory for vertex shaders.
+//see https://www.khronos.org/registry/OpenGL-Refpages/es2.0/xhtml/glGetShaderPrecisionFormat.xml
 
 //compensate for floating point precision:
 const float FUD = 1.0e-6;
@@ -63,6 +77,8 @@ const float FUD = 1.0e-6;
 #define GT(lhs, rhs)  ((lhs) > (rhs) + FUD)
 #define LE(lhs, rhs)  ((lhs) <= (rhs) + FUD)
 #define LT(lhs, rhs)  ((lhs) < (rhs) - FUD)
+//#define MID(lower, upper)  (((upper) - (lower)) / 2.0)
+//#define BTWN(val, lower, upper)  LE(abs((val) - MID(lower, upper)), MID(lower, upper) + FUD)
 
 //force val to be non-0:
 //#define is0(val)  vec3(equal(val, vec3(0.0)))
@@ -73,6 +89,7 @@ const float FUD = 1.0e-6;
 //NOTE: bit-wise ops require GLSL 1.3
 //#define IIF(expr, true, false)  ((expr) & (true) | ~(expr) & (false))
 #define IIF(expr, true, false)  mix(false, true, BOOL(expr))
+#define IF(expr, val)  (BOOL(expr) * (val))
 
 //compensate for lack of bit-wise ops:
 //bit-wise ops require GLSL 1.3 to be enabled; not available on RPi
@@ -81,7 +98,7 @@ const float FUD = 1.0e-6;
 //#define VEC3(val)  vec3(float(val), float(val), float(val)) //NOTE: shaderific says vec ctor will do this
 //#define SELECT1of3(which)  vec3(int(which) == 0, int(which) == 1, int(which) == 2)
 //#define SELECT1of3(which)  IIF(equal(VEC3(which), vec3(0.0, 1.0, 2.0)), VEC3(1), VEC3(1e30))
-#define SELECT1of3(which)  vec3(equal(vec3(float(which)), vec3(0.0, 1.0, 2.0))) //, VEC3(1), VEC3(1e30))
+//#define SELECT1of3(which)  vec3(equal(vec3(float(which)), vec3(0.0, 1.0, 2.0))) //, VEC3(1), VEC3(1e30))
 //#define VEC4(val)  vec4(float(val), float(val), float(val), float(val))
 //#define SELECT1of4(which)  vec4(int(which) == 0, int(which) == 1, int(which) == 2, int(which) == 3)
 //#define VEC3tag(val)  vec4(float(val), float(val), float(val), 1.0)
@@ -104,17 +121,46 @@ const float FUD = 1.0e-6;
 //do bit-wise AND component by compoent
 //div by 0 = infinity with no arith error? according to http://stackoverflow.com/questions/16069959/glsl-how-to-ensure-largest-possible-float-value-without-overflow
 //however, 0 terms must result in 0, so add extra NZ condition to avoid that
-const float FLOAT2BITS = 255.0 / 256.0; //convert 1.0 <-> 1/2 + 1/4 + 1/8 + 1/16 + 1/32 + 1/64 + 1/128 + 1/256 so bit-wise AND will work
+//const float FLOAT2BITS = 255.0 / 256.0; //convert 1.0 <-> 1/2 + 1/4 + 1/8 + 1/16 + 1/32 + 1/64 + 1/128 + 1/256 so bit-wise AND will work
 //#define AND3f(val, mask)  (vec3(greaterThanEqual(mod(min(val, RGB_BITS), 2.0 * mask), mask)) * sign(mask))
 //#define AND3f(val, mask)  (vec3(greaterThanEqual(mod(val * FLOAT2BITS, 2.0 * NZ(mask)), NZ(mask))) * sign(mask) / FLOAT2BITS)
-#define AND3(val, mask)  dot(vec3(greaterThanEqual(mod(val * FLOAT2BITS, 2.0 * mask), mask)), sign(mask)) //strip off extraneous results for mask components of 0
+//#define AND3(val, mask)  dot(vec3(greaterThanEqual(mod(val * FLOAT2BITS, 2.0 * mask), mask)), sign(mask)) //strip off extraneous results for mask components of 0
 
 //create a normalized vec4 bit mask:
 //msb = bit 0, lsb = bit 23
-#define MASK3f(n)  (pow(0.5, mod(float(n), 8.0) + 1.0) * SELECT1of3(floor(float(n) / 8.0)))
+//#define MASK3f(n)  (pow(0.5, mod(float(n), 8.0) + 1.0) * SELECT1of3(floor(float(n) / 8.0)))
 //#define MASK3f_tag(n)  vec4(MASK3F(n), WHICH(n))
 //#define MASK4f(n)  DBYTETO(pow(0.5, mod(float(n), 8.0) + 1.0), floor(float(n) / 8.0))
 //#define MASK3tag(n)  vec4(MASK3f(n), floor(float(n) / 8.0)) //(VEC3tag(pow(0.5, mod(float(n), 8.0) + 1.0)) * SELECT3tag(floor(float(n) / 8.0)))
+
+//pre-define mask constants in case compiler doesn't:
+#if 0
+const vec3 MASK0 = MASK3f(0);
+const vec3 MASK1 = MASK3f(1);
+const vec3 MASK2 = MASK3f(2);
+const vec3 MASK3 = MASK3f(3);
+const vec3 MASK4 = MASK3f(4);
+const vec3 MASK5 = MASK3f(5);
+const vec3 MASK6 = MASK3f(6);
+const vec3 MASK7 = MASK3f(7);
+const vec3 MASK8 = MASK3f(8);
+const vec3 MASK9 = MASK3f(9);
+const vec3 MASK10 = MASK3f(10);
+const vec3 MASK11 = MASK3f(11);
+const vec3 MASK12 = MASK3f(12);
+const vec3 MASK13 = MASK3f(13);
+const vec3 MASK14 = MASK3f(14);
+const vec3 MASK15 = MASK3f(15);
+const vec3 MASK16 = MASK3f(16);
+const vec3 MASK17 = MASK3f(17);
+const vec3 MASK18 = MASK3f(18);
+const vec3 MASK19 = MASK3f(19);
+const vec3 MASK20 = MASK3f(20);
+const vec3 MASK21 = MASK3f(21);
+const vec3 MASK22 = MASK3f(22);
+const vec3 MASK23 = MASK3f(23);
+#endif
+
 
 //#define MASK4i(n) MASK4f(float(n))
 //vec4 MASK4f(float n)
@@ -146,7 +192,7 @@ or
 const float PI = 3.1415926535897932384626433832795;
 
 //dimensions of nodes on screen:
-//"??" are filled in by caller
+//NOTE: "??" will be filled in by caller
 //const float VGROUP = float(??);
 const float SCR_WIDTH = float(??);
 const float SCR_HEIGHT = float(??);
@@ -154,14 +200,16 @@ const float NUM_UNIV = float(??);
 const float UNIV_LEN = float(??); //SCR_HEIGHT; // / VGROUP; //float(??);
 const float NODEBIT_WIDTH = float(SCR_WIDTH / NUM_UNIV);
 const float NODE_HEIGHT = float(SCR_HEIGHT / UNIV_LEN);
-//#define PTSIZE  max(NODEBIT_WIDTH, NODE_HEIGHT)
-const float PTSIZE = max(NODEBIT_WIDTH, NODE_HEIGHT);
-const float MAX_UNIV = NUM_UNIV - 1.0;
-const float UNIV_MAX = UNIV_LEN - 1.0;
+//#define NODE_SIZE  max(NODEBIT_WIDTH, NODE_HEIGHT)
+//const float NODE_SIZE = max(NODEBIT_WIDTH, NODE_HEIGHT);
+//const float MAX_UNIV = NUM_UNIV - 1.0;
+//const float UNIV_MAX = UNIV_LEN - 1.0;
 
 //caller options:
 //#define WS281X_FMT
 //#define PROGRESS_BAR
+
+#define ERROR(n)  vec4(1.0, 0.2 * float(n), 1.0, 1.0) //bug exists if this shows up
 
 //primary RGBA colors:
 const vec4 RED = vec4(1.0, 0.0, 0.0, 1.0);
@@ -174,29 +222,5 @@ const vec4 MAGENTA = vec4(1.0, 0.0, 1.0, 1.0);
 const vec4 WHITE = gray(1.0); //vec4(1.0, 1.0, 1.0, 1.0);
 const vec4 BLACK = gray(0.0); //vec4(0.0, 0.0, 0.0, 1.0);
 //const vec4 GPUFX = vec4(0.0, 0.0, 0.0, 0.0); //tranparent texture color allowing GPU fx to show thru
-
-//from http://lolengine.net/blog/2013/07/27/rgb-to-hsv-in-glsl:
-vec3 rgb2hsv(vec3 c)
-{
-//    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
-//    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
-//    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
-    vec4 K = vec4(0.0, -1.0, 2.0, -3.0) / 3.0; //TODO: make const?
-//    vec4 p = IIF(GE(c.g, c.b), vec4(c.gb, K.xy), vec4(c.bg, K.wz));
-//    vec4 q = IIF(GE(c.r, p.x), vec4(c.r, p.yzx), vec4(p.xyw, c.r));
-    vec4 p = IIF(greaterThanEqual(c.g, c.b), vec4(c.gb, K.xy), vec4(c.bg, K.wz));
-    vec4 q = IIF(greaterThanEqual(c.r, p.x), vec4(c.r, p.yzx), vec4(p.xyw, c.r));
-    float d = q.x - min(q.w, q.y);
-    float e = 1.0e-10;
-    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
-}
-
-vec3 hsv2rgb(vec3 c)
-{
-//    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-    vec4 K = vec4(3.0, 2.0, 1.0, 9.0) / 3.0; //TODO: make const?
-    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-}
 
 //eof

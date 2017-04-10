@@ -46,8 +46,7 @@ const OPTS =
 //const CYAN = 0xff00ffff;
 //const MAGENTA = 0xffff00ff;
 //const WHITE = 0xffffffff;
-const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
-//const GPUFX = 0; //tranparent value allowing GPU fx to show thru
+//const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
 
 //const PALETTE = [RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA];
 
@@ -62,7 +61,7 @@ const BF_opts =
 //    style: 1,
 //    chunks: 1,
 //    skip: 2,
-    speed: 10,
+    speed: 1, //10,
 //    fps: 30,
     width: NUM_UNIV,
     height: UNIV_LEN,
@@ -77,45 +76,22 @@ blocking(function*()
 
     debug("begin, run for %d sec".green_lt, DURATION);
     var started = now_sec();
-    canvas.duration = DURATION; //progress bar limit
+    canvas.duration = DURATION / SPEED; //progress bar limit
 //    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
     for (var t = 0, ofs = 0; t <= DURATION / SPEED; ++t)
     {
-        canvas.elapsed = now_sec() - started; //update progress bar
         ofs += BF_opts.reverse? -BF_opts.speed: BF_opts.speed;
+//pixel [0, 0] is upper left on screen
         if (!OPTS.gpufx) //generate fx on CPU instead of GPU
 	        for (var x = 0; x < canvas.width; ++x)
 	            for (var y = 0; y < canvas.height; ++y)
 	                canvas.pixel(x, y, butterfly(x, y, ofs, BF_opts));
-        yield wait((t + 1) * SPEED - canvas.elapsed); //avoid cumulative timing errors
+        yield wait((t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
+        ++canvas.elapsed; //= now_sec() - started; //update progress bar
     }
     debug("end, pause 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too fast
-//    canvas.destroy();
 });
-
-
-//GPU effects generator:
-function gpufx(selector)
-{/*
-//hw (univ#, node#, model#):
-//these are ints, but used in floating arithmetic so just leave them as floats
-//    float hw_univ = hUNM.s;
-//    float hw_node = hUNM.t;
-//    float hw_model = hUNM.p;
-    float x = hUNM.s;
-    float y = hUNM.t;
-    float ofs = elapsed * 4.0; // / 0.01;
-
-    if (EQ(x, 0.0) && EQ(y, 1.0)) y += 1.0;
-    if (EQ(x, 1.0) && EQ(y, 0.0)) x += 1.0;
-    float num = abs((x * x - y * y) * sin(ofs + ((x + y) * PI * 2.0 / (UNIV_LEN + NUM_UNIV))));
-    float den = x * x + y * y;
-
-    float hue = IIF(GT(den, 0.001), num / den, 0.0);
-    vec3 color = hsv2rgb(vec3(hue, 1.0, 1.0));
-    return vec4(color, 1.0);
-*/}
 
 
 //CPU effects generator:
@@ -129,11 +105,13 @@ function butterfly(x, y, ofs, opts)
 //based on http://mathworld.wolfram.com/ButterflyFunction.html
 function sethue(x, y, ofs, opts)
 {
+    y = UNIV_LEN - y - 1; //flip y axis; (0,0) is top of screen
 //axis fixes: fix the colors for pixels at (0,1) and (1,0)
     if ((x == 0) && (y == 1)) y = y + 1;
     if ((x == 1) && (y == 0)) x = x + 1;
 
-    var num = Math.abs((x * x - y * y) * Math.sin(ofs + ((x + y) * Math.PI * 2 / (opts.height + opts.width))));
+//    var num = Math.abs((x * x - y * y) * Math.sin(ofs + ((x + y) * Math.PI * 2 / (opts.height + opts.width))));
+    var num = Math.abs((x * x - y * y) * Math.sin(((ofs + x + y) * Math.PI * 2 / (opts.height + opts.width))));
     var den = x * x + y * y;
 
     var hue = (den > 0.001)? num / den: 0;
@@ -146,11 +124,32 @@ function toargb(vec)
     return 0xff000000 | (Math.floor(vec[0] * 0xff) << 16) | (Math.floor(vec[1] * 0xff) << 8) | Math.floor(vec[2] * 0xff);
 }
 
+
+//truncate after 3 dec places:
+function milli(val)
+{
+    return Math.floor(val * 1e3) / 1e3;
+}
+
+
+//current time in seconds:
+function now_sec()
+{
+    return Date.now() / 1000;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Misc helpers to simulate GLSL built-ins:
+//
+
 function hsv2rgb(h, s, v)
 {
     const K = [1, 2/3, 1/3, 3]; //vec4
     var p = abs(sub(mul(fract(add([h, h, h], [1, 2/3, 1/3])), 6), [3, 3, 3]));
-    return mul(mix([1/3, 1/3, 1/3], clamp(sub(p, [1, 1, 1]), 0, 1), s), v);
+//    return mul(mix([1/3, 1/3, 1/3], clamp(sub(p, [1, 1, 1]), 0, 1), s), v);
+    return mul(mix([1, 1, 1], clamp(sub(p, [1, 1, 1]), 0, 1), s), v);
 }
 
 
@@ -209,20 +208,6 @@ function mix(vec1, vec2, a)
     var retval = [];
     for (var i = 0; i < vec1.length; ++i) retval[i] = (1 - a) * vec1[i] + a * vec2[i];
     return retval;
-}
-
-
-//truncate after 3 dec places:
-function milli(val)
-{
-    return Math.floor(val * 1e3) / 1e3;
-}
-
-
-//current time in seconds:
-function now_sec()
-{
-    return Date.now() / 1000;
 }
 
 //eof

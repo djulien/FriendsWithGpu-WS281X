@@ -7,10 +7,11 @@
 //History:
 //ver 0.9  DJ  10/3/16  initial version
 //ver 0.95 DJ  3/15/17  cleaned up, refactored/rewritten for FriendsWithGpu article
-//ver 1.0  DJ  3/20/17  finally got texture working on RPi
+//ver 1.0  DJ  3/20/17  finally got texture re-write working on RPi
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
+const path = require('path');
 const {debug} = require('../js-shared/debug');
 const {Screen} = require('../js-shared/screen');
 const {GpuCanvas} = require('../js-shared/GpuCanvas');
@@ -33,6 +34,7 @@ const OPTS =
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
+//    gpufx: path.resolve(__dirname, "rgb-finder.glsl"), //generate fx on GPU instead of CPU
 };
 
 //ARGB primary colors:
@@ -44,7 +46,6 @@ const BLUE = 0xff0000ff;
 //const MAGENTA = 0xffff00ff;
 //const WHITE = 0xffffffff;
 const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
-//const GPUFX = 0; //tranparent value allowing GPU fx to show thru
 
 //const PALETTE = [RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA];
 
@@ -57,23 +58,24 @@ blocking(function*()
 
     debug("begin, run for %d sec".green_lt, DURATION);
     var started = now_sec();
-    canvas.duration = DURATION; //progress bar limit
+//    canvas.elapsed = 0; //reset progress bar
+    canvas.duration = DURATION / SPEED; //set progress bar limit
     for (var t = 0; t <= DURATION / SPEED; ++t)
     {
-        canvas.elapsed = now_sec() - started; //update progress bar
-//fx generated on CPU:
-        for (var x = 0; x < canvas.width; ++x)
-            for (var y = 0; y < canvas.height; ++y)
-            {
-                var color = [RED, GREEN, BLUE][Math.floor(x / 8)];
-                var repeat = 9 - (x % 8);
-                canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
-            }
-        yield wait((t + 1) * SPEED - canvas.elapsed); //avoid cumulative timing errors
+//NOTE: pixel (0, 0) is upper left on screen
+        if (!OPTS.gpufx) //generate fx on CPU instead of GPU
+            for (var x = 0; x < canvas.width; ++x)
+                for (var y = 0; y < canvas.height; ++y)
+                {
+                    var color = [RED, GREEN, BLUE][Math.floor(x / 8)];
+                    var repeat = 9 - (x % 8);
+                    canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
+                }
+        yield wait((t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
+        ++canvas.elapsed; //= now_sec() - started; //update progress bar
     }
     debug("end, pause 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too fast
-//    canvas.destroy();
 });
 
 

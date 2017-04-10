@@ -1,5 +1,10 @@
 //fragment shader:
-#include "preamble.glsl"
+#include "shared.glsl"
+
+//#ifdef GL_ES //RPi
+//http://stackoverflow.com/questions/28540290/why-it-is-necessary-to-set-precision-for-the-fragment-shader
+//precision mediump float; //defaults to mediump in OpenGL ES; illegal in OpenGL desktop
+//#endif //def GL_ES
 
 //format pixels for screen or WS281X
 //runs once per screen pixel (~ 500 - 1000x more than vertex shader)
@@ -22,9 +27,9 @@ uniform bool WS281X_FMT; //allow turn on/off at run-time for debug purposes
 
 //WS281X low, high bit times:
 //bit time is 1.25 usec and divided into 3 parts:
-//          ______ _______           _____
-//   prev  / lead \  data \  trail  / next
-//   bit _/        \_______\_______/  bit
+//          ______ ______               _____
+//   prev  / lead \ data \    trail    / next
+//   bit _/        \______\___________/  bit
 //all bits start with low-to-high transition
 //"0" bits fall after 1/4 of bit time; "1" bits fall after 5/8 of bit time
 //all bits end in a low state
@@ -46,10 +51,13 @@ const float BIT_DATA_BEGIN = min(BIT_0H, BIT_1H); // * BIT_TIME; //before this t
 const float BIT_DATA_END = max(BIT_0H, BIT_1H); // * BIT_TIME; //after this time is low; %
 
 
-#define ERROR(n)  vec4(1.0, 0.2 * float(n), 1.0, 1.0) //bug exists if this shows up
+#ifdef WS281X_DEBUG
+//#define ERROR(n)  vec4(1.0, 0.2 * float(n), 1.0, 1.0) //bug exists if this shows up
 const float BORDERW = 0.05;
-const vec2 LEGEND = vec2(0.9, 0.9);
+const vec2 LEGEND = vec2(0.9, 0.1);
 vec4 legend(float x, float y);
+#endif //def WS281X_DEBUG
+
 
 //#define RGB(val)  _RGB(val, floor(nodebit / 8.0))
 //vec4 _RGB(float val, float which)
@@ -58,17 +66,20 @@ vec4 legend(float x, float y);
 //    if ((which != 0.0) && (which != 1.0) && (which != 2.0)) return ERROR(4);
 //    return vec4((which == 0.0)? val: 0.0, (which == 1.0)? val: 0.0, (which == 2.0)? val: 0.0, 1.0); //show R/G/B for debug
 //}
-#define RGB(val)  vec4(val * SELECT1of3(floor(nodebit / 8.0)), 1.0)
+//#define SELECT1of3(which)  vec3(equal(vec3(float(which)), vec3(0.0, 1.0, 2.0))) //, VEC3(1), VEC3(1e30))
+//#define RGB(val)  vec4(val * SELECT1of3(floor(nodebit / 8.0)), 1.0)
+
+#define RGB(val)  vec4(vec3(equal(vec3(floor(nodebit / 8.0)), vec3(0.0, 1.0, 2.0))) * val, 1.0)
+
 
 void main(void)
 {
 //gl_FragCoord is window space [0..size],[0..size]
     float x = gl_FragCoord.x / SCR_WIDTH; //[0..1]
-    float y = 1.0 - gl_FragCoord.y / SCR_HEIGHT; //[0..1]; put 0 at top
-    gl_FragColor = vColor; //start with color from vertex
+    float y = gl_FragCoord.y / SCR_HEIGHT; //[0..1]; NOTE: 0 at bottom of screen
 
 #ifdef PROGRESS_BAR
-    if ((y > 0.995) && (x <= elapsed / duration))
+    if ((y < 0.005) && (x <= elapsed / duration))
     {
         gl_FragColor = WHITE; //progress bar (debug/test only)
         return;
@@ -83,6 +94,7 @@ void main(void)
 	    float dist = sqrt(dot(coord, coord));
 //        if (dist > 0.5 * FUD) gl_FragColor = MAGENTA;", //discard;
         if (dist > EDGE) discard;
+        gl_FragColor = vColor; //start with color from vertex
         gl_FragColor *= 1.0 - dist / (1.2 * EDGE); //diffuse to look more like light bulb
         return;
     }
@@ -101,14 +113,14 @@ void main(void)
     else if ((bitangle < 0.0) || (bitangle > 1.0)) gl_FragColor = ERROR(2); //logic error; shouldn't happen
     else if (vColor.a != 1.0) gl_FragColor = ERROR(3); //vertex shader should set full alpha
 //    else if (!chkcolor(outcolor)) outcolor = ERROR(4); //data integrity check during debug
-    else if ((x >= LEGEND.x) && (y >= LEGEND.y)) gl_FragColor = legend(x, y); //show legend
+    else if ((x >= LEGEND.x) && (y <= LEGEND.y)) gl_FragColor = legend(x, y); //show legend
 //"else if ((rawimg.y >= 0.45) && (rawimg.y < 0.5)) outcolor = RGB((test != 0)? 1.0: 0.0);\n"
-    else if ((y >= 0.5) && (y < 0.51) && ((nodebit == 1.0) || (nodebit == 8.0) || (nodebit == 22.0))) gl_FragColor = RGB(0.75);
-    else if ((y >= 0.5) && (y < 0.54)) gl_FragColor = gray(nodebit / NUM_UNIV);
-    else if ((y >= 0.54) && (y < 0.58)) gl_FragColor = gray(1.0 - nodebit / NUM_UNIV);
-    else if ((y >= 0.58) && (y < 0.6)) gl_FragColor = RGB(1.0);
-    else if ((y >= 0.6) && (y < 0.65)) gl_FragColor = RGB(bitangle);
-    else if ((y >= 0.65) && (y < 0.7)) gl_FragColor = RGB(nodemask);
+    else if ((y >= 0.49) && (y < 0.50) && ((nodebit == 1.0) || (nodebit == 8.0) || (nodebit == 22.0))) gl_FragColor = RGB(0.75);
+    else if ((y >= 0.46) && (y < 0.50)) gl_FragColor = gray(nodebit / NUM_UNIV);
+    else if ((y >= 0.42) && (y < 0.46)) gl_FragColor = gray(1.0 - nodebit / NUM_UNIV);
+    else if ((y >= 0.40) && (y < 0.42)) gl_FragColor = RGB(1.0);
+    else if ((y >= 0.35) && (y < 0.40)) gl_FragColor = RGB(bitangle);
+    else if ((y >= 0.30) && (y < 0.35)) gl_FragColor = RGB(nodemask);
 //    else if ((bitangle >= BIT_DATA_BEGIN) && (bitangle >= 0.65)) gl_FragColor = ((bitangle >= 0.7) && (bitangle <= 0.95))? vColor: BLACK; //original rendering; (S, T) swizzle
     else if ((bitangle >= 0.75) && (bitangle <= 0.95) && (bity < 0.92)) gl_FragColor = vColor; //original pixel color; leave h + v gaps for easier debug
 #else
@@ -124,17 +136,19 @@ void main(void)
 }
 
 
+#ifdef WS281X_DEBUG //show timing debug info
 //error code legend:
 //  1 | 3
 // ---+---
 //  2 | 4
 vec4 legend(float x, float y)
 {
-    vec2 ofs = (vec2(x, y) - LEGEND) / (vec2(1.0, 1.0) - LEGEND); //relative position
+    vec2 ofs = vec2(x - LEGEND.x, y) / vec2(1.0 - LEGEND.x, LEGEND.y); //relative position
     if ((ofs.x < BORDERW) || (ofs.x > 1.0 - BORDERW) || (ofs.y < BORDERW) || (ofs.y > 1.0 - BORDERW)) return GREEN; //vec4(0.0, 1.0, 0.0, 1.0);
     if ((ofs.x < 2.0 * BORDERW) || (ofs.x > 1.0 - 2.0 * BORDERW) || (ofs.y < 2.0 * BORDERW) || (ofs.y > 1.0 - 2.0 * BORDERW)) return BLACK; //vec4(0.0, 0.0, 0.0, 1.0);
     return ERROR((ofs.x < 0.5)? ((ofs.y < 0.5)? 1: 2): ((ofs.y < 0.5)? 3: 4));
 }
+#endif //def WS281X_DEBUG
 
 
 //    gl_FragColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));

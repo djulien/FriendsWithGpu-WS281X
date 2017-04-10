@@ -43,7 +43,7 @@ const YELLOW = 0xffffff00;
 const CYAN = 0xff00ffff;
 const MAGENTA = 0xffff00ff;
 const WHITE = 0xffffffff;
-//const WHITE = 0xFFE7DBA5; //turn off a few bits to make debug easier
+//const WHITE = 0xFFE7DBA5; //turn a few bits off to make debug easier
 const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
 
 //const PALETTE = [RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE];
@@ -51,7 +51,7 @@ const PALETTE = {r: RED, g: GREEN, b: BLUE, y: YELLOW, c: CYAN, m: MAGENTA, w: W
 
 
 //main logic:
-//written with synchronous coding style to simplify timing logic
+//written with synchronous coding style to simplify logic flow
 blocking(function*()
 {
     var canvas = new GpuCanvas("One-by-one", NUM_UNIV, UNIV_LEN, OPTS);
@@ -59,7 +59,7 @@ blocking(function*()
     if (OPTS.SHOW_INTRO && !Screen.gpio) //show title screen for 10 sec
     {
         canvas.load("images/one-by-one24x24-5x5.png");
-        canvas.duration = OPTS.SHOW_INTRO; //progress bar limit
+        canvas.duration = OPTS.SHOW_INTRO; //set progress bar limit
         canvas.push.WS281X_FMT(false); //turn off formatting while showing bitmap (debug)
         for (canvas.elapsed = 0; canvas.elapsed < canvas.duration; ++canvas.elapsed)
             yield wait(1);
@@ -69,7 +69,7 @@ blocking(function*()
     debug("begin, turn on %d x %d = %d pixels 1 by 1".green_lt, canvas.width, canvas.height, canvas.width * canvas.height);
     console.log("Enter %s to quit, %s toggles formatting, 1 of %s for color, other for next pixel", "q".bold.cyan_lt, "f".bold.cyan_lt, "rgbycmw".bold.cyan_lt);
     canvas.elapsed = 0; //reset progress bar
-    canvas.duration = canvas.width * canvas.height; //progress bar limit
+    canvas.duration = canvas.width * canvas.height; //set progress bar limit
     canvas.fill(BLACK); //start with all pixels off
     var color = 'r';
     for (var x = 0; x < canvas.width; ++x)
