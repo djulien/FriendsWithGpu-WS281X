@@ -33,6 +33,7 @@
 //To avoid branches one should always use functions like mix, step, smoothstep, etc.
 
 //useful info:
+// https://www.khronos.org/opengl/wiki/OpenGL_Error
 // https://www.khronos.org/opengl/wiki/GLSL_Optimizations
 // http://aras-p.info/blog/2010/09/29/glsl-optimizer/
 // http://blog.hvidtfeldts.net/index.php/2011/07/optimizing-glsl-code/
@@ -62,7 +63,7 @@
 //NOTE: Support for a high precision floating-point format is mandatory for vertex shaders.
 //see https://www.khronos.org/registry/OpenGL-Refpages/es2.0/xhtml/glGetShaderPrecisionFormat.xml
 
-//compensate for floating point precision:
+//compensate for floating point precision (for RPi):
 const float FUD = 1.0e-6;
 //#define NOT(expr)  (1.0 - BOOL(expr))
 #define BOOL(value)  float(value) //convert bool expr to 0/1
@@ -79,6 +80,13 @@ const float FUD = 1.0e-6;
 #define LT(lhs, rhs)  ((lhs) < (rhs) - FUD)
 //#define MID(lower, upper)  (((upper) - (lower)) / 2.0)
 //#define BTWN(val, lower, upper)  LE(abs((val) - MID(lower, upper)), MID(lower, upper) + FUD)
+
+#define BIT(n)  pow(2.0, float(n))
+#define AND(val, mask)  greaterThanEqual(mod((val) * FLOAT2BITS, 2.0 * mask), mask)
+const float FLOAT2BITS = 255.0 / 256.0; //convert normalized [0..1] to sum of bits (negative powers of 2)
+
+const float RPI_FIXUP = 0.1; //kludge: fix up incorrect results on RPi
+#define MOD(num, den)  floor(mod((num) + RPI_FIXUP, den))
 
 //force val to be non-0:
 //#define is0(val)  vec3(equal(val, vec3(0.0)))

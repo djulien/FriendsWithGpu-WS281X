@@ -23,7 +23,7 @@ const DURATION = 60; //how long to run (sec)
 const VGROUP = !Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
 const UNIV_LEN = Math.ceil(Screen.height / VGROUP); //can't exceed #display lines; get rid of useless pixels when VGROUP is set
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug("screen %d x %d, video cfg %d x %d, vgroup %d, gpio? %s, speed %d".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, milli(VGROUP), Screen.gpio, SPEED);
+debug("screen %d x %d, video cfg %d x %d (%d x %d), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
@@ -34,6 +34,7 @@ const OPTS =
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
+//    WS281X_DEBUG: true, //show timing debug info
 //    gpufx: path.resolve(__dirname, "rgb-finder.glsl"), //generate fx on GPU instead of CPU
 };
 

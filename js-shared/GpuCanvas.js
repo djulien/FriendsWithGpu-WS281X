@@ -339,6 +339,12 @@ function initGL() //canvas)
 function initShaders() //vzoom)
 {
     var gl = this.gl;
+//    if (!initShaders.ShaderTypes)
+//    {
+        var ist = initShaders.ShaderTypes = {};
+        ist[gl.FRAGMENT_SHADER] = "fragment";
+        ist[gl.VERTEX_SHADER] = "vertex";
+//    }
     var vertexShader = getShader.call(this, gl.VERTEX_SHADER, this.VERTEX_SHADER); //vertex_sh); //"shader-vs");
     var fragmentShader = getShader.call(this, gl.FRAGMENT_SHADER, this.FRAGMENT_SHADER); //fragment_sh); //"shader-fs");
 
@@ -352,6 +358,11 @@ function initShaders() //vzoom)
         var reason = "";
         if (gl.getProgramParameter(shpgm, gl.INFO_LOG_LENGTH) > 1)
             reason = "; reason: " + gl.getProgramInfoLog(shpgm);
+        if (!this.SHOW_SHSRC)
+        {
+            showsrc(null, ist[gl.VERTEX_SHADER], true);
+            showsrc(null, ist[gl.FRAGMENT_SHADER], true);
+        }
         alert("Could not initialise shaders %s".red_lt, reason);
 		gl.deleteProgram(shpgm);
         this.shpgm = null;
@@ -394,13 +405,6 @@ function initShaders() //vzoom)
 function getShader(type, filename) //str)
 {
     var gl = this.gl;
-    if (!getShader.ShaderTypes)
-    {
-        var gst = getShader.ShaderTypes = {};
-        gst[gl.FRAGMENT_SHADER] = "fragment";
-        gst[gl.VERTEX_SHADER] = "vertex";
-    }
-
 //prepend common defs:
 //    str = heredoc(preamble) + "\n" + heredoc(str);
     var str = fs.readFileSync(filename).toString();
@@ -457,14 +461,15 @@ function getShader(type, filename) //str)
     cpp.clear();
 //(?<=a)b  //look-behind no worky
 //NOTE: using non-greedy regexp to match first "??" only
-    str = str.replace(/(\WSCR_WIDTH\s*=.*?)\?\?/, "$1" + (Screen.gpio? Screen.horiz.disp: Screen.width));
+    str = str.replace(/(\WSCR_WIDTH\s*=.*?)\?\?/, "$1" + (Screen.gpio? Screen.horiz.res: Screen.width)); //NOTE: use h res here; need overscan to align with WS281X T0L
     str = str.replace(/(\WSCR_HEIGHT\s*=.*?)\?\?/, "$1" + (Screen.gpio? Screen.vert.disp: Screen.height));
 //    str = str.replace(/(\W)univ_len(\W)/g, "$1" + this.height + "$2");
 //    str = str.replace(/(\WNUM_UNIV = .*)\?\?(.*)$/, "$1" + gl.viewportWidth + "$2");
     str = str.replace(/(\WNUM_UNIV\s*=.*?)\?\?/, "$1" + this.width); //gl.viewportWidth);
     str = str.replace(/(\WUNIV_LEN\s*=.*?)\?\?/, "$1" + this.height); //gl.viewportHeight);
 //    str = str.replace(/(\WVGROUP\s*=.*?)\?\?/, "$1" + this.vgroup);
-    if (this.SHOW_SHSRC) showsrc(str, getShader.ShaderTypes[type]);
+    getShader[initShaders.ShaderTypes[type] + "_src"] = str; //save src in case error shows up later
+    if (this.SHOW_SHSRC) showsrc(str, initShaders.ShaderTypes[type]);
 //process.exit(0);
 
     var shader = glcheck("shader", gl.createShader(type)); //gl.FRAGMENT_SHADER);
@@ -472,7 +477,7 @@ function getShader(type, filename) //str)
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
     {
-        if (!this.SHOW_SHSRC) showsrc(str, getShader.ShaderTypes[type], true);
+        if (!this.SHOW_SHSRC) showsrc(str, initShaders.ShaderTypes[type], true);
         alert(gl.getShaderInfoLog(shader));
         return null;
     }
@@ -692,8 +697,8 @@ const splitter =
 //    write: function(val) { this.view.setUint32(0, val, false); },
     bytes: new Uint8Array(this.buf),
 //    uint32: new Uint32Array(this.buf), //always little endian; see http://stackoverflow.com/questions/7869752/javascript-typed-arrays-and-endianness
-    get uint32() { return this.view.getUint32(0, false); }, //force big endian
-    set uint32(val) { this.view.setUint32(0, val, false); },
+    get uint32() { return this.view.getUint32(0, this.LE); },
+    set uint32(val) { this.view.setUint32(0, val, this.LE); },
 };
 //splitter.bytes = new ArrayBuffer(4);
 //splitter.view = new DataView(splitter.bytes);
@@ -703,6 +708,7 @@ const splitter =
 splitter.bytes = new Uint8Array(splitter.buf);
 //splitter.uint32 = new Uint32Array(splitter.buf);
 splitter.view = new DataView(splitter.buf);
+splitter.LE = false; //true; //RPi is bi-endian (running as little endian); Intel is little endian; seems backwards
 
 //http://stackoverflow.com/questions/15761790/convert-a-32bit-integer-into-4-bytes-of-data-in-javascript
 //function toBytesInt32 (num) {
@@ -759,9 +765,9 @@ function render()
 //console.log("send %d x %d texture", this.width, this.height);
 //    gl.activeTexture(gl.TEXTURE0); //redundant?
 //NOTE: first element = lower left, last element = upper right
-//    this.debug_tx("render");
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.width, this.height, this.fmt, gl.UNSIGNED_BYTE, this.pixel_bytes);
     glcheck("sub img", this.getError());  //invalid value on RPi?
+//    this.debug_tx("render");
     this.dirty = false;
 //    return this; //fluent
 }
@@ -781,7 +787,7 @@ function debug_tx(desc)
             buf += ", " + ((seen < y)? "[" + y + "/" + this.height + "]: ": "") + argb.toString(16);
             seen = y;
         }
-    debug(10, "%s: %j".blue_lt, desc, buf.substr(2, 300) + ((buf.length > 300)? "...": ""));
+    debug(10, "%s: %j".blue_lt, desc, buf.substr(2, 450) + ((buf.length > 450)? "...": ""));
 }
 //var buf = "";
 //for (var i = 0; i < 16; ++i)
@@ -987,17 +993,28 @@ function init(gl, width, height, want_pixels)
 //    gl.bindTexture(gl.TEXTURE_2D, null);
 //    if (!want_pixels) return;
 
+//    splitter.LE = this.isGL_ES; //RPi is bi-endian; Intel is little endian
 //    var buf = new ArrayBuffer(this.width * this.height * Uint32Array.BYTES_PER_ELEMENT);
-//    var uint32s = new Uint32Array(this.pixel_bytes); //this.pixel_uint32s =
+//    var uint32s = new Uint32Array(buf); //this.pixel_uint32s =
+//console.log(typeof buf, typeof uint32s);
+//console.log(uint32s);
     this.pixel_bytes = new Uint8Array(this.width * this.height * Uint32Array.BYTES_PER_ELEMENT);
+//console.log(typeof this.pixel_bytes, typeof this.pixel_bytes.buffer);
 //    uint32s[0] = 0x11223344; //check byte order
 //    splitter.uint32[0] = 0x11223344; //check byte order
+//splitter.LE = false;
+//    for (var retry in [false, true, -1])
+//    {
+//        if (retry == -1) throw "can't figure out byte order";
     wrpixel.call(this, 0, 0x11223344); //check byte order
+    debug(10, "byte order[%s]: %s %s %s %s".blue_lt, 0, (this.pixel_bytes[0] + 0).toString(16), (this.pixel_bytes[4] + 0).toString(16), (this.pixel_bytes[8] + 0).toString(16), (this.pixel_bytes[12] + 0).toString(16));
+//        if (this.pixel_bytes[0] == 0x22) break; //that's where we want it
+//        splitter.LE = !splitter.LE;
+//    }
 //    var ordbuf = new Uint8Array(this.pixel_bytes);
-    debug(10, "byte order: %s %s %s %s".blue_lt, (this.pixel_bytes[0] + 0).toString(16), (this.pixel_bytes[4] + 0).toString(16), (this.pixel_bytes[8] + 0).toString(16), (this.pixel_bytes[12] + 0).toString(16));
 //NOTE: OpenGL ES doesn't support BGR(A)??
-    if ((this.pixel_bytes[0] != 0x22) && (this.pixel_bytes[0] != 0x33)) throw "can't figure out byte order";
-    this.fmt = (this.pixel_bytes[0] == 0x22)? gl.RGBA: (this.pixel_bytes[0] == 0x33)? gl.BGRA: 1/0; //throw error if can't figure out byte order
+//    if ((this.pixel_bytes[0] != 0x22) && (this.pixel_bytes[0] != 0x33)) throw "can't figure out byte order";
+//    this.fmt = (this.pixel_bytes[0] == 0x22)? gl.RGBA: (this.pixel_bytes[0] == 0x33)? gl.BGRA: 1/0; //throw error if can't figure out byte order
 //this.fmt = gl.RGBA;
 //    this.pixels.fill(BLACK);
     this.fill(BLACK);
@@ -1005,8 +1022,10 @@ function init(gl, width, height, want_pixels)
 //    this.fmt = gl.BGRA;
 //GL_RGB, GL_BGR, GL_RGBA, GL_BGRA
     var fmt2 = gl.isGLES? gl.BGRA: gl.RGBA; //NOTE: RPi requires BGRA here
+    this.fmt = fmt2;
     const FMTS = {}; FMTS[gl.BGRA] = "BGRA"; FMTS[gl.RGBA] = "RGBA";
     debug(10, "fmts: %s %s".blue_lt, FMTS[this.fmt], FMTS[fmt2]);
+//this.fmt = fmt2;
 //NOTE: first element = lower left, last element = upper right
     gl.texImage2D(gl.TEXTURE_2D, 0, fmt2, this.width, this.height, 0, this.fmt, gl.UNSIGNED_BYTE, this.pixel_bytes);
     glcheck("img txtr", this.getError()); //invalid op on RPi?
@@ -1018,6 +1037,7 @@ function init(gl, width, height, want_pixels)
 //in order to access 24 values, ARGB bytes are rearranged here so one lookup gets 4 pixels
 function rdpixel(ofs)
 {
+    if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
     ofs = ((ofs & ~3) << 2) + (ofs & 3); //offset into cluster of 4 pixels
     splitter.bytes[1] = this.pixel_bytes[ofs + 0];
     splitter.bytes[2] = this.pixel_bytes[ofs + 4];
@@ -1031,6 +1051,7 @@ function rdpixel(ofs)
 
 function wrpixel(ofs, argb)
 {
+    if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
 //    var rearr = ofs & 3;
     ofs = ((ofs & ~3) << 2) + (ofs & 3); //offset into cluster of 4 pixels
 //    splitter.uint32.setUint32(0, argb >>> 0, false); //byteOffset = 0, litteEndian = false
@@ -1169,6 +1190,7 @@ function showsrc(str, type, error)
 //    var ShaderTypes = {};
 //    ShaderTypes[this.gl.FRAGMENT_SHADER] = "fragment";
 //    ShaderTypes[this.gl.VERTEX_SHADER] = "vertex";
+    if (!str) str = getShader[type + "_src"];
     if (!error && showsrc["seen_" + type]) return; //only show it once unless error
     showsrc["seen_" + type] = true;
     var lines = [];

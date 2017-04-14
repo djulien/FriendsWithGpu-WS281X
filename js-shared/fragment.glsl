@@ -16,6 +16,7 @@ uniform float elapsed, duration; //progress bar
 //varying vec3 vecpos;
 varying vec4 vColor; //vertex color data from vertex shader
 varying vec4 vColor24; //pivoted vertex color data from vertex shader
+varying float debug_val;
 //varying float thing;
 //varying vec2 vTextureCoord;
 
@@ -69,7 +70,7 @@ vec4 legend(float x, float y);
 //#define SELECT1of3(which)  vec3(equal(vec3(float(which)), vec3(0.0, 1.0, 2.0))) //, VEC3(1), VEC3(1e30))
 //#define RGB(val)  vec4(val * SELECT1of3(floor(nodebit / 8.0)), 1.0)
 
-#define RGB(val)  vec4(vec3(equal(vec3(floor(nodebit / 8.0)), vec3(0.0, 1.0, 2.0))) * val, 1.0)
+#define RGB(val)  vec4(vec3(equal(vec3(floor((nodebit + RPI_FIXUP) / 8.0)), vec3(0.0, 1.0, 2.0))) * val, 1.0)
 
 
 void main(void)
@@ -85,6 +86,14 @@ void main(void)
         return;
     }
 #endif //def PROGRESS_BAR
+
+#ifdef WS281X_DEBUG //debug a float value
+    if (debug_val != 0.0)
+    {
+        if ((y >= 0.20) && (y < 0.22)) { gl_FragColor = LT(x, debug_val)? GREEN: RED; return; }
+        if ((y >= 0.22) && (y < 0.24)) { gl_FragColor = (abs(x - floor(x * 10.0 + FUD) / 10.0) < 0.002)? CYAN: (abs(x - floor(x * 100.0 + FUD) / 100.0) < 0.002)? MAGENTA: BLACK; return; }
+    }
+#endif
 
 //#ifndef WS281X_FMT //format as light bulbs on screen
     if (!WS281X_FMT) //format as light bulbs on screen
@@ -106,7 +115,10 @@ void main(void)
 //gl_FragColor = ERROR(1);
 #ifdef WS281X_DEBUG //show timing debug info
     float nodebit = floor(x * NUM_UNIV); //bit# within node; last bit is 75% off-screen (during h sync period); use floor to control rounding (RPi was rounding UP sometimes)
-    float nodemask = pow(0.5, mod(nodebit, 8.0) + 1.0); //which WS281X bit to process this time
+//    float nodemask = pow(0.5, mod(nodebit, 8.0) + 1.0); //which WS281X bit to process this time
+    float bit = -1.0 - MOD(nodebit, 8.0); //kludge: RPi not expanding nested macros
+    float nodemask = BIT(bit); //[1/2..1/256]; which WS281X bit to process this time
+//    float nodemask = BIT(-1.0 - mod(x, 8.0)); //[1/2..1/256]; which WS281X bit to process this time
     float bity = fract(y * UNIV_LEN); //position with current node timeslot (vertical)
 
     if ((nodebit < 0.0) || (nodebit > 23.0)) gl_FragColor = ERROR(1); //logic error; shouldn't happen
