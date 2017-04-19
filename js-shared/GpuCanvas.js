@@ -1,6 +1,38 @@
 //create graphics GPU canvas:
 //wrapper for OpenGL and shaders
 
+//universe mapping on RPi pins:
+// [0] = R7 = GPIO27 (GEN2)
+// [1] = R6 = GPIO26 (absent on GoWhoops board)
+// [2] = R5 = GPIO25 (GEN6)
+// [3] = R4 = GPIO24 (GEN5)
+// [4] = R3 = GPIO23 (GEN4)
+// [5] = R2 = GPIO22 (GEN3)
+// [6] = R1 = GPIO21
+// [7] = R0 = GPIO20
+// [8] = G7 = GPIO19 (PWM)
+// [9] = G6 = GPIO18 (GEN1)
+// [10] = G5 = GPIO17 (GEN0)
+// [11] = G4 = GPIO16
+// [12] = G3 = GPIO15 (RXD0)
+// [13] = G2 = GPIO14 (TXD0)
+// [14] = G1 = GPIO13 (PWM)
+// [15] = G0 = GPIO12 (PWM)
+// [16] = B7 = GPIO11 (SPI_CLK)
+// [17] = B6 = GPIO10 (SPI_MOSI)
+// [18] = B5 = GPIO09 (SPI_MISO)
+// [19] = B4 = GPIO08 (SPI_CE0_N)
+// [20] = B3 = GPIO07 (SPI_CE1_N)
+// [21] = B2 = GPIO06
+// [22] = B1 = GPIO05
+// [23] = B0 = GPIO04 (GPIO_GCLK)
+//---------------------------------
+//    H SYNC = GPIO03 (SCL1, I2C)
+//    V SYNC = GPIO02 (SDA1, I2C)
+//        DE = ID_SD (I2C ID EEPROM)
+//     PXCLK = ID_SC (I2C ID EEPROM)
+
+
 'use strict'; //find bugs easier
 require('colors'); //for console output
 const fs = require('fs');
@@ -83,7 +115,7 @@ class GpuCanvas
     destroy() //dtor
     {
         var inx = GpuCanvas.all.indexOf(this); //findIndex(function(that) { return that.id == this.id; }.bind(this)); //all.indexOf(this);
-        debug("destroy: found? %d, #canv %d".yellow_lt, inx, GpuCanvas.all.length);
+        debug("destroy: found@ %d, #canv %d, del? %s".yellow_lt, inx, GpuCanvas.all.length, inx != -1);
         if (inx != -1) GpuCanvas.all.splice(inx, 1);
         if (!GpuCanvas.all.length) rAF(false); //cancel screen refresh loop
     }
@@ -461,7 +493,9 @@ function getShader(type, filename) //str)
     cpp.clear();
 //(?<=a)b  //look-behind no worky
 //NOTE: using non-greedy regexp to match first "??" only
-    str = str.replace(/(\WSCR_WIDTH\s*=.*?)\?\?/, "$1" + (Screen.gpio? Screen.horiz.res: Screen.width)); //NOTE: use h res here; need overscan to align with WS281X T0L
+    var scrw = Screen.width;
+    if (!Screen.gpio /*&& this.WS281X_DEBUG*/) scrw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
+    str = str.replace(/(\WSCR_WIDTH\s*=.*?)\?\?/, "$1" + (Screen.gpio? Screen.horiz.res: scrw)); //Screen.width)); //NOTE: use h res here; need overscan to align with WS281X T0L
     str = str.replace(/(\WSCR_HEIGHT\s*=.*?)\?\?/, "$1" + (Screen.gpio? Screen.vert.disp: Screen.height));
 //    str = str.replace(/(\W)univ_len(\W)/g, "$1" + this.height + "$2");
 //    str = str.replace(/(\WNUM_UNIV = .*)\?\?(.*)$/, "$1" + gl.viewportWidth + "$2");
@@ -538,6 +572,8 @@ function initBuffers()
     vertices.push(1.0, 0.0, 0.0,   2.0, 2.0, 0.0,  0.0, 0.0, 2.0, 2.0);
 */
 //console.log("init buf %d x %d", this.width, this.height);
+    var txtw = this.width;
+    if (!Screen.gpio /*&& this.WS281X_DEBUG*/) txtw *= Screen.horiz.disp / Screen.horiz.res; //kludge: simulate h overscan
     for (var x = 0; x < this.width; ++x)
         for (var y = 0; y < this.height; ++y)
         {
@@ -548,7 +584,7 @@ function initBuffers()
 //NOTE: first pixel is (0,0), last is (w-1,h-1) in vertex array
 //put pixel (0,0) of texture at top of screen so caller can index starting at 0 and still work with incorrect size info
 //NOTE: node# is flipped so that node# 0 is closest to GPU, but XY (0,0) is bottom left corner of screen so screen coordinates (X, Y) are oriented differently from texture coordinates (S, T)
-            vertices.push((x + 0.5) / this.width, 1 - (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
+            vertices.push((x + 0.5) / txtw, 1 - (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
             if (!this.SHOW_VERTEX) continue;
             if ((x >= 2) && (x < this.width - 2)) continue;
             if ((y >= 2) && (y < this.height - 2)) continue;
@@ -1118,7 +1154,7 @@ function glcheck(desc, id)
 function update(name)
 {
 //console.log("update: shpgm %j", this.shpgm);
-    if (!this.shpgm.uniforms[name]) return;
+    if (!this.shpgm || !this.shpgm.uniforms || !this.shpgm.uniforms[name]) return;
     this.gl.uniform1i(this.shpgm.uniforms[name], this[name]);
 }
 

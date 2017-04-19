@@ -112,6 +112,10 @@ const vec4 COLs4_7 = vec4(BIT(-5), BIT(-6), BIT(-7), BIT(-8));
 void main(void)
 {
     gl_Position = uProjection * (uModelView * vec4(vXYZ, 1.0)); //[-1..1]
+//#ifdef WS281X_DEBUG
+//    float xofs = (gl_Position.x + 1.0) / 2.0;
+//    gl_Position.x = xofs * 24.0 / 23.25 * 2.0 - 1.0; //kludge: use h overscan
+//#endif //def WS281X_DEBUG
     gl_PointSize = max(NODEBIT_WIDTH, NODE_HEIGHT); //NODE_SIZE;
 //NOTE: gl_Position.xy is not equivalent due to y axis orientation
 //NOTE: use hUNM for whole-house, mXYWH for model-specific fx
@@ -269,6 +273,7 @@ void main(void)
     vec4 choice1 = vec4(INDEX0_3(part2, inx), INDEX0_3(part0, inx), INDEX0_3(part1, inx), 1.0);
     vec4 choice2 = vec4(INDEX0_3(part1, inx), INDEX0_3(part2, inx), INDEX0_3(part0, inx), 1.0);
     vColor = IF(byte == 0.0, choice0) + IF(byte == 1.0, choice1) + IF(byte == 2.0, choice2);
+//vColor = IF((x == 0.0) || (x == 4.0) || (x == 8.0) || (x == 12.0) || (x == 16.0) || (x == 20.0), RED) + IF((x == 1.0) || (x == 5.0) || (x == 9.0) || (x == 13.0) || (x == 17.0) || (x == 21.0), GREEN) + IF((x == 2.0) || (x == 6.0) || (x == 10.0) || (x == 14.0) || (x == 18.0) || (x == 22.0), BLUE) + IF((x == 3.0) || (x == 7.0) || (x == 11.0) || (x == 15.0) || (x == 19.0) || (x == 23.0), YELLOW);
 #endif //def CUSTOM_GPUFX
 #ifdef WS281X_DEBUG //check for errors
     debug_val = 0.0;

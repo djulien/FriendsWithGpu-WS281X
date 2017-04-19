@@ -136,7 +136,7 @@ void main(void)
 //    else if ((bitangle >= BIT_DATA_BEGIN) && (bitangle >= 0.65)) gl_FragColor = ((bitangle >= 0.7) && (bitangle <= 0.95))? vColor: BLACK; //original rendering; (S, T) swizzle
     else if ((bitangle >= 0.75) && (bitangle <= 0.95) && (bity < 0.92)) gl_FragColor = vColor; //original pixel color; leave h + v gaps for easier debug
 #else
-    if (false); //dummy if to satisfy "else" below
+    if (false); //dummy "if" to satisfy "else" below
 #endif //def WS281X_DEBUG
 //generate timing signals (vertical areas):
 //leader (on), encoded data, trailer (off), original color (debug only)
