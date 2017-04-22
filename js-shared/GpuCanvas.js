@@ -95,7 +95,7 @@ class GpuCanvas
         initGL.call(this);
         document.setTitle(title || "WS281X demo");
 //        initTexture(w, h);
-        this.txr = new Texture(this.gl, w, h); //, vgroup);
+        this.txr = new Texture(this.gl, Math.ceil(w), Math.ceil(h)); //, vgroup); //round up; can't have fractional pixels
         glcheck("init txtr", this.getError());
         initShaders.call(this);
         initBuffers.call(this);
@@ -494,9 +494,10 @@ function getShader(type, filename) //str)
 //(?<=a)b  //look-behind no worky
 //NOTE: using non-greedy regexp to match first "??" only
     var scrw = Screen.width;
-    if (!Screen.gpio /*&& this.WS281X_DEBUG*/) scrw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
-    str = str.replace(/(\WSCR_WIDTH\s*=.*?)\?\?/, "$1" + (Screen.gpio? Screen.horiz.res: scrw)); //Screen.width)); //NOTE: use h res here; need overscan to align with WS281X T0L
-    str = str.replace(/(\WSCR_HEIGHT\s*=.*?)\?\?/, "$1" + (Screen.gpio? Screen.vert.disp: Screen.height));
+//    if (!Screen.gpio /*&& this.WS281X_DEBUG*/) 
+    scrw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
+    str = str.replace(/(\WSCR_WIDTH\s*=.*?)\?\?/, "$1" + scrw); //Screen.width); //(Screen.gpio? Screen.horiz.res: scrw)); //NOTE: use h res here; need overscan to align with WS281X T0L
+    str = str.replace(/(\WSCR_HEIGHT\s*=.*?)\?\?/, "$1" + Screen.height); //(Screen.gpio? Screen.vert.disp: Screen.height));
 //    str = str.replace(/(\W)univ_len(\W)/g, "$1" + this.height + "$2");
 //    str = str.replace(/(\WNUM_UNIV = .*)\?\?(.*)$/, "$1" + gl.viewportWidth + "$2");
     str = str.replace(/(\WNUM_UNIV\s*=.*?)\?\?/, "$1" + this.width); //gl.viewportWidth);
@@ -572,8 +573,25 @@ function initBuffers()
     vertices.push(1.0, 0.0, 0.0,   2.0, 2.0, 0.0,  0.0, 0.0, 2.0, 2.0);
 */
 //console.log("init buf %d x %d", this.width, this.height);
+//show how shaders will see it (for debug):
+    var scrw = Screen.width;
+//    if (!Screen.gpio /*&& this.WS281X_DEBUG*/)
+    scrw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
+    var sh_SCR_WIDTH = scrw; //Screen.width; //Screen.gpio? Screen.horiz.res: scrw; //NOTE: use h res here; need overscan to align with WS281X T0L
+    var sh_SCR_HEIGHT = Screen.height; //Screen.gpio? Screen.vert.disp: Screen.height;
+    var sh_NUM_UNIV = this.width;
+    var sh_UNIV_LEN = this.height;
+    var sh_VERTEX_WIDTH = Math.floor(sh_SCR_WIDTH / sh_NUM_UNIV); //64
+    var sh_VERTEX_HEIGHT = Math.floor(sh_SCR_HEIGHT / sh_UNIV_LEN); //46
+    var sh_VERTEX_SIZE = Math.max(sh_VERTEX_WIDTH, sh_VERTEX_HEIGHT); //on-screen vertex size
+    var sh_NODE_BLANK = (sh_VERTEX_SIZE - sh_VERTEX_WIDTH) / sh_VERTEX_SIZE; //portion of vertex height to leave empty
+console.log("vertex w %s, h %s, size %s, vblank %s", sh_VERTEX_WIDTH, sh_VERTEX_HEIGHT, sh_VERTEX_SIZE, sh_NODE_BLANK);
+
     var txtw = this.width;
-    if (!Screen.gpio /*&& this.WS281X_DEBUG*/) txtw *= Screen.horiz.disp / Screen.horiz.res; //kludge: simulate h overscan
+//    if (!Screen.gpio /*&& this.WS281X_DEBUG*/)
+//no    txtw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
+//NOTE: use correct coordinates here; don't overscan, for simpler logic when displaying to screen
+//console.log("w %s, txtw %s", this.width, txtw);
     for (var x = 0; x < this.width; ++x)
         for (var y = 0; y < this.height; ++y)
         {
@@ -585,10 +603,11 @@ function initBuffers()
 //put pixel (0,0) of texture at top of screen so caller can index starting at 0 and still work with incorrect size info
 //NOTE: node# is flipped so that node# 0 is closest to GPU, but XY (0,0) is bottom left corner of screen so screen coordinates (X, Y) are oriented differently from texture coordinates (S, T)
             vertices.push((x + 0.5) / txtw, 1 - (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
+//            vertices.push(x / txtw, 1 - y / this.height, 0,   x, y, x,   0, 0, 0, 0);
             if (!this.SHOW_VERTEX) continue;
             if ((x >= 2) && (x < this.width - 2)) continue;
             if ((y >= 2) && (y < this.height - 2)) continue;
-            console.log("vert[%s, %s]: xyz %j,  hw %j,  model %j", x, y, micro(vertices.slice(-10, -7)), vertices.slice(-7, -4), vertices.slice(-4));
+            debug("vert[%s, %s]: xyz %j,  hw %j,  model %j".cyan, x, y, micro(vertices.slice(-10, -7)), vertices.slice(-7, -4), vertices.slice(-4));
         }
 
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
@@ -691,7 +710,8 @@ function initProjection()
 //    mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
 //    mat4.ortho(0, gl.viewportWidth, 0, gl.viewportHeight, 0.1, 100.0, pMatrix); // l,r,b,t,n,f
 //        mat4.ortho(0 + 1 - ZOOM, 1 * ZOOM, 0 + 1 - ZOOM, 1 * ZOOM, 0.1, 100.0, pMatrix); // left, right, bottom, top, near, far
-    mat4.ortho(0, 1, 0, 1, 0.1, 100.0, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
+    var overscan = 1; //Screen.horiz.res / Screen.horiz.disp; //1; //DON'T use projection to force h overscan so other code doesn't need to deal with it
+    mat4.ortho(0, overscan, 0, 1, 0.1, 100.0, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
 
 //if (!drawScene.count) drawScene.count = 0;
 //if (!drawScene.count++) console.log("ortho", pMatrix);
@@ -1053,7 +1073,7 @@ function init(gl, width, height, want_pixels)
 //    this.fmt = (this.pixel_bytes[0] == 0x22)? gl.RGBA: (this.pixel_bytes[0] == 0x33)? gl.BGRA: 1/0; //throw error if can't figure out byte order
 //this.fmt = gl.RGBA;
 //    this.pixels.fill(BLACK);
-    this.fill(BLACK);
+    this.fill(BLACK); //shader will receive valid texture coordinates without a texture, but send it first time anyway
 //    this.fmt = gl.RGBA;
 //    this.fmt = gl.BGRA;
 //GL_RGB, GL_BGR, GL_RGBA, GL_BGRA

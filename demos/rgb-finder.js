@@ -21,7 +21,7 @@ const {blocking, wait} = require('../js-shared/blocking');
 const SPEED = 0.5; //animation speed (sec)
 const DURATION = 60; //how long to run (sec)
 const VGROUP = !Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
-const UNIV_LEN = Math.ceil(Screen.height / VGROUP); //can't exceed #display lines; get rid of useless pixels when VGROUP is set
+const UNIV_LEN = Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
 debug("screen %d x %d, video cfg %d x %d (%d x %d), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
@@ -72,7 +72,7 @@ blocking(function*()
                     var repeat = 9 - (x % 8);
                     canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
                 }
-        yield wait((t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
+        yield wait(100 + (t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
         ++canvas.elapsed; //= now_sec() - started; //update progress bar
     }
     debug("end, pause 10 sec".green_lt);

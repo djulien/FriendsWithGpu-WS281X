@@ -29,7 +29,8 @@
 //http://webglfactory.blogspot.com/2011/05/how-to-convert-world-to-screen.html
 //http://stackoverflow.com/questions/7317119/how-to-achieve-glorthof-in-opengl-es-2-0
 
-//Never ever branch in the fs if not absolutely avoidable.  Even on the most modern hardware fragments are evaluated in blocks of 4 and all branches that are taken in any of them forces the gpu to evaluate them for every fragment regardless of whether needed or not.
+//Notes from above references:
+//Never branch in the fs unless absolutely necessary.  Even on the most modern hardware fragments are evaluated in blocks of 4 and any branches in any of them forces the gpu to evaluate them for every fragment regardless of whether needed or not.
 //To avoid branches one should always use functions like mix, step, smoothstep, etc.
 
 //useful info:
@@ -63,7 +64,9 @@
 //NOTE: Support for a high precision floating-point format is mandatory for vertex shaders.
 //see https://www.khronos.org/registry/OpenGL-Refpages/es2.0/xhtml/glGetShaderPrecisionFormat.xml
 
-//compensate for floating point precision (for RPi):
+const float PI = 3.1415926535897932384626433832795;
+
+//compensate for floating point precision:
 const float FUD = 1.0e-6;
 //#define NOT(expr)  (1.0 - BOOL(expr))
 #define BOOL(value)  float(value) //convert bool expr to 0/1
@@ -81,19 +84,16 @@ const float FUD = 1.0e-6;
 //#define MID(lower, upper)  (((upper) - (lower)) / 2.0)
 //#define BTWN(val, lower, upper)  LE(abs((val) - MID(lower, upper)), MID(lower, upper) + FUD)
 
-#define BIT(n)  pow(2.0, float(n))
-#define AND(val, mask)  greaterThanEqual(mod((val) * FLOAT2BITS, 2.0 * mask), mask)
-const float FLOAT2BITS = 255.0 / 256.0; //convert normalized [0..1] to sum of bits (negative powers of 2)
-
 const float RPI_FIXUP = 0.1; //kludge: fix up incorrect results on RPi
 #define MOD(num, den)  floor(mod((num) + RPI_FIXUP, den))
 
 //force val to be non-0:
+//doesn't seem to matter; GPU allows "infinity" result, doesn't throw exception with divide by 0
 //#define is0(val)  vec3(equal(val, vec3(0.0)))
 //#define NZ(val)  (val + is0(val))
 //#define isnon0(val)  notEqual(val, vec3(0.0))
 
-//try to avoid conditional branches:
+//avoid conditional branches by using arithmetic:
 //NOTE: bit-wise ops require GLSL 1.3
 //#define IIF(expr, true, false)  ((expr) & (true) | ~(expr) & (false))
 #define IIF(expr, true, false)  mix(false, true, BOOL(expr))
@@ -101,125 +101,35 @@ const float RPI_FIXUP = 0.1; //kludge: fix up incorrect results on RPi
 
 //compensate for lack of bit-wise ops:
 //bit-wise ops require GLSL 1.3 to be enabled; not available on RPi
-//NOTE: RPi (GL ES 1.2) doesn't support ivec, uvec :(
+//NOTE: RPi (GL ES 1.2) doesn't support ivec, uvec either :(
 //CAUTION: use functions if nested macros not being expanded
-//#define VEC3(val)  vec3(float(val), float(val), float(val)) //NOTE: shaderific says vec ctor will do this
-//#define SELECT1of3(which)  vec3(int(which) == 0, int(which) == 1, int(which) == 2)
-//#define SELECT1of3(which)  IIF(equal(VEC3(which), vec3(0.0, 1.0, 2.0)), VEC3(1), VEC3(1e30))
-//#define SELECT1of3(which)  vec3(equal(vec3(float(which)), vec3(0.0, 1.0, 2.0))) //, VEC3(1), VEC3(1e30))
-//#define VEC4(val)  vec4(float(val), float(val), float(val), float(val))
-//#define SELECT1of4(which)  vec4(int(which) == 0, int(which) == 1, int(which) == 2, int(which) == 3)
-//#define VEC3tag(val)  vec4(float(val), float(val), float(val), 1.0)
-//#define SELECT3tag(which)  vec4(int(which) == 0, int(which) == 1, int(which) == 2, float(which))
-//#define WHICH(val4)  sign(val4) * vec4(8.0, 4.0, 2.0, 1.0) //assumes non-negative
-//#define WHICH(n)  floor(float(n) / 8.0)
-//#define DBYTEOF(val, byte)  (IIF(byte == 0.0, val.r, ZERO.r) + IIF(byte == 1.0, val.g, ZERO.g) + IIF(byte == 2.0, val.b, ZERO.b))
-//#define DBYTETO(val, byte)  vec4(IIF(byte == 0.0, val, 0.0), IIF(byte == 1.0, val, 0.0), IIF(byte == 2.0, val, 0.0), 0.0)
-
-//#define MASK(n)  pow(2.0, 23.0 - n)
-//#define IFBIT(val, n)  LSB(floor(n / MASK(n)))
-//#define LSB(val)  (floor((val) / 2.0) != (val) / 2.0)
-//const vec4 ZERO = VEC4(0); //vec4(0.0, 0.0, 0.0, 0.0);
-//#define SHL(val, bits)  (val * pow(2.0, float(bits)))
-//#define SHR(val, bits)  (val / pow(2.0, float(bits)))
-//#define AND(val, bitmask)  (mod(val, 2.0 * bitmask) >= bitmask)
-//#define AND(val4, mask3tag)  (mod(val4, 2.0 * mask4 * select4) >= mask4 * select4)
-//#define ANDIF3f(val, mask)  vec3(greaterThanEqual(mod(val, 2.0 * mask), mask)) //div by 0 = infinity according to http://stackoverflow.com/questions/16069959/glsl-how-to-ensure-largest-possible-float-value-without-overflow
-//AND:
-//do bit-wise AND component by compoent
-//div by 0 = infinity with no arith error? according to http://stackoverflow.com/questions/16069959/glsl-how-to-ensure-largest-possible-float-value-without-overflow
-//however, 0 terms must result in 0, so add extra NZ condition to avoid that
-//const float FLOAT2BITS = 255.0 / 256.0; //convert 1.0 <-> 1/2 + 1/4 + 1/8 + 1/16 + 1/32 + 1/64 + 1/128 + 1/256 so bit-wise AND will work
-//#define AND3f(val, mask)  (vec3(greaterThanEqual(mod(min(val, RGB_BITS), 2.0 * mask), mask)) * sign(mask))
-//#define AND3f(val, mask)  (vec3(greaterThanEqual(mod(val * FLOAT2BITS, 2.0 * NZ(mask)), NZ(mask))) * sign(mask) / FLOAT2BITS)
-//#define AND3(val, mask)  dot(vec3(greaterThanEqual(mod(val * FLOAT2BITS, 2.0 * mask), mask)), sign(mask)) //strip off extraneous results for mask components of 0
-
-//create a normalized vec4 bit mask:
-//msb = bit 0, lsb = bit 23
-//#define MASK3f(n)  (pow(0.5, mod(float(n), 8.0) + 1.0) * SELECT1of3(floor(float(n) / 8.0)))
-//#define MASK3f_tag(n)  vec4(MASK3F(n), WHICH(n))
-//#define MASK4f(n)  DBYTETO(pow(0.5, mod(float(n), 8.0) + 1.0), floor(float(n) / 8.0))
-//#define MASK3tag(n)  vec4(MASK3f(n), floor(float(n) / 8.0)) //(VEC3tag(pow(0.5, mod(float(n), 8.0) + 1.0)) * SELECT3tag(floor(float(n) / 8.0)))
-
-//pre-define mask constants in case compiler doesn't:
-#if 0
-const vec3 MASK0 = MASK3f(0);
-const vec3 MASK1 = MASK3f(1);
-const vec3 MASK2 = MASK3f(2);
-const vec3 MASK3 = MASK3f(3);
-const vec3 MASK4 = MASK3f(4);
-const vec3 MASK5 = MASK3f(5);
-const vec3 MASK6 = MASK3f(6);
-const vec3 MASK7 = MASK3f(7);
-const vec3 MASK8 = MASK3f(8);
-const vec3 MASK9 = MASK3f(9);
-const vec3 MASK10 = MASK3f(10);
-const vec3 MASK11 = MASK3f(11);
-const vec3 MASK12 = MASK3f(12);
-const vec3 MASK13 = MASK3f(13);
-const vec3 MASK14 = MASK3f(14);
-const vec3 MASK15 = MASK3f(15);
-const vec3 MASK16 = MASK3f(16);
-const vec3 MASK17 = MASK3f(17);
-const vec3 MASK18 = MASK3f(18);
-const vec3 MASK19 = MASK3f(19);
-const vec3 MASK20 = MASK3f(20);
-const vec3 MASK21 = MASK3f(21);
-const vec3 MASK22 = MASK3f(22);
-const vec3 MASK23 = MASK3f(23);
-#endif
+//#define MASK24(n)  pow(2.0, 23.0 - n) //exceeds mediump precision :(
+#define BIT(n)  pow(2.0, float(n))
+#define AND(val, mask)  greaterThanEqual(mod((val) * FLOAT2BITS, 2.0 * mask), mask)
+const float FLOAT2BITS = 255.0 / 256.0; //convert normalized [0..1] to sum of bits (negative powers of 2)
 
 
-//#define MASK4i(n) MASK4f(float(n))
-//vec4 MASK4f(float n)
-//{
-//    float byte = floor(n / 8.0), bit = pow(0.5, mod(n, 8.0) + 1.0); //pow(2.0, 7.0 - mod(n, 8.0));
-//    return vec4(IIF(byte == 0.0, bit, 0.0), IIF(byte == 1.0, bit, 0.0), IIF(byte == 2.0, bit, 0.0), 1.0);
-////    return pow(2.0, 23.0 - n);
-//}
-//val is normalized [0..1] .rgba
-//bool IFBIT(vec4 val, float n)
-//{
-//    float byte = floor(n / 8.0), bit = pow(2.0, 7.0 - mod(n, 8.0));
-//    return (mod(256.0 * (IIF(byte == 0.0, val.r, 0.0) + IIF(byte == 1.0, val.g, 0.0) + IIF(byte == 2.0, val.b, 0.0)), 2.0 * bit) >= bit);
-////    return LSB(floor(BYTEOF(val, byte) / bit));
-//}
-
-#if 0
-//CAUTION: mediump is only 16 bits
-#define MASK(bit)  pow(2.0, 23.0 - bit)
-bool IFBIT(float val, int bit)
-{
-	float mask = MASK(bit);
-	return mod(val, 2.0 * mask) >= mask; //trim upper bits, check target bit
-or
-	return fract(floor(val / mask) / 2.0) != 0.0;
-}
-#endif
-
-const float PI = 3.1415926535897932384626433832795;
-
-//dimensions of nodes on screen:
-//NOTE: "??" will be filled in by caller
-//const float VGROUP = float(??);
-const float SCR_WIDTH = float(??);
-const float SCR_HEIGHT = float(??);
-const float NUM_UNIV = float(??);
-const float UNIV_LEN = float(??); //SCR_HEIGHT; // / VGROUP; //float(??);
-const float NODEBIT_WIDTH = float(SCR_WIDTH / NUM_UNIV);
-const float NODE_HEIGHT = float(SCR_HEIGHT / UNIV_LEN);
-//#define NODE_SIZE  max(NODEBIT_WIDTH, NODE_HEIGHT)
-//const float NODE_SIZE = max(NODEBIT_WIDTH, NODE_HEIGHT);
+//dimensions of vertices on screen:
+//NOTE: "??" will be filled in by caller; example numbers are from config.txt
+const float SCR_WIDTH = float(??); //1536
+const float SCR_HEIGHT = float(??); //1104
+const float NUM_UNIV = float(??); //24
+const float UNIV_LEN = float(??); //1 for GPIO, 24 for screen
+const float VERTEX_WIDTH = floor(SCR_WIDTH / NUM_UNIV); //64
+const float VERTEX_HEIGHT = floor(SCR_HEIGHT / UNIV_LEN); //46
+const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex size
 //const float MAX_UNIV = NUM_UNIV - 1.0;
 //const float UNIV_MAX = UNIV_LEN - 1.0;
 
-//caller options:
+
+//caller config options:
 //#define WS281X_FMT
 //#define PROGRESS_BAR
 
-#define ERROR(n)  vec4(1.0, 0.2 * float(n), 1.0, 1.0) //bug exists if this shows up
+#define ERROR(n)  vec4(1.0, 0.2 * float(n), 1.0, 1.0) //show bugs on sccreen
 
 //primary RGBA colors:
+//NOTE: A must be on for color to show up
 const vec4 RED = vec4(1.0, 0.0, 0.0, 1.0);
 const vec4 GREEN = vec4(0.0, 1.0, 0.0, 1.0);
 const vec4 BLUE = vec4(0.0, 0.0, 1.0, 1.0);
@@ -229,6 +139,6 @@ const vec4 MAGENTA = vec4(1.0, 0.0, 1.0, 1.0);
 #define gray(val)  vec4(val, val, val, 1.0)
 const vec4 WHITE = gray(1.0); //vec4(1.0, 1.0, 1.0, 1.0);
 const vec4 BLACK = gray(0.0); //vec4(0.0, 0.0, 0.0, 1.0);
-//const vec4 GPUFX = vec4(0.0, 0.0, 0.0, 0.0); //tranparent texture color allowing GPU fx to show thru
+//const vec4 GPUFX = vec4(0.0); //tranparent texture color allowing GPU fx to show thru
 
 //eof
