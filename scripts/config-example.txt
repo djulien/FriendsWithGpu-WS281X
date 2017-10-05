@@ -1,0 +1,37 @@
+#example GPU settings for WS281X control
+#add to end of /boot/config.txt
+#gives up to 64 * 24 universes of 1104 pixels; change as desired
+
+#WS281X settings:
+[0xDEADBEEF]
+dtparam=spi=off
+dtparam=i2c_arm=off
+hdmi_force_hotplug=1
+hdmi_ignore_edid=0xa5000080
+dpi_group=2
+dpi_mode=87
+hdmi_timings=1488 0 12 12 24   1104 0 12 12 24    0 0 0 30 0 50000000 1
+#? hdmi_drive=4
+#? hdmi_ignore_cec_init=1
+#x dpi_output_format=0x6f007
+####dpi_output_format=0x117
+dpi_output_format=7
+#? sdtv_aspect=1
+
+#dtdebug=on
+# dtoverlay=vga666		(this one might also work)
+dtoverlay=dpi24
+enable_dpi_lcd=1
+display_default_lcd=1
+#? config_hdmi_boost=4
+
+disable_overscan=1
+overscan_left=0
+overscan_right=0
+overscan_top=0
+overscan_bottom=0
+framebuff_width=1488
+framebuff_height=1104
+gpu_mem=128
+
+#eof

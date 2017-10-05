@@ -11,23 +11,24 @@
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
-const {debug} = require('../js-shared/debug');
-const {Screen} = require('../js-shared/screen');
-const {GpuCanvas} = require('../js-shared/GpuCanvas');
-const {blocking, wait, getchar} = require('../js-shared/blocking');
+const {blocking, wait, getchar} = require('blocking-style');
+
+const {debug} = require('./shared/debug');
+const {Screen} = require('./shared/screen');
+const {GpuCanvas} = require('./shared/GpuCanvas');
 
 //display settings:
-const VGROUP = 4; //!Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
+const VGROUP = 16; //!Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
 const UNIV_LEN = Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug("screen %d x %d, video cfg %d x %d (%d x %d), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
+debug("window %d x %d, video cfg %d x %d (%d x %d), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
 const OPTS =
 {
-//    SHOW_INTRO: 10, //how long to show intro screen (on screen only)
-//    SHOW_SHSRC: true, //show shader source code
+//    SHOW_INTRO: 10, //how long to show intro (on screen only)
+    SHOW_SHSRC: true, //show shader source code
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
@@ -61,7 +62,7 @@ blocking(function*()
         canvas.load("images/one-by-one24x24-5x5.png");
         canvas.duration = OPTS.SHOW_INTRO; //set progress bar limit
         canvas.push.WS281X_FMT(false); //turn off formatting while showing bitmap (debug)
-        for (canvas.elapsed = 0; canvas.elapsed < canvas.duration; ++canvas.elapsed)
+        for (canvas.elapsed = 0; canvas.elapsed < canvas.duration; ++canvas.elapsed) //update progress bar while waiting
             yield wait(1);
         canvas.pop.WS281X_FMT();
     }
@@ -72,7 +73,8 @@ blocking(function*()
     canvas.duration = canvas.width * canvas.height; //set progress bar limit
     canvas.fill(BLACK); //start with all pixels off
     var color = 'r';
-canvas.pixel(0, 0, WHITE);
+//canvas.pixel(0, 0, WHITE);
+canvas.pixel(0, 1, CYAN);
 canvas.pixel(0, 10, RED);
 canvas.pixel(0, 20, GREEN);
 canvas.pixel(0, 30, BLUE);

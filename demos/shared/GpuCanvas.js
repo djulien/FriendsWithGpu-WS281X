@@ -1,7 +1,7 @@
 //create graphics GPU canvas:
-//wrapper for OpenGL and shaders
+//works as a wrapper for OpenGL and shaders
 
-//universe mapping on RPi pins:
+//"universe" mapping on RPi pins:
 // [0] = R7 = GPIO27 (GEN2)
 // [1] = R6 = GPIO26 (absent on GoWhoops board)
 // [2] = R5 = GPIO25 (GEN6)
@@ -37,26 +37,29 @@
 require('colors'); //for console output
 const fs = require('fs');
 const path = require('path');
-const WebGL = require('node-webgl'); //NOTE: for RPi must be lukaaash/node-webg or djulien/node-webgl version, not mikeseven/node-webgl version
+const WebGL = require('node-webgl'); //NOTE: for RPi must be lukaaash/node-webgl or djulien/node-webgl version, not mikeseven/node-webgl version
 const {mat4} = require('node-webgl/test/glMatrix-0.9.5.min.js');
 //const Preproc = require("preprocessor");
+const {onexit} = require('blocking-style');
 const cpp = require("./cpp-1.0").create(); //https://github.com/acgessler/cpp.js
 //require('buffer').INSPECT_MAX_BYTES = 1600;
 
 const {debug} = require('./debug');
 const {Screen} = require('./screen');
-const {caller} = require("./caller");
-const {atexit} = require('./blocking');
+const {caller, calledfrom} = require("./caller");
 
+//compatibility with browser env (from node-webgl examples):
 const document = WebGL.document();
 const Image = WebGL.Image;
 const alert = console.error;
 
-const BLACK = 0xff000000; //NOTE: needs alpha to take effect
+const BLACK = 0xff000000; //NOTE: needs alpha to take effect (ARGB fmt)
 
+//default debug control info:
+//NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
 const DEFAULT_OPTS =
 {
-    DEBUG: false,
+//    DEBUG: false,
     SHOW_SHSRC: false, //show shader source code
     SHOW_VERTEX: false, //show vertex info (corners)
     SHOW_LIMITS: false, //show various GLES/GLSL limits
@@ -86,8 +89,19 @@ class GpuCanvas
     constructor(title, w, h, opts) //, vgroup)
     {
 //        this.opts = opts || {};
-        pushable.call(this, Object.assign(DEFAULT_OPTS, opts || {}));
-        if (Screen.gpio) this.WS281X_FMT = true;
+        this.size =
+        {
+//    if (!Screen.gpio /*&& this.WS281X_DEBUG*/)
+            get hoverscan() { return Screen.horiz.res / Screen.horiz.disp; }, //need overscan to align with WS281X T0L
+            get scrw() { return Screen.width * this.hoverscan; }, //NOTE: always use h res for consistent results; preserve/calculate horiz overscan in case config file not active
+            get scrh() { return Screen.height; }, //screen height used as-is; don't care about vert overscan
+//TODO: use floor or ceil?
+            get vtxw() { return this.scrw / w; },
+            get vtxh() { return this.scrh / h; }, //screen height is always used, so vgroup can be reconstructed from h parameter
+        };
+        var gpufx = opts.gpufx && path.resolve(path.dirname(calledfrom(2)), opts.gpufx); //convert relative to abs path wrt caller
+        pushable.call(this, Object.assign(DEFAULT_OPTS, opts || {}, gpufx && {gpufx}));
+        if (Screen.gpio) this.WS281X_FMT = true; //can't see debug info, so turn on formatting
 //        if (gl) return; //only need one
 //        console.log("canvas: '%s' %d x %d", title, w, h);
 //        console.log("canvas opts: fmt %j", this.WS281X_FMT);
@@ -95,7 +109,8 @@ class GpuCanvas
         initGL.call(this);
         document.setTitle(title || "WS281X demo");
 //        initTexture(w, h);
-        this.txr = new Texture(this.gl, Math.ceil(w), Math.ceil(h)); //, vgroup); //round up; can't have fractional pixels
+//??        h = Math.max(w, h); //kludge: make width <= height to simplify overlap logic in shader
+        this.txr = new Texture(this.gl, Math.ceil(w), Math.ceil(h)); //round up; can't have fractional pixels
         glcheck("init txtr", this.getError());
         initShaders.call(this);
         initBuffers.call(this);
@@ -109,7 +124,7 @@ class GpuCanvas
         else debug("possible canvas conflict: %d".red_lt, GpuCanvas.all.length);
 //    gl.enable(gl.DEPTH_TEST);
 //    gl.clearColor(0.0, 0.0, 0.0, 1.0); //start out blank
-        atexit(this.destroy.bind(this)); //stop rAF loop for clean exit
+        onexit(this.destroy.bind(this)); //stop rAF loop for clean exit
     }
 
     destroy() //dtor
@@ -174,7 +189,7 @@ function render(want_clear)
 //NOTE: need to do this each time:
     gl.drawArrays(gl.POINTS, 0, this.vxbuf.numItems); //squareVertexPositionBuffer.numItems);
     this.txr.render();
-    return glcheck("render", this.getError()) >= 0;
+    return (glcheck("render", this.getError()) >= 0);
 //    return this; //fluent
 }
 
@@ -285,7 +300,7 @@ function initGL() //canvas)
 {
     try
     {
-        var canvas = document.createElement("ws281x-canvas"); //name needs to include "canvas"
+        var canvas = document.createElement("ws281x-canvas"); //NOTE: name needs to include "canvas" for node-webgl to work
         var gl = this.gl = canvas.getContext("experimental-webgl");
         gl.isGLES = (gl.getParameter(gl.SHADING_LANGUAGE_VERSION).indexOf("GLSL ES") != -1); //check desktop (non-RPi) vs. embedded (RPi) version
 
@@ -373,9 +388,16 @@ function initShaders() //vzoom)
     var gl = this.gl;
 //    if (!initShaders.ShaderTypes)
 //    {
-        var ist = initShaders.ShaderTypes = {};
-        ist[gl.FRAGMENT_SHADER] = "fragment";
-        ist[gl.VERTEX_SHADER] = "vertex";
+//        const ist = initShaders.ShaderTypes = {};
+//        ist[gl.FRAGMENT_SHADER] = "fragment";
+//        ist[gl.VERTEX_SHADER] = "vertex";
+        const ist = initShaders.ShaderTypes = //NOTE: var keys requires ES6
+        {
+            [gl.FRAGMENT_SHADER]: "fragment",
+            [gl.VERTEX_SHADER]: "vertex",
+        };
+//        ist[gl.FRAGMENT_SHADER] = "fragment";
+//        ist[gl.VERTEX_SHADER] = "vertex";
 //    }
     var vertexShader = getShader.call(this, gl.VERTEX_SHADER, this.VERTEX_SHADER); //vertex_sh); //"shader-vs");
     var fragmentShader = getShader.call(this, gl.FRAGMENT_SHADER, this.FRAGMENT_SHADER); //fragment_sh); //"shader-fs");
@@ -483,6 +505,10 @@ function getShader(type, filename) //str)
 //    if (Screen.gpio || this.WS281X_FMT) cpp.define("WS281X_FMT", ""); //allow this one to change at run-time (for test/debug)
     if (!Screen.gpio && this.WS281X_DEBUG) cpp.define("WS281X_DEBUG", "");
     if (!Screen.gpio && this.SHOW_PROGRESS) cpp.define("PROGRESS_BAR", "");
+    cpp.define("CALLER_SCR_WIDTH", this.size.scrw); //Screen.width); //(Screen.gpio? Screen.horiz.res: scrw)); //NOTE: use h res here; need overscan to align with WS281X T0L
+    cpp.define("CALLER_SCR_HEIGHT", this.size.scrh); //(Screen.gpio? Screen.vert.disp: Screen.height));
+    cpp.define("CALLER_VERTEX_WIDTH", this.size.vtxw); //gl.viewportWidth);
+    cpp.define("CALLER_VERTEX_HEIGHT", this.size.vtxh); //gl.viewportHeight);
     if (this.gpufx && (type == gl.VERTEX_SHADER)) //insert custom GPU fx
     {
         cpp.define("CUSTOM_GPUFX", "");
@@ -491,18 +517,35 @@ function getShader(type, filename) //str)
     str = str.replace(/^(#line.*?)$/mg, "//$1"); //kludge: cpp-js doesn't like #line, so comment it out
     str = cpp.run(str);
     cpp.clear();
-//(?<=a)b  //look-behind no worky
+//(?<=a)b  //look-behind no worky :(
 //NOTE: using non-greedy regexp to match first "??" only
-    var scrw = Screen.width;
+//    var scrw = Screen.width;
 //    if (!Screen.gpio /*&& this.WS281X_DEBUG*/) 
-    scrw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
-    str = str.replace(/(\WSCR_WIDTH\s*=.*?)\?\?/, "$1" + scrw); //Screen.width); //(Screen.gpio? Screen.horiz.res: scrw)); //NOTE: use h res here; need overscan to align with WS281X T0L
-    str = str.replace(/(\WSCR_HEIGHT\s*=.*?)\?\?/, "$1" + Screen.height); //(Screen.gpio? Screen.vert.disp: Screen.height));
+//    scrw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
+//    str = str.replace(/(\WSCR_WIDTH\s*=.*?)\?\?/, "$1" + this.size.scrw); //Screen.width); //(Screen.gpio? Screen.horiz.res: scrw)); //NOTE: use h res here; need overscan to align with WS281X T0L
+//    str = str.replace(/(\WSCR_HEIGHT\s*=.*?)\?\?/, "$1" + this.size.scrh); //(Screen.gpio? Screen.vert.disp: Screen.height));
 //    str = str.replace(/(\W)univ_len(\W)/g, "$1" + this.height + "$2");
 //    str = str.replace(/(\WNUM_UNIV = .*)\?\?(.*)$/, "$1" + gl.viewportWidth + "$2");
-    str = str.replace(/(\WNUM_UNIV\s*=.*?)\?\?/, "$1" + this.width); //gl.viewportWidth);
-    str = str.replace(/(\WUNIV_LEN\s*=.*?)\?\?/, "$1" + this.height); //gl.viewportHeight);
-//    str = str.replace(/(\WVGROUP\s*=.*?)\?\?/, "$1" + this.vgroup);
+//    str = str.replace(/(\WNUM_UNIV\s*=.*?)\?\?/, "$1" + this.width); //gl.viewportWidth);
+//    str = str.replace(/(\WUNIV_LEN\s*=.*?)\?\?/, "$1" + this.height); //gl.viewportHeight);
+//    str = str.replace(/(\WNUM_UNIV\s*=.*?)\?\?/, "$1" + this.width); //gl.viewportWidth);
+//    str = str.replace(/(\WUNIV_LEN\s*=.*?)\?\?/, "$1" + this.height); //gl.viewportHeight);
+//    var defs = getShader.defs || //info for debug display
+//    {
+//        shown: 0,
+//        SCR_WIDTH: micro(scrw), //1536
+//        SCR_HEIGHT: Screen.height, //1104
+//        NUM_UNIV: this.width, //24
+//        UNIV_LEN: this.height, //1104 for GPIO or 24 for screen
+//    };
+//    defs.VERTEX_WIDTH = Math.floor(defs.SCR_WIDTH / defs.NUM_UNIV); //64
+//    defs.VERTEX_HEIGHT = Math.floor(defs.SCR_HEIGHT / defs.UNIV_LEN); //1 or 46
+//    defs.VERTEX_SIZE = Math.max(defs.VERTEX_WIDTH, defs.VERTEX_HEIGHT); //on-screen vertex size
+//    defs.NODE_BLANK = micro((defs.VERTEX_SIZE - defs.VERTEX_HEIGHT) / defs.VERTEX_SIZE); //portion of vertex height to leave empty
+//    if (defs.shown++ < 1) debug("vertex defs used by shaders: %j".cyan_lt, defs); //show values shaders will use (for debug)
+//    getShader.defs = defs;
+//    str = str.replace(/(\WVERTEX_WIDTH\s*=.*?)\?\?/, "$1" + this.size.vtxw); //gl.viewportWidth);
+//    str = str.replace(/(\WVERTEX_HEIGHT\s*=.*?)\?\?/, "$1" + this.size.vtxh); //gl.viewportHeight);
     getShader[initShaders.ShaderTypes[type] + "_src"] = str; //save src in case error shows up later
     if (this.SHOW_SHSRC) showsrc(str, initShaders.ShaderTypes[type]);
 //process.exit(0);
@@ -517,6 +560,59 @@ function getShader(type, filename) //str)
         return null;
     }
     return shader;
+}
+
+
+//add push/pop method for listed properties:
+function pushable(props)
+{
+//    console.log("make pushable: %j", props);
+/*
+//http://stackoverflow.com/questions/3112793/how-can-i-define-a-default-getter-and-setter-using-ecmascript-5
+    this._opts = new Proxy(this,
+    {
+        get: function(obj, name)
+        {
+            console.log("get '%s' from stack of %d", name, );
+            get: function() { return prop[prop.length - 1]; },
+        return target[name];
+    },
+    set: function(obj, name, value) {
+        console.log("you're setting property " + name);
+        target[name] = value;
+    }
+    });
+*/
+    this._pushable = {};
+//use push, pop namespace to avoid conflict with getters, setters:
+    this.push = {};
+    this.pop = {};
+//CAUTION: use let + const to force name + prop to be unique each time; see http://stackoverflow.com/questions/750486/javascript-closure-inside-loops-simple-practical-example
+    for (let name in props)
+    {
+        const prop = this._pushable[name] = [props[name]]; //create stack with initial value
+//set up getters, setters:
+//ignore underflow; let caller get error
+        Object.defineProperty(this, name,
+        {
+            get: function() { /*console.log("top of '%s' %j is %j %s", name, prop, prop.top, caller(-2))*/; return prop.top; }.bind(this), //[prop.length - 1]; },
+            set: function(newval) { prop.top = newval; update.call(this, name); /*console.log("top of '%s' %j now is %j @%s", name, prop, prop.top, caller(-2))*/; }.bind(this), //[prop.length - 1] = newval; },
+        });
+//set up push/pop:
+        this.push[name] = function(newval) { /*console.log("push '%s' %j", name, newval)*/; prop.push(newval); update.call(this, name); }.bind(this);
+        this.pop[name] = function() { /*console.log("pop '%s'", name)*/; var retval = prop.pop(); update.call(this, name); return retval; }.bind(this);
+//        prop = null;
+    }
+}
+
+
+//update a uniform:
+function update(name)
+{
+//console.log("update: shpgm %j", this.shpgm);
+    if (!this.shpgm || !this.shpgm.uniforms || !this.shpgm.uniforms[name]) return;
+    this.gl.uniform1i(this.shpgm.uniforms[name], this[name]);
+    if (name == "WS281X_FMT") this.gl.texPivot24(!this.gl.isGLES && this[name]); //.txr[name] = this[name]; //kludge: texture needs to know whether to pivot RGB bits
 }
 
 
@@ -573,27 +669,18 @@ function initBuffers()
     vertices.push(1.0, 0.0, 0.0,   2.0, 2.0, 0.0,  0.0, 0.0, 2.0, 2.0);
 */
 //console.log("init buf %d x %d", this.width, this.height);
-//show how shaders will see it (for debug):
-    var scrw = Screen.width;
+//    var txtw = this.width;
 //    if (!Screen.gpio /*&& this.WS281X_DEBUG*/)
-    scrw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
-    var sh_SCR_WIDTH = scrw; //Screen.width; //Screen.gpio? Screen.horiz.res: scrw; //NOTE: use h res here; need overscan to align with WS281X T0L
-    var sh_SCR_HEIGHT = Screen.height; //Screen.gpio? Screen.vert.disp: Screen.height;
-    var sh_NUM_UNIV = this.width;
-    var sh_UNIV_LEN = this.height;
-    var sh_VERTEX_WIDTH = Math.floor(sh_SCR_WIDTH / sh_NUM_UNIV); //64
-    var sh_VERTEX_HEIGHT = Math.floor(sh_SCR_HEIGHT / sh_UNIV_LEN); //46
-    var sh_VERTEX_SIZE = Math.max(sh_VERTEX_WIDTH, sh_VERTEX_HEIGHT); //on-screen vertex size
-    var sh_NODE_BLANK = (sh_VERTEX_SIZE - sh_VERTEX_WIDTH) / sh_VERTEX_SIZE; //portion of vertex height to leave empty
-console.log("vertex w %s, h %s, size %s, vblank %s", sh_VERTEX_WIDTH, sh_VERTEX_HEIGHT, sh_VERTEX_SIZE, sh_NODE_BLANK);
-
-    var txtw = this.width;
-//    if (!Screen.gpio /*&& this.WS281X_DEBUG*/)
-//no    txtw *= Screen.horiz.res / Screen.horiz.disp; //kludge: simulate h overscan
+//    txtw *= Screen.horiz.disp / Screen.horiz.res; //kludge: simulate h overscan (inverted)
 //NOTE: use correct coordinates here; don't overscan, for simpler logic when displaying to screen
 //console.log("w %s, txtw %s", this.width, txtw);
-    for (var x = 0; x < this.width; ++x)
+    var numvert = this.width * this.height;
+//    var vtxw = Screen.horiz.res / this.width, vtxh = Screen.vert.disp / this.height;
+//    var xofs = (vtxw < vtxh)? 0: 0.5, yofs = (vtxw < vtxh)? 0: 0;
+    var xofs = 0, yofs = 0;
+//console.log("vertex shift: w %s, h %s, xofs %s, yofs %s", micro(vtxw), micro(vtxh), xofs, yofs);
         for (var y = 0; y < this.height; ++y)
+    for (var x = 0; x < this.width; ++x)
         {
 //hw (univ#, node#, model#) is for whole-house model
 //TODO: model (x, y, w, h) is for single-prop models
@@ -602,8 +689,15 @@ console.log("vertex w %s, h %s, size %s, vblank %s", sh_VERTEX_WIDTH, sh_VERTEX_
 //NOTE: first pixel is (0,0), last is (w-1,h-1) in vertex array
 //put pixel (0,0) of texture at top of screen so caller can index starting at 0 and still work with incorrect size info
 //NOTE: node# is flipped so that node# 0 is closest to GPU, but XY (0,0) is bottom left corner of screen so screen coordinates (X, Y) are oriented differently from texture coordinates (S, T)
-            vertices.push((x + 0.5) / txtw, 1 - (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
+//            vertices.push((x + 0.5) / txtw, 1 - (y + 0.5) / this.height, 0,   x, y, x,   0, 0, 0, 0);
 //            vertices.push(x / txtw, 1 - y / this.height, 0,   x, y, x,   0, 0, 0, 0);
+//NOTE: the right-most pixel needs to be clipped, so use lower left coordinate for each vertex rather than center
+//            vertices.push(x, this.height - y - 1, 0,   x, y, x,   0, 0, 0, 0);
+//NOTE: viewport inverts y so 0 is at top; x-TODO: not sure why x needs 1/2 pixel offset here
+//no-NOTE: use pixel centers for easier paint logic; CAUTION: right-most vertex is on edge, do not clip
+//set Z to force earlier pixels to overlap later pixels; needed due to overlapping pixels
+//not sure why must use centers here
+            vertices.push(x + xofs, y + yofs, (vertices.length + 1) / numvert / 10,   x, y, x,   0, 0, 0, 0);
             if (!this.SHOW_VERTEX) continue;
             if ((x >= 2) && (x < this.width - 2)) continue;
             if ((y >= 2) && (y < this.height - 2)) continue;
@@ -710,8 +804,21 @@ function initProjection()
 //    mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
 //    mat4.ortho(0, gl.viewportWidth, 0, gl.viewportHeight, 0.1, 100.0, pMatrix); // l,r,b,t,n,f
 //        mat4.ortho(0 + 1 - ZOOM, 1 * ZOOM, 0 + 1 - ZOOM, 1 * ZOOM, 0.1, 100.0, pMatrix); // left, right, bottom, top, near, far
-    var overscan = 1; //Screen.horiz.res / Screen.horiz.disp; //1; //DON'T use projection to force h overscan so other code doesn't need to deal with it
-    mat4.ortho(0, overscan, 0, 1, 0.1, 100.0, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
+//    var overscan = 1; //Screen.horiz.res / Screen.horiz.disp; //1; //DON'T use projection to force h overscan so other code doesn't need to deal with it
+//    mat4.ortho(0, overscan, 0, 1, 0.1, 100.0, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
+//reduce viewport width to clip right-most pixel:
+//    var overscan = Screen.horiz.res / Screen.horiz.disp; //overscan factor; //use viewport + projection to force h overscan so other code doesn't need to deal with it
+//NOTE: viewport is inverted here to put 0 at top; this allows caller to still work if max# pixels is configured incorrectly
+//NOTE: set viewport narrower to force overscan on right-most pixel; put center at right-most edge
+//viewport tuning: first set vertex coordinates + z-order, then viewport boundaries; want left, top + bottom edges to align, and right edge to clip 1/2 pixel
+//pixels are drawn as rectangular areas; width != height so one of the axes overlaps
+//    mat4.ortho(0, this.width / overscan, this.height, 0, 0.1, 100.0, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
+//    var vtxw = Screen.horiz.res / this.width, vtxh = Screen.vert.disp / this.height;
+//    var xofs = (vtxw < vtxh)? -1: 0, yofs = (vtxw < vtxh)? 0: 0;
+    var margins = (this.size.vtxw < this.size.vtxh)? {L: -1, R: -0.5, T: -1, B: -0.5}: {L: -0.5, R: -0.5, T: -1, B: -1}; //viewport tuning
+console.log("viewport adjust: vertex w %s, h %s -> margins %j", micro(this.size.vtxw), micro(this.size.vtxh), margins);
+    mat4.ortho(margins.L, this.width - 0.5 + margins.R, this.height + margins.B, margins.T, 0, 100, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
+//    debug("viewport projection: overscan %s vs. %s".cyan_lt, this.width - 0.5, micro(this.width / overscan));  //overscan should be 3/4 pixel
 
 //if (!drawScene.count) drawScene.count = 0;
 //if (!drawScene.count++) console.log("ortho", pMatrix);
@@ -745,13 +852,16 @@ function initProjection()
 //byte splitter:
 const splitter =
 {
+    LE: false, //true, //RPi is bi-endian (running as little endian); Intel is little endian; seems backwards
     buf: new ArrayBuffer(4),
 //    get buf() { return this.bytes; },
 //no worky    uint32: new Uint32Array(this.bytes), //DataView(bytes),
 //    view: new DataView(this.buf), //this.bytes),
 //    read: function() { return this.view.getUint32(0, false); },
 //    write: function(val) { this.view.setUint32(0, val, false); },
-    bytes: new Uint8Array(this.buf),
+//    bytes: new Uint8Array(this.buf),
+    get view() { Object.defineProperty(this, "view", {value: new DataView(this.buf)}); return this.view; }, //replace getter with data after first time
+    get bytes() { Object.defineProperty(this, "bytes", {value: new Uint8Array(this.buf)}); return this.bytes; }, //replace getter with data after first time
 //    uint32: new Uint32Array(this.buf), //always little endian; see http://stackoverflow.com/questions/7869752/javascript-typed-arrays-and-endianness
     get uint32() { return this.view.getUint32(0, this.LE); },
     set uint32(val) { this.view.setUint32(0, val, this.LE); },
@@ -761,10 +871,10 @@ const splitter =
 //splitter.uint32 = new Uint32Array(splitter.bytes); //DataView(bytes);
 //splitter.read = function() { return this.view.getUint32(0, false); };
 //splitter.write = function(val) { this.view.setUint32(0, val, false); };
-splitter.bytes = new Uint8Array(splitter.buf);
+//splitter.bytes = new Uint8Array(splitter.buf);
 //splitter.uint32 = new Uint32Array(splitter.buf);
-splitter.view = new DataView(splitter.buf);
-splitter.LE = false; //true; //RPi is bi-endian (running as little endian); Intel is little endian; seems backwards
+//splitter.view = new DataView(splitter.buf);
+//splitter.LE = false; //true; //RPi is bi-endian (running as little endian); Intel is little endian; seems backwards
 
 //http://stackoverflow.com/questions/15761790/convert-a-32bit-integer-into-4-bytes-of-data-in-javascript
 //function toBytesInt32 (num) {
@@ -783,6 +893,7 @@ class Texture
     }
 
     getError() { var err = this.gl.getError(); return err? -1: err; }
+//    set WS281X_FMT(val) { this.gl.texPivot(this.gl.isGLES && val); } //this.WS281X_FMT); //GPU can do pivot or not needed
 };
 
 
@@ -869,7 +980,7 @@ function fill(xofs, yofs, w, h, argb)
     for (var y = 0, ofs = this.xy(xofs, yofs); y < h; ++y, ofs += this.width)
         for (var x = 0; x < w; ++x)
 //            this.pixels[ofs + x] = argb;
-            wrpixel.call(this, ofs + x, argb);
+            this.wrpixel(ofs + x, argb);
 //    this.dirty = true; //just assume it changed
 //    txtr.image.fill.apply(null, arguments);
 //    this.debug_tx("after fill");
@@ -877,7 +988,7 @@ function fill(xofs, yofs, w, h, argb)
 }
 
 
-/* TODO
+/* TODO: use SDL2-gfx
 txtr.line = function(x1, y1, x2, y2, rgba)
 {
     this.init(true);
@@ -911,13 +1022,13 @@ function pixel(x, y, argb)
 //        {
 //console.log("pixel(%d,%d): ofs %d, set color 0x%s", x, y, this.xy(x, y), argb.toString(16));
 //            this.pixels[this.xy(x, y)] = argb; //>>> 0;
-            wrpixel.call(this, this.xy(x, y), argb);
+            this.wrpixel(this.xy(x, y), argb);
 //            this.dirty = true; //just assume it changed
 //        }
         return this; //fluent setter
     }
 //    return this.pixels[this.xy(x, y)]; //non-fluent getter
-    return rdpixel.call(this, this.xy(x, y)); //non-fluent getter
+    return this.rdpixel(this.xy(x, y)); //non-fluent getter
 //    return txtr.image.pixel.apply(null, arguments);
 }
 
@@ -991,7 +1102,7 @@ console.log("img px", img_pixels_buf.substr(2));
                     var argb = this.image.pixel(x, this.image.height - y - 1); //flip y
 //                    this.pixels[this.xy(x, y)] = argb;
 //                    wrpixel.call(this, this.xy(x, y), argb);
-                    wrpixel.call(this, ofs, argb);
+                    this.wrpixel(ofs, argb);
                 }
 //TODO: array copy
             this.image.img_pixels = null;
@@ -1021,6 +1132,7 @@ function init(gl, width, height, want_pixels)
 {
 //    if (this.txtr) return;
     this.gl = gl;
+    this.WS281X_FMT = 
     this.txtr = gl.createTexture();
     this.width = Math.floor(width);
     this.height = Math.floor(height); //UNIV_LEN / VGROUP);
@@ -1055,6 +1167,15 @@ function init(gl, width, height, want_pixels)
 //console.log(typeof buf, typeof uint32s);
 //console.log(uint32s);
     this.pixel_bytes = new Uint8Array(this.width * this.height * Uint32Array.BYTES_PER_ELEMENT);
+//byte shuffling to reduce GPU texture lookups:
+//NOTE: RPi (GLES) wants BGRA, R <-> B
+    this.rdpixel = rdpixel_RPi.bind(this); //(this.gl.isGLES? rdpixel_GLES: rdpixel_GL).bind(this); //rdpixel_RPi;
+    this.wrpixel = wrpixel_RPi.bind(this); //(this.gl.isGLES? wrpixel_GLES: wrpixel_GL).bind(this); //wrpixel_RPi;
+//    this.pivot24 = this.gl.isGLES? pivot24_GLES: pivot24_GL;
+//RPi GPU doesn't have enough bandwidth for a 24x24 bit pivot, so use CPU instead
+//NOTE: this puts a greater load on RPi CPU and probably requires a background worker thread
+//    if (!this.gl.isGLES) this.gl.texPivot24(1); //tell CPU to do 24x24 pivot to offload GPU
+//    this.gl.texPivot(this.isGLES && this.WS281X_FMT); //GPU can do pivot or not needed
 //console.log(typeof this.pixel_bytes, typeof this.pixel_bytes.buffer);
 //    uint32s[0] = 0x11223344; //check byte order
 //    splitter.uint32[0] = 0x11223344; //check byte order
@@ -1062,7 +1183,7 @@ function init(gl, width, height, want_pixels)
 //    for (var retry in [false, true, -1])
 //    {
 //        if (retry == -1) throw "can't figure out byte order";
-    wrpixel.call(this, 0, 0x11223344); //check byte order
+    this.wrpixel(0, 0x11223344); //check byte order
     debug(10, "byte order[%s]: %s %s %s %s".blue_lt, 0, (this.pixel_bytes[0] + 0).toString(16), (this.pixel_bytes[4] + 0).toString(16), (this.pixel_bytes[8] + 0).toString(16), (this.pixel_bytes[12] + 0).toString(16));
 //        if (this.pixel_bytes[0] == 0x22) break; //that's where we want it
 //        splitter.LE = !splitter.LE;
@@ -1083,6 +1204,7 @@ function init(gl, width, height, want_pixels)
     debug(10, "fmts: %s %s".blue_lt, FMTS[this.fmt], FMTS[fmt2]);
 //this.fmt = fmt2;
 //NOTE: first element = lower left, last element = upper right
+//NOTE: pivot flag not set yet, but texture should be updated by caller before first render anyway
     gl.texImage2D(gl.TEXTURE_2D, 0, fmt2, this.width, this.height, 0, this.fmt, gl.UNSIGNED_BYTE, this.pixel_bytes);
     glcheck("img txtr", this.getError()); //invalid op on RPi?
 }
@@ -1091,7 +1213,7 @@ function init(gl, width, height, want_pixels)
 //read/write pixel ARGB value:
 //NOTE: RPi GPU has limited memory bandwidth (only allows 8 texture lookups)
 //in order to access 24 values, ARGB bytes are rearranged here so one lookup gets 4 pixels
-function rdpixel(ofs)
+function rdpixel_RPi(ofs)
 {
     if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
     ofs = ((ofs & ~3) << 2) + (ofs & 3); //offset into cluster of 4 pixels
@@ -1105,11 +1227,82 @@ function rdpixel(ofs)
 }
 
 
-function wrpixel(ofs, argb)
+function wrpixel_RPi(ofs, argb)
 {
     if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
 //    var rearr = ofs & 3;
     ofs = ((ofs & ~3) << 2) + (ofs & 3); //offset into cluster of 4 pixels
+//    splitter.uint32.setUint32(0, argb >>> 0, false); //byteOffset = 0, litteEndian = false
+    splitter.uint32 = argb; //[0] = argb; // >>> 0;
+//    /*if (arguments.length > 1)*/ splitter.write(argb);
+//console.log((splitter.uint32[0] + 0).toString(16));
+    this.pixel_bytes[ofs + 0] = splitter.bytes[1];
+    this.pixel_bytes[ofs + 4] = splitter.bytes[2];
+    this.pixel_bytes[ofs + 8] = splitter.bytes[3];
+    this.pixel_bytes[ofs + 12] = splitter.bytes[0]; //NOTE: ignored by shader, but save it anyway; put at end
+//console.log((splitter.bytes[0] + 0).toString(16), (splitter.bytes[1] + 0).toString(16), (splitter.bytes[2] + 0).toString(16), (splitter.bytes[3] + 0).toString(16));
+//console.log((this.pixel_bytes[ofs + 12] + 0).toString(16), (this.pixel_bytes[ofs + 0] + 0).toString(16), (this.pixel_bytes[ofs + 4] + 0).toString(16), (this.pixel_bytes[ofs + 8] + 0).toString(16));
+//var buf = "";
+//for (var i = 0; i < 16; ++i)
+//    buf += " " + (this.pixel_bytes[i] + 0).toString(16);
+//if (ofs < 48) console.log("wrpx", arguments[0], arguments[1].toString(16), ofs, buf);
+    this.dirty = true; //assume caller is changing it
+}
+
+
+//read/write pixel ARGB value:
+function rdpixel_GL(ofs)
+{
+    splitter.bytes[1] = this.pixel_bytes[ofs + 0];
+    splitter.bytes[2] = this.pixel_bytes[ofs + 4];
+    splitter.bytes[3] = this.pixel_bytes[ofs + 8];
+    splitter.bytes[0] = this.pixel_bytes[ofs + 12];
+//    return splitter.uint32.getUint32(0, false); //byteOffset = 0, litteEndian = false
+//    return splitter.read(); //splitter.uint32[0];
+    return splitter.uint32; //[0];
+}
+
+
+function wrpixel_GL(ofs, argb)
+{
+    if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
+//    var rearr = ofs & 3;
+//    splitter.uint32.setUint32(0, argb >>> 0, false); //byteOffset = 0, litteEndian = false
+    splitter.uint32 = argb; //[0] = argb; // >>> 0;
+//    /*if (arguments.length > 1)*/ splitter.write(argb);
+//console.log((splitter.uint32[0] + 0).toString(16));
+    this.pixel_bytes[ofs + 0] = splitter.bytes[1];
+    this.pixel_bytes[ofs + 4] = splitter.bytes[2];
+    this.pixel_bytes[ofs + 8] = splitter.bytes[3];
+    this.pixel_bytes[ofs + 12] = splitter.bytes[0]; //NOTE: ignored by shader, but save it anyway; put at end
+//console.log((splitter.bytes[0] + 0).toString(16), (splitter.bytes[1] + 0).toString(16), (splitter.bytes[2] + 0).toString(16), (splitter.bytes[3] + 0).toString(16));
+//console.log((this.pixel_bytes[ofs + 12] + 0).toString(16), (this.pixel_bytes[ofs + 0] + 0).toString(16), (this.pixel_bytes[ofs + 4] + 0).toString(16), (this.pixel_bytes[ofs + 8] + 0).toString(16));
+//var buf = "";
+//for (var i = 0; i < 16; ++i)
+//    buf += " " + (this.pixel_bytes[i] + 0).toString(16);
+//if (ofs < 48) console.log("wrpx", arguments[0], arguments[1].toString(16), ofs, buf);
+    this.dirty = true; //assume caller is changing it
+}
+
+
+//read/write pixel ARGB value:
+function rdpixel_GLES(ofs)
+{
+    if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
+    splitter.bytes[1] = this.pixel_bytes[ofs + 0];
+    splitter.bytes[2] = this.pixel_bytes[ofs + 4];
+    splitter.bytes[3] = this.pixel_bytes[ofs + 8];
+    splitter.bytes[0] = this.pixel_bytes[ofs + 12];
+//    return splitter.uint32.getUint32(0, false); //byteOffset = 0, litteEndian = false
+//    return splitter.read(); //splitter.uint32[0];
+    return splitter.uint32; //[0];
+}
+
+
+function wrpixel_GLES(ofs, argb)
+{
+    if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
+//    var rearr = ofs & 3;
 //    splitter.uint32.setUint32(0, argb >>> 0, false); //byteOffset = 0, litteEndian = false
     splitter.uint32 = argb; //[0] = argb; // >>> 0;
 //    /*if (arguments.length > 1)*/ splitter.write(argb);
@@ -1167,15 +1360,6 @@ function glcheck(desc, id)
 {
     if (id < 0) debug("bad id: %s".red_lt, desc);
     return id;
-}
-
-
-//update a uniform:
-function update(name)
-{
-//console.log("update: shpgm %j", this.shpgm);
-    if (!this.shpgm || !this.shpgm.uniforms || !this.shpgm.uniforms[name]) return;
-    this.gl.uniform1i(this.shpgm.uniforms[name], this[name]);
 }
 
 
@@ -1264,49 +1448,6 @@ function heredoc(func)
     func = func.toString();
     var parse = func.match(/^[^]*\/\*([^]*)\*\/\}$/m);
     return parse? parse[1]: func;
-}
-
-
-//add push/pop for listed properties:
-function pushable(props)
-{
-//    console.log("make pushable: %j", props);
-/*
-//http://stackoverflow.com/questions/3112793/how-can-i-define-a-default-getter-and-setter-using-ecmascript-5
-    this._opts = new Proxy(this,
-    {
-        get: function(obj, name)
-        {
-            console.log("get '%s' from stack of %d", name, );
-            get: function() { return prop[prop.length - 1]; },
-        return target[name];
-    },
-    set: function(obj, name, value) {
-        console.log("you're setting property " + name);
-        target[name] = value;
-    }
-    });
-*/
-    this._pushable = {};
-//use push, pop namespace to avoid conflict with getters, setters:
-    this.push = {};
-    this.pop = {};
-//CAUTION: use let + const to force name + prop to be unique each time; see http://stackoverflow.com/questions/750486/javascript-closure-inside-loops-simple-practical-example
-    for (let name in props)
-    {
-        const prop = this._pushable[name] = [props[name]]; //create stack with initial value
-//set up getters, setters:
-//ignore underflow; let caller get error
-        Object.defineProperty(this, name,
-        {
-            get: function() { /*console.log("top of '%s' %j is %j %s", name, prop, prop.top, caller(-2))*/; return prop.top; }.bind(this), //[prop.length - 1]; },
-            set: function(newval) { prop.top = newval; update.call(this, name); /*console.log("top of '%s' %j now is %j @%s", name, prop, prop.top, caller(-2))*/; }.bind(this), //[prop.length - 1] = newval; },
-        });
-//set up push/pop:
-        this.push[name] = function(newval) { /*console.log("push '%s' %j", name, newval)*/; prop.push(newval); update.call(this, name); }.bind(this);
-        this.pop[name] = function() { /*console.log("pop '%s'", name)*/; var retval = prop.pop(); update.call(this, name); return retval; }.bind(this);
-//        prop = null;
-    }
 }
 
 

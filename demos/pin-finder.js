@@ -1,29 +1,30 @@
 #!/usr/bin/env node
-//RGB finder pattern: tests GPU config, GPIO pins, and WS281X connections
-//sends out a different pattern on each GPIO pin to make them easier to identify
+//Pin finder RGB patterns: tests GPU config, GPIO pins, and WS281X connections
+//Sends out a different pattern on each GPIO pin to make them easier to identify.
 //Copyright (c) 2016-2017 Don Julien
-//Can be used for non-commercial purposes
+//Can be used for non-commercial purposes.
 //
 //History:
 //ver 0.9  DJ  10/3/16  initial version
 //ver 0.95 DJ  3/15/17  cleaned up, refactored/rewritten for FriendsWithGpu article
 //ver 1.0  DJ  3/20/17  finally got texture re-write working on RPi
+//ver 1.0a DJ  9/24/17  minor clean up
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
-const path = require('path');
-const {debug} = require('../js-shared/debug');
-const {Screen} = require('../js-shared/screen');
-const {GpuCanvas} = require('../js-shared/GpuCanvas');
-const {blocking, wait} = require('../js-shared/blocking');
+//const path = require('path');
+const {blocking, wait} = require('blocking-style');
+
+const {debug} = require('./shared/debug');
+const {Screen} = require('./shared/screen');
+const {GpuCanvas} = require('./shared/GpuCanvas');
 
 //display settings:
 const SPEED = 0.5; //animation speed (sec)
 const DURATION = 60; //how long to run (sec)
-const VGROUP = !Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
-const UNIV_LEN = Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
+const UNIV_LEN = 30/3; //Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug("screen %d x %d, video cfg %d x %d (%d x %d), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
+debug("window %d x %d, video cfg %d x %d vis (%d x %d total), using gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, Screen.gpio);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
@@ -35,7 +36,7 @@ const OPTS =
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
 //    WS281X_DEBUG: true, //show timing debug info
-//    gpufx: path.resolve(__dirname, "rgb-finder.glsl"), //generate fx on GPU instead of CPU
+//    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
 };
 
 //ARGB primary colors:
@@ -52,10 +53,10 @@ const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
 
 
 //main logic:
-//written with synchronous coding style to simplify timing logic
+//written with synchronous coding style to simplify logic structure
 blocking(function*()
 {
-    var canvas = new GpuCanvas("RGB Finder", NUM_UNIV, UNIV_LEN, OPTS);
+    var canvas = new GpuCanvas("Pin Finder", NUM_UNIV, UNIV_LEN, OPTS);
 
     debug("begin, run for %d sec".green_lt, DURATION);
     var started = now_sec();

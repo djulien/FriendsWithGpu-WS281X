@@ -1,4 +1,4 @@
-//get screen config info:
+//get RPi screen config info:
 //query hdmi timing settings, device tree overlays
 
 'use strict'; //find bugs easier
@@ -18,7 +18,7 @@ Screen.gpio = toGPIO();
 
 //get OpenGL display info:
 //set actual display res
-var canvas = document.createElement("ws281x-canvas"); //name needs to include "canvas"
+var canvas = document.createElement("ws281x-canvas"); //NOTE: name needs to include "canvas"
 //gl = canvas.getContext("experimental-webgl");
 Screen.width = canvas.width;
 Screen.height = canvas.height;
@@ -30,7 +30,6 @@ Screen.height = canvas.height;
 ////
 /// Misc helper functions
 //
-
 
 //check if video sent to GPIO pins:
 function toGPIO()
@@ -55,18 +54,22 @@ function toGPIO()
 function timing(path)
 {
     if (timing.hasOwnProperty('cached')) return timing.cached;
-    const hdmi_re = new RegExp("^hdmi_timings\\s*=\\s*" + new Array(16+1).join("(\\d+)\\s+") + "(\\d+)\\s*$", "gm");
+    const hdmi_re = new RegExp("^\s*hdmi_timings\\s*=\\s*" + new Array(17+1).join("(\\d+)\\s+").slice(0, -1) + "*$", "gm");
 //console.log("re", hdmi_re.toString());
     if (!path) path = "/boot/config.txt";
     var cfg = fs.existsSync(path)? fs.readFileSync(path).toString(): "";
     if (!cfg)
     {
-        console.log("RPi '%s' not found, using dummy values".red_lt, path);
+        console.log("RPi '%s' not found, using dummy values:".yellow_lt, path);
         cfg =
         [
-            "hdmi_timings=1488 0 12 12 24   1104 0 12 12 24    0 0 0 30 0 50000000 1",
+//            "hdmi_timings=1488 0 12 12 24   1104 0 12 12 24    0 0 0 30 0 50000000 1",
+            "hdmi_timings=1504 0 8 8 16   1104 0 12 12 24    0 0 0 30 0 50000000 1",
             "#hdmi_timings=1 2 3 4 5   6 7 8 9 10    11 12 13 14 15 16 17",
-        ].join("\n"); //dummy file for testing
+        ].join("\n"); //dummy values for non-RPi testing
+        cfg = cfg.replace(/#.*$/gm, ""); //strip comments
+        cfg = cfg.replace(/^(?=\n)$|^\s*|\s*$|\n\n+/gm, ""); //strip blank lines; https://stackoverflow.com/questions/31412765/regex-to-remove-white-spaces-blank-lines-and-final-line-break-in-javascript
+        console.log(cfg.yellow_lt);
     }
 //console.log("settings", settings);
 //    var hdmi = settings.match(/\nhdmi_timings\s*=\s*(\d+)\s+\d+\s+(\d+)\s+(\d+)\s+(\d+)\s+

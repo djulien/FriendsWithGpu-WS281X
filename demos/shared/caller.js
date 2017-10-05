@@ -27,6 +27,12 @@ module.exports.stack = function(depth, exclude)
     }
 }
 */
+const calledfrom =
+module.exports.calledfrom =
+function calledfrom(depth)
+{
+    return callsite()[depth || 0].getFileName();
+}
 
 
 const caller =

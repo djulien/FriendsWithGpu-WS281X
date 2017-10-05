@@ -13,7 +13,7 @@ uniform mat4 uModelView;
 uniform mat4 uProjection;
 uniform float elapsed, duration; //progress bar; can also be used to drive fx animation
 uniform sampler2D uSampler; //texture (individual pixel colors) from caller
-uniform bool WS281X_FMT; //allow turn on/off at run-time for demo/debug purposes
+//uniform bool WS281X_FMT; //allow turn on/off at run-time for demo/debug purposes
 
 //from caller, changes from one vertex to another:
 attribute vec3 vXYZ; //3D view (x, y, z); for 3D viewer
@@ -35,15 +35,16 @@ vec3 hsv2rgb(vec3 c);
 #ifdef CUSTOM_GPUFX
  vec4 gpufx(float x, float fromcpu); //fwd ref
 // #define CUSTOM(stmt)  stmt
+//CAUTION: GLSL cpp bug is expanding the "x" in "gpufx", so use different param name
 // #define GPUFX(val)  gpufx(val) //dot(gpufx(val).rgb, TORGB24)
 //#else
 // #define CUSTOM(stmt) //noop
 // #define GPUFX(val)  val //dot(gpufx(val).rgb, TORGB24)
 #endif //def CUSTOM_GPUFX
 
-//CAUTION: GLSL cpp bug is expanding the "x" in "gpufx", so use different param name
 
-
+//look up pixel color from caller:
+//caller uses a texture to pass pixel colors to shader
 #define SAMPLE(x, y)  texture2D(uSampler, vec2(float(x) / (NUM_UNIV - 1.0), float(y) / (UNIV_LEN - 1.0))) // * FLOAT2BITS
 
 //#define BIT(n)  pow(2.0, float(n))
@@ -52,10 +53,10 @@ vec3 hsv2rgb(vec3 c);
 const vec4 COLs0_3 = vec4(BIT(-1), BIT(-2), BIT(-3), BIT(-4));
 const vec4 COLs4_7 = vec4(BIT(-5), BIT(-6), BIT(-7), BIT(-8));
 
-//kludge: RPi does not handle non-const indexes
+//kludge: RPi does not handle non-const indexes :(
 //#ifdef GL_ES //RPi
-// #define INDEX3(thing, inx)  (IF(inx == 0, thing[0]) + IF(inx == 1, thing[1]) + IF(inx == 2, thing[2]) + IF(inx == 3, thing[3]))
-#define INDEX3(thing, inx)  (IF(EQ(inx, 0.0), thing[0]) + IF(EQ(inx, 1.0), thing[1]) + IF(EQ(inx, 2.0), thing[2]) + IF(EQ(inx, 3.0), thing[3]))
+#define INDEX3(thing, inx)  (IF(inx == 0.0, thing[0]) + IF(inx == 1.0, thing[1]) + IF(inx == 2.0, thing[2]) + IF(inx == 3.0, thing[3]))
+//#define INDEX3(thing, inx)  (IF(EQ(inx, 0.0), thing[0]) + IF(EQ(inx, 1.0), thing[1]) + IF(EQ(inx, 2.0), thing[2]) + IF(EQ(inx, 3.0), thing[3]))
 //#else //desktop/laptop
 // #define INDEX3(thing, inx)  thing[inx]
 //#endif //def GL_ES
@@ -65,10 +66,9 @@ void main(void)
 {
     gl_Position = uProjection * uModelView * vec4(vXYZ, 1.0); //[-1..1]
     gl_PointSize = VERTEX_SIZE; // / Position.w; always 1.0
-    if (WS281X_FMT) gl_Position.y += 1.0 / UNIV_LEN; //kludge: y coord seems to be off by 1/2 pixel
 
 //NOTE: gl_Position.xy is not equivalent due to y axis orientation
-//NOTE: use hUNM for whole-house, mXYWH for model-specific fx coordinates
+//NOTE: use hUNM for whole-house, or mXYWH for model-specific fx coordinates
     float s = hUNM.s; //[0..NUM_UNIV); universe#
     float t = hUNM.t; //UNIV_LEN - hUNM.t - 1.0; //[0..UNIV_LEN); node# within universe
 //ortho projection maps as-is to screen coordinates (except for origin correction):
@@ -156,6 +156,7 @@ void main(void)
 
 #ifdef WS281X_DEBUG //check for errors
     debug_val = 0.0;
+//    debug_val = VERTEX_HEIGHT / VERTEX_SIZE;
 //vColor = BLACK; //only show errors
     if ((which != 0.0) && (which != 4.0) && (which != 8.0) && (which != 12.0) && (which != 16.0) && (which != 20.0)) vColor = RED; //ERROR(1);
     if ((inx != 0.0) && (inx != 1.0) && (inx != 2.0) && (inx != 3.0)) vColor = GREEN; //ERROR(1);

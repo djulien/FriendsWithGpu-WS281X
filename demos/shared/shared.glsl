@@ -29,9 +29,9 @@
 //http://webglfactory.blogspot.com/2011/05/how-to-convert-world-to-screen.html
 //http://stackoverflow.com/questions/7317119/how-to-achieve-glorthof-in-opengl-es-2-0
 
-//Notes from above references:
-//Never branch in the fs unless absolutely necessary.  Even on the most modern hardware fragments are evaluated in blocks of 4 and any branches in any of them forces the gpu to evaluate them for every fragment regardless of whether needed or not.
-//To avoid branches one should always use functions like mix, step, smoothstep, etc.
+//Note from above:
+//"Never branch in the fs unless absolutely necessary.  Even on the most modern hardware fragments are evaluated in blocks of 4 and any branches in any of them forces the gpu to evaluate them for every fragment regardless of whether needed or not.
+//To avoid branches one should always use functions like mix, step, smoothstep, etc."
 
 //useful info:
 // https://www.khronos.org/opengl/wiki/OpenGL_Error
@@ -81,8 +81,8 @@ const float FUD = 1.0e-6;
 #define GT(lhs, rhs)  ((lhs) > (rhs) + FUD)
 #define LE(lhs, rhs)  ((lhs) <= (rhs) + FUD)
 #define LT(lhs, rhs)  ((lhs) < (rhs) - FUD)
-//#define MID(lower, upper)  (((upper) - (lower)) / 2.0)
-//#define BTWN(val, lower, upper)  LE(abs((val) - MID(lower, upper)), MID(lower, upper) + FUD)
+#define MID(lower, upper)  (((upper) + (lower)) / 2.0)
+#define BTWN(val, lower, upper)  LE(abs((val) - ((lower) + (upper)) / 2.0), abs((upper) - (lower)) / 2.0 + FUD)
 
 const float RPI_FIXUP = 0.1; //kludge: fix up incorrect results on RPi
 #define MOD(num, den)  floor(mod((num) + RPI_FIXUP, den))
@@ -110,14 +110,15 @@ const float FLOAT2BITS = 255.0 / 256.0; //convert normalized [0..1] to sum of bi
 
 
 //dimensions of vertices on screen:
-//NOTE: "??" will be filled in by caller; example numbers are from config.txt
-const float SCR_WIDTH = float(??); //1536
-const float SCR_HEIGHT = float(??); //1104
-const float NUM_UNIV = float(??); //24
-const float UNIV_LEN = float(??); //1 for GPIO, 24 for screen
-const float VERTEX_WIDTH = floor(SCR_WIDTH / NUM_UNIV); //64
-const float VERTEX_HEIGHT = floor(SCR_HEIGHT / UNIV_LEN); //46
+//NOTE: values below will be filled in by GpuCanvas; example numbers are from config.txt
+const float SCR_WIDTH = float(CALLER_SCR_WIDTH); //1536
+const float SCR_HEIGHT = float(CALLER_SCR_HEIGHT); //1104
+const float VERTEX_WIDTH = float(CALLER_VERTEX_WIDTH); //floor(SCR_WIDTH / NUM_UNIV); //64
+const float VERTEX_HEIGHT = float(CALLER_VERTEX_HEIGHT); //floor(SCR_HEIGHT / UNIV_LEN); //1 or 46
 const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex size
+
+const float NUM_UNIV = ceil(SCR_WIDTH / VERTEX_WIDTH); //float(??); //24
+const float UNIV_LEN = ceil(SCR_HEIGHT / VERTEX_HEIGHT); //float(??); //1104 for GPIO, 24 for screen
 //const float MAX_UNIV = NUM_UNIV - 1.0;
 //const float UNIV_MAX = UNIV_LEN - 1.0;
 

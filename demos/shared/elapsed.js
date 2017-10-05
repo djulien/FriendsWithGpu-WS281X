@@ -5,7 +5,9 @@ const HIGH = false; //true;
 
 var epoch = 
 module.exports.epoch = now_sec();
+
 module.exports.now = now_sec;
+
 module.exports.milli =
 function milli(sec)
 {
@@ -18,7 +20,7 @@ function milli(sec)
 module.exports.elapsed =
 function elapsed(new_epoch)
 {
-    if (arguments.length) epoch = new_epoch;
+    if (arguments.length) epoch = new_epoch; //set new epoch if passed
     return now_sec() - epoch;
 }
 
