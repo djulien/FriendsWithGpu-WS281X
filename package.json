@@ -1,42 +1,42 @@
 {
   "name": "gpu-friends-ws281x",
-  "version": "1.0.0",
   "description": " Test/sample programs using RPi GPU to control WS281X pixels",
+  "version": "0.17.0",
   "main": "index.js",
-  "REMOVE-demo": {
-    "comment": "demo program settings; change as desired",
-    "SPEED": 0.5,
-    "NUM_UNIV": 24,
-    "UNIV_LEN": 1104
-  },
+  "author": "djulien",
+  "license": "CC-BY-NC-SA-4.0",
+  "homepage": "https://github.com/djulien/FriendsWithGpu-WS281X#readme",
+  "keywords": [
+    "WS2811",
+    "WS2812",
+    "WS281X",
+    "DIYC",
+    "GPU",
+    "OpenGL ES",
+    "Raspberry Pi",
+    "RPi"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "rebuild": "node-gyp rebuild"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/djulien/FriendsWithGpu-WS281X.git"
   },
-  "keywords": [
-    "WS2811",
-    "WS2812B",
-    "WS281X",
-    "DIYC",
-    "GPU",
-    "Raspberry Pi",
-    "RPi"
-  ],
-  "author": "djulien",
-  "license": "CC-BY-NC-SA-4.0",
   "bugs": {
     "url": "https://github.com/djulien/FriendsWithGpu-WS281X/issues"
   },
-  "homepage": "https://github.com/djulien/FriendsWithGpu-WS281X#readme",
-  "REMOVE-node-glfw": "lukaaash/node-glfw",
-  "REMOVE-preprocessor": "^1.4.0",
+  "engines": {
+    "example-node": ">=0.10.3 <0.12",
+    "node": ">=5",
+    "npm": ">=3"
+  },
   "dependencies": {
+    "blocking-style": "^1.0.0",
     "callsite": "^1.0.0",
     "colors": "github:djulien/colors.js",
-    "debug": "^2.6.0",
+    "debug": "^2.2.0",
     "glob": "^7.1.1",
     "keypress": "^0.2.1",
     "node-webgl": "github:djulien/node-webgl"
