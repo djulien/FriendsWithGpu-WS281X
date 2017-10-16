@@ -1471,6 +1471,7 @@ if (!Array.prototype.top)
     {
         get: function() { return this[this.length - 1]; },
         set: function(newval) { this[this.length - 1] = newval; },
+        enumerable: true, //make it visible in "for" loops (useful for debug)
     });
 
 

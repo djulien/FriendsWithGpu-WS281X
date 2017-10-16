@@ -1,6 +1,6 @@
 //Butterfly effect generator:
 
-const float speed = 1; //10; //must match caller
+const float speed = 1.0; //10; //must match caller; TODO: use a uniform?
 
 //custom GPU fx function:
 //caller can pass in a float to influence fx gen

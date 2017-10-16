@@ -5,7 +5,7 @@
 HERE="$(dirname "$(readlink -fm "$0")")" #https://stackoverflow.com/questions/20196034/retrieve-parent-directory-of-script
 #MY_TOP=`git rev-parse --show-toplevel`  #from https://unix.stackexchange.com/questions/6463/find-searching-in-parent-directories-instead-of-subdirectories
 #source  "$MY_TOP"/scripts/colors.sh
-source  ./colors.sh
+source  "$HERE"/colors.sh
 
 #echo "i am at $HERE"
 #echo use script "$HERE"/getcfg.js
