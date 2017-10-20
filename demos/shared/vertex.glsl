@@ -22,8 +22,8 @@ attribute vec3 hUNM; //hw (univ#, node#, model#); use this for "whole house" eff
 attribute vec4 mXYWH; //model (x, y, w, h); use this for model-specific effects
 
 //send to fragment shader:
-varying vec4 vColor; //vertex color data for fragment shader (final formatting)
-varying vec4 vColor24; //pivoted color data x24 for fragment shader (final formatting)
+varying vec4 vColor; //vertex color data for fragment shader; pivoted if formatted for WS281X
+//varying vec4 vColor24; //pivoted color data x24 for fragment shader (final formatting)
 varying float debug_val;
 
 //color space conversion:
@@ -47,6 +47,7 @@ vec3 hsv2rgb(vec3 c);
 //caller uses a texture to pass pixel colors to shader
 #define SAMPLE(x, y)  texture2D(uSampler, vec2(float(x) / (NUM_UNIV - 1.0), float(y) / (UNIV_LEN - 1.0))) // * FLOAT2BITS
 
+#if 0
 //#define BIT(n)  pow(2.0, float(n))
 //#define AND(val, mask)  greaterThanEqual(mod((val) * FLOAT2BITS, 2.0 * mask), mask)
 //const float FLOAT2BITS = 255.0 / 256.0; //convert normalized [0..1] to sum of bits (negative powers of 2)
@@ -60,23 +61,25 @@ const vec4 COLs4_7 = vec4(BIT(-5), BIT(-6), BIT(-7), BIT(-8));
 //#else //desktop/laptop
 // #define INDEX3(thing, inx)  thing[inx]
 //#endif //def GL_ES
+#endif
 
 
 void main(void)
 {
     gl_Position = uProjection * uModelView * vec4(vXYZ, 1.0); //[-1..1]
-    gl_PointSize = VERTEX_SIZE; // / Position.w; always 1.0
+    gl_PointSize = VERTEX_SIZE; //render box size for each vertex; / Position.w; always 1.0
 
 //NOTE: gl_Position.xy is not equivalent due to y axis orientation
 //NOTE: use hUNM for whole-house, or mXYWH for model-specific fx coordinates
-    float s = hUNM.s; //[0..NUM_UNIV); universe#
-    float t = hUNM.t; //UNIV_LEN - hUNM.t - 1.0; //[0..UNIV_LEN); node# within universe
+    float univ = hUNM.s; //[0..NUM_UNIV); universe#
+    float node = hUNM.t; //UNIV_LEN - hUNM.t - 1.0; //[0..UNIV_LEN); node# within universe
 //ortho projection maps as-is to screen coordinates (except for origin correction):
 //rewrite as MAD with swizzle:
 //        float s = floor((gl_Position.x + 1.0) * NUM_UNIV / 2.0); //[0..24)
 //        float t = floor((gl_Position.y + 1.0) * UNIV_LEN / 2.0); //[0..1152)
 //        vec2 st = floor(gl_Position.xy * UNMAPXY + UNMAPXY);
 
+#if 0
 //get all pixels on this row:
 //NOTE: RPi reports memory errors (GL 0x505) with > 8 Texture lookups :(
 //In order to access 24 values, caller rearranges ARGB bytes so one lookup gets 4 adjacent pixels
@@ -155,7 +158,6 @@ void main(void)
     vColor24.b += dot(vec4(AND(rgb20_23, xmask)), COLs4_7);
 
 #ifdef WS281X_DEBUG //check for errors
-    debug_val = 0.0;
 //    debug_val = VERTEX_HEIGHT / VERTEX_SIZE;
 //vColor = BLACK; //only show errors
     if ((which != 0.0) && (which != 4.0) && (which != 8.0) && (which != 12.0) && (which != 16.0) && (which != 20.0)) vColor = RED; //ERROR(1);
@@ -182,6 +184,9 @@ void main(void)
 //debug_val = 10.0 * p1 - 9.5;
 //vColor = vec4((gl_Position.x + 1.0) / 2.0, 0.0, 0.0, 1.0);
 #endif //def WS281X_DEBUG
+#endif
+    debug_val = 0.0; //needs a value even if not used (glsl compiler complains)
+    vColor = SAMPLE(univ, node); //lookups less expensive in vertex shader than fragment shader
 }
 
 

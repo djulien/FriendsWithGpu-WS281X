@@ -10,7 +10,7 @@
 //ver 1.0a DJ  3/25/17  add getchar to allow single-step + color changes
 
 'use strict'; //find bugs easier
-require('colors'); //for console output
+require('colors').enabled = true; //for console output colors
 const {blocking, wait, getchar} = require('blocking-style');
 
 const {debug} = require('./shared/debug');
@@ -18,17 +18,16 @@ const {Screen} = require('./shared/screen');
 const {GpuCanvas} = require('./shared/GpuCanvas');
 
 //display settings:
-const VGROUP = 16; //!Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
-const UNIV_LEN = Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
+const UNIV_LEN = Screen.gpio? Screen.vert.disp: Math.round(Screen.vert.disp / Math.round(Screen.horiz.res / 24)); ///can't exceed #display lines; draw pixels larger (on-screen only, for debug)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug("window %d x %d, video cfg %d x %d (%d x %d), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
+debug(`window ${Screen.width} x ${Screen.height}, display ${Screen.horiz.disp} x ${Screen.vert.disp}, res ${Screen.horiz.res} x ${Screen.vert.res}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
 const OPTS =
 {
 //    SHOW_INTRO: 10, //how long to show intro (on screen only)
-    SHOW_SHSRC: true, //show shader source code
+//    SHOW_SHSRC: true, //show shader source code
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
@@ -64,32 +63,32 @@ blocking(function*()
         canvas.push.WS281X_FMT(false); //turn off formatting while showing bitmap (debug)
         for (canvas.elapsed = 0; canvas.elapsed < canvas.duration; ++canvas.elapsed) //update progress bar while waiting
             yield wait(1);
-        canvas.pop.WS281X_FMT();
+        canvas.pop.WS281X_FMT(); //restore to default value
     }
 
-    debug("begin, turn on %d x %d = %d pixels 1 by 1".green_lt, canvas.width, canvas.height, canvas.width * canvas.height);
-    console.log("Enter %s to quit, %s toggles formatting, 1 of %s for color, other for next pixel", "q".bold.cyan_lt, "f".bold.cyan_lt, "rgbycmw".bold.cyan_lt);
+    debug(`begin, turn on ${canvas.width} x ${canvas.height} = ${canvas.width * canvas.height} pixels 1 by 1`.green_lt);
+    console.error(`Enter ${"q".bold.cyan_lt} to quit, ${"f".bold.cyan_lt} toggles formatting, 1 of ${"rgbycmw".bold.cyan_lt} for color, other for next pixel`);
     canvas.elapsed = 0; //reset progress bar
     canvas.duration = canvas.width * canvas.height; //set progress bar limit
     canvas.fill(BLACK); //start with all pixels off
     var color = 'r';
 //canvas.pixel(0, 0, WHITE);
-canvas.pixel(0, 1, CYAN);
-canvas.pixel(0, 10, RED);
-canvas.pixel(0, 20, GREEN);
-canvas.pixel(0, 30, BLUE);
-canvas.pixel(0, 40, WHITE);
-canvas.pixel(0, 50, RED);
-canvas.pixel(0, 679, WHITE);
-canvas.pixel(0, 695, RED);
-canvas.pixel(0, 696, GREEN);
-canvas.pixel(0, 697, BLUE);
+//canvas.pixel(0, 1, CYAN);
+//canvas.pixel(0, 10, RED);
+//canvas.pixel(0, 20, GREEN);
+//canvas.pixel(0, 30, BLUE);
+//canvas.pixel(0, 40, WHITE);
+//canvas.pixel(0, 50, RED);
+//canvas.pixel(0, 679, WHITE);
+//canvas.pixel(0, 695, RED);
+//canvas.pixel(0, 696, GREEN);
+//canvas.pixel(0, 697, BLUE);
     for (var x = 0; x < canvas.width; ++x)
         for (var y = 0; y < canvas.height; ++y, ++canvas.elapsed)
         {
             for (;;)
             {
-                var ch = yield getchar("Next pixel (%d, %d) %s %s?".pink_lt, x, y, color, canvas.WS281X_FMT? "fmt": "no-fmt");
+                var ch = yield getchar(`Next pixel (${x}, ${y}), ${color} ${canvas.WS281X_FMT? "": "no-"}fmt?`.pink_lt);
                 if (ch == "q") { debug("quit".green_lt); return; }
                 if (ch == "f") { canvas.WS281X_FMT = !canvas.WS281X_FMT; continue; } //toggle formatting
                 if (ch in PALETTE) { color = ch; continue; } //change color

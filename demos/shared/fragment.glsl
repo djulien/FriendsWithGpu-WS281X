@@ -17,7 +17,7 @@ uniform bool WS281X_FMT; //allow turn on/off at run-time for demo/debug purposes
 
 //from vertex shader:
 varying vec4 vColor; //vertex color data from vertex shader
-varying vec4 vColor24; //pivoted vertex color data from vertex shader (24 adjacent pixels)
+//varying vec4 vColor24; //pivoted vertex color data from vertex shader (24 adjacent pixels)
 varying float debug_val;
 
 //WS281X bit timing:
@@ -54,10 +54,10 @@ const float BIT_DATA_END = max(BIT_0H, BIT_1H) - 0.03; //after this time is low;
  const vec2 LEGEND = vec2(0.9, 0.1);
  vec4 legend(float x, float y); //fwd ref
 #endif //def WS281X_DEBUG
-#define NO_OVERSCAN(x)  ((x) * 24.0 / 23.5)
+#define NO_OVERSCAN(x)  ((x) * 24.0 / 23.5) //effective horizontal value with no hblank
 
 
-//edges for drawing vertices:
+//edges for drawing vertices as light bulbs (dev mode):
 //NOTE: shape could be elliptical when vertex width != height
 const float EDGE = 0.5 * 0.5; //to match distance, not using sqrt()
 //const float EDGE = min(VERTEX_WIDTH, VERTEX_HEIGHT) / VERTEX_SIZE; //max(VERTEX_WIDTH, VERTEX_HEIGHT) / 2.0;
@@ -68,7 +68,8 @@ const float VERTEX_CLIP = VERTEX_HEIGHT / VERTEX_SIZE; //portion of vertex heigh
 
 void main(void)
 {
-//gl_FragCoord is window space [0..size),[0..size) with pixels centered at (0.5, 0.5)
+//gl_FragCoord is window relative coordinate (x, y, z, 1/w)
+//window space is [0..width),[0..height) with pixels centered at (0.5, 0.5)
     float x = gl_FragCoord.x / SCR_WIDTH; //[0..1); NOTE: includes overscan
     float y = gl_FragCoord.y / SCR_HEIGHT; //[0..1); NOTE: 0 is at bottom of screen
 //    y -= 0.5 / SCR_HEIGHT; //kludge: y coord seems to be off by 1/2 pixel
@@ -76,17 +77,17 @@ void main(void)
 #ifdef PROGRESS_BAR //show progress at bottom of screen
     if ((y < 0.005) && (NO_OVERSCAN(x) <= elapsed / duration))
     {
-        gl_FragColor = WHITE; //progress bar (debug/test only)
+        gl_FragColor = WHITE; //progress bar (dev/test only)
         return;
     }
 #endif //def PROGRESS_BAR
 
 #ifdef WS281X_DEBUG //debug a float value
-    if (!EQ(debug_val, 0.0)) // != 0.0)
+    if (debug_val != 0.0) //!EQ(debug_val, 0.0))
     {
-        float novx = NO_OVERSCAN(x); //align to right edge of window; don't overscan
-        if ((y >= 0.20) && (y < 0.22)) { gl_FragColor = LT(novx, debug_val)? GREEN: RED; return; }
-        if ((y >= 0.22) && (y < 0.24)) { gl_FragColor = (abs(novx - floor(novx * 10.0 + FUD) / 10.0) < 0.002)? CYAN: (abs(novx - floor(novx * 100.0 + FUD) / 100.0) < 0.002)? MAGENTA: BLACK; return; }
+        float noverx = NO_OVERSCAN(x); //align to right edge of window; don't overscan
+        if ((y >= 0.20) && (y < 0.22)) { gl_FragColor = IIF(noverx < debug_val, GREEN, RED); return; } //show value; //LT(noverx, debug_val)? GREEN: RED; return; }
+        if ((y >= 0.22) && (y < 0.24)) { gl_FragColor = (abs(noverx - floor(noverx * 10.0 + FUD) / 10.0) < 0.002)? CYAN: (abs(noverx - floor(noverx * 100.0 + FUD) / 100.0) < 0.002)? MAGENTA: BLACK; return; } //show accuracy
     }
 #endif
 
@@ -101,7 +102,7 @@ void main(void)
 //        if (vColor.a == 0.0) discard; //transparent pixel; http://stackoverflow.com/a/5985195/806988
 	    float distsq = dot(coord, coord); //distance squared; no need to take sqrt if just doing a compare for discard
 //        if (distsq > 0.5 * FUD) gl_FragColor = MAGENTA;", //discard;
-        if (distsq > EDGE) discard;
+        if (distsq > EDGE) discard; //outside of elipse; leave dark
         gl_FragColor = vColor; //use pixel color from vertex shader
 //        gl_FragColor *= 1.0 - distsq / (1.2 * EDGE); //diffuse to look more like light bulbs
         return;
@@ -157,7 +158,7 @@ void main(void)
 //leader (on), encoded data, trailer (off), original color (debug only)
 //use in-line arithmetic to avoid branching
     gl_FragColor = IF(LE(bitangle.x, BIT_DATA_BEGIN), WHITE) + //WS281X bits start high
-                   IF(LE(bitangle.x, BIT_DATA_END), vColor24) + //pivoted pixel data in middle
+                   IF(LE(bitangle.x, BIT_DATA_END), vColor) + //pivoted pixel data in middle
                    BLACK; //WS281X bits end low
 //gl_FragColor = gray(bity);
 }

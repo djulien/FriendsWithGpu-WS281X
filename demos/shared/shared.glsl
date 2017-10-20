@@ -110,17 +110,28 @@ const float FLOAT2BITS = 255.0 / 256.0; //convert normalized [0..1] to sum of bi
 
 
 //dimensions of vertices on screen:
-//NOTE: values below will be filled in by GpuCanvas; example numbers are from config.txt
+//NOTE: values below will be filled in by GpuCanvas; example numbers are from example RPi config.txt
 const float SCR_WIDTH = float(CALLER_SCR_WIDTH); //1536
-const float SCR_HEIGHT = float(CALLER_SCR_HEIGHT); //1104
-const float VERTEX_WIDTH = float(CALLER_VERTEX_WIDTH); //floor(SCR_WIDTH / NUM_UNIV); //64
-const float VERTEX_HEIGHT = float(CALLER_VERTEX_HEIGHT); //floor(SCR_HEIGHT / UNIV_LEN); //1 or 46
-const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex size
+const float SCR_HEIGHT = float(CALLER_SCR_HEIGHT); //1152
+const float WND_WIDTH = float(CALLER_WND_WIDTH); //1488; portion of hscan that is actually visible
+const float WND_HEIGHT = float(CALLER_WND_HEIGHT); //1104; portion of vscan that is actually visible
+//const float VERTEX_WIDTH = float(CALLER_VERTEX_WIDTH); //floor(SCR_WIDTH / NUM_UNIV); //64
+//const float VERTEX_HEIGHT = float(CALLER_VERTEX_HEIGHT); //floor(SCR_HEIGHT / UNIV_LEN); //1 or 46
+//const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex size
+const float NUM_UNIV = float(CALLER_TXR_WIDTH); //ceil(SCR_WIDTH / VERTEX_WIDTH); //float(??); //24
+const float UNIV_LEN = float(CALLER_TXR_HEIGHT); //ceil(SCR_HEIGHT / VERTEX_HEIGHT); //float(??); //1104 for GPIO, ~ 18 - 24 for dev/screen
 
-const float NUM_UNIV = ceil(SCR_WIDTH / VERTEX_WIDTH); //float(??); //24
-const float UNIV_LEN = ceil(SCR_HEIGHT / VERTEX_HEIGHT); //float(??); //1104 for GPIO, 24 for screen
+const float VERTEX_WIDTH = floor(SCR_WIDTH / NUM_UNIV); //64
+const float VERTEX_HEIGHT = floor(SCR_HEIGHT / UNIV_LEN); //1 or 46
+const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex size
 //const float MAX_UNIV = NUM_UNIV - 1.0;
 //const float UNIV_MAX = UNIV_LEN - 1.0;
+//uniform float SCR_WIDTH, SCR_HEIGHT;
+//uniform float WND_WIDTH, WND_HEIGHT;
+//uniform float TXR_WIDTH, TXR_HEIGHT;
+//const float VERTEX_WIDTH = float(CALLER_VERTEX_WIDTH); //floor(SCR_WIDTH / NUM_UNIV); //64
+//const float VERTEX_HEIGHT = float(CALLER_VERTEX_HEIGHT); //floor(SCR_HEIGHT / UNIV_LEN); //1 or 46
+//const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex size
 
 
 //caller config options:

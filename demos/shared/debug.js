@@ -9,22 +9,24 @@
 // DEBUG=-thing
 
 'use strict'; //find bugs easier
-require('colors'); //for console output
+require('colors').enabled = true; //for console output colors
 const path = require('path');
 const {elapsed, milli} = require('./elapsed');
+const {caller/*, calledfrom, shortname*/} = require("./caller");
 
-const ColorCodes = /\x1b\[\d+(;\d+)?m/;
+const ColorCodes = /\x1b\[\d+(;\d+)?m/; //ANSI color escape codes
+
 //console.log("parent", module.parent);
-const my_parent = path.basename(module.parent.filename, path.extname(module.parent.filename));
-delete require.cache[__filename]; //kludge: get fresh parent info each time; see http://stackoverflow.com/questions/13651945/what-is-the-use-of-module-parent-in-node-js-how-can-i-refer-to-the-requireing
+//const my_parent = path.basename(module.parent.filename, path.extname(module.parent.filename));
+//delete require.cache[__filename]; //kludge: get fresh parent info each time; see http://stackoverflow.com/questions/13651945/what-is-the-use-of-module-parent-in-node-js-how-can-i-refer-to-the-requireing
 //const parent_name = module.parent.filename;
 
 var enabled = {};
 (process.env.DEBUG || "").split(/\s*,\s*/).forEach((part, inx) =>
 {
-    if (!part) return;
+    if (!part) return; //continue;
     var parsed = part.match(/^([+-])?([^\s=]+|\*)(\s*=\s*(\d+))?$/);
-    if (!parsed) { console.log("ignoring unrecognized DEBUG option[%d]: '%s'".red_lt, inx, part); return; }
+    if (!parsed) { console.error(`ignoring unrecognized DEBUG option[${inx}]: '${part}'`.red_lt); return; }
     var [, remove, name,, level] = parsed;
 //    console.log("part: \"%s\", +/- '%s', name '%s', level '%s'", part, remove, name, level);
     if (name == "*") //all on/off; clear previous options
@@ -38,26 +40,30 @@ const debug =
 module.exports.debug =
 function debug(args)
 {
+//console.error("debug:" + JSON.stringify(arguments));
     var detail = 0;
     args = Array.from(arguments); //turn into real array
     if ((args.length >= 1) && (typeof args[0] == "number")) { detail = args[0]; args.shift(); }
     if ((args.length < 1) || (typeof args[0] != "string")) args.unshift("%j"); //placeholder for fmt
 
-    var want_detail = enabled[my_parent] || enabled['*'] || -1;
+    var my_parent = caller(-1 - debug.nested); debug.nested = 0; //reset it for next time
+    var want_detail = enabled[my_parent.replace(/^@|:.*$/, "")] || enabled['*'] || -1;
 //console.log("DEBUG '%s': want %d vs current %d, discard? %d, options %j", my_parent, want_detail, detail, detail >= want_detail, enabled);
     if (detail >= want_detail) return; //too much detail; user doesn't want it
     var fmt = args[0];
 //    ColorCodes.lastIndex = -1; //clear previous search (persistent)
     var match = ColorCodes.exec(fmt);
 //console.log("found last", match, ColorCodes);
-    ColorCodes.lastIndex = 0; //reset for next time (persistent)
+    ColorCodes.lastIndex = 0; //reset for next time (regex state is persistent)
 //    var svcolor = [];
 //    fmt = fmt.replace(ColorCodes, function(str) { svcolor.push(str); return ''; }); //strip color codes
 //    if (!svcolor.length) svcolor.push('');
     var ofs = (match && !match.index)? match[0].length: 0; //don't split leading color code
-    args[0] = fmt.substr(0, ofs) + my_parent + "[@" + milli(elapsed()) + "] " + fmt.substr(ofs);
+    args[0] = fmt.substr(0, ofs) + `[${my_parent.slice(1)}@${milli(elapsed())}] ` + fmt.substr(ofs);
 
-    return console.log.apply(console, args);
+    return console.error.apply(console, args); //send to stderr in case stdout is piped
 }
+debug.nested = 0; //allow caller to adjust stack level
+
 
 //eof

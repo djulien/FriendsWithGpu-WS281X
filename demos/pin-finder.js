@@ -22,7 +22,7 @@ const {GpuCanvas} = require('./shared/GpuCanvas');
 //display settings:
 const SPEED = 0.5; //animation speed (sec)
 const DURATION = 60; //how long to run (sec)
-const UNIV_LEN = 30/3; //Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
+const UNIV_LEN = Screen.gpio? Screen.vert.disp: 30; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
 debug("window %d x %d, video cfg %d x %d vis (%d x %d total), using gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, Screen.gpio);
 

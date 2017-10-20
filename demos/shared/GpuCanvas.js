@@ -34,7 +34,7 @@
 
 
 'use strict'; //find bugs easier
-require('colors'); //for console output
+require('colors').enabled = true; //for console output colors
 const fs = require('fs');
 const path = require('path');
 const WebGL = require('node-webgl'); //NOTE: for RPi must be lukaaash/node-webgl or djulien/node-webgl version, not mikeseven/node-webgl version
@@ -88,29 +88,46 @@ class GpuCanvas
 {
     constructor(title, w, h, opts) //, vgroup)
     {
+//round up in case caller calculated based on screen size; can't have fractional pixels:
+        w = Math.ceil(w);
+        h = Math.ceil(h);
 //        this.opts = opts || {};
-        this.size =
-        {
+//        this.sizes = //these values will be passed to shaders
+//        {
 //    if (!Screen.gpio /*&& this.WS281X_DEBUG*/)
-            get hoverscan() { return Screen.horiz.res / Screen.horiz.disp; }, //need overscan to align with WS281X T0L
-            get scrw() { return Screen.width * this.hoverscan; }, //NOTE: always use h res for consistent results; preserve/calculate horiz overscan in case config file not active
-            get scrh() { return Screen.height; }, //screen height used as-is; don't care about vert overscan
+//            get hoverscan() { return Screen.horiz.res / Screen.horiz.disp; }, ///need overscan to align with WS281X T0L; should be 24/23.25
+//            scrw: Screen.horiz.res, //get scrw() { return Math.round(Screen.width * this.hoverscan); }, //NOTE: always use h res for consistent results; preserve/calculate horiz overscan in case config file not active
+//            scrh: Screen.vert.res, //not used
+//            wndw: Screen.horiz.disp, //visible portion of screen
+//            wndh: Screen.vert.disp, //get scrh() { return Screen.vert.dispheight; }, //screen height used as-is; don't care about vert overscan
 //TODO: use floor or ceil?
-            get vtxw() { return this.scrw / w; },
-            get vtxh() { return this.scrh / h; }, //screen height is always used, so vgroup can be reconstructed from h parameter
-        };
+//            get vtxw() { return Math.round(this.scrw / w); },
+//            get vtxh() { return Math.round(this.scrh / h); }, ///screen height is always used, so vgroup can be reconstructed from h parameter
+//            txrw: w,
+//            txrh: h,
+//        };
+//        debug(`canvas: scr ${this.sizes.scrw} x ${this.sizes.scrh}, vis wnd ${this.sizes.wndw} x ${this.sizes.wndh}, vtx ${this.sizes.vtxw} x ${this.sizes.vtxh}`.blue_lt);
         var gpufx = opts.gpufx && path.resolve(path.dirname(calledfrom(2)), opts.gpufx); //convert relative to abs path wrt caller
+        debug(`gpufx '${gpufx}'`.blue_lt);
         pushable.call(this, Object.assign(DEFAULT_OPTS, opts || {}, gpufx && {gpufx}));
         if (Screen.gpio) this.WS281X_FMT = true; //can't see debug info, so turn on formatting
 //        if (gl) return; //only need one
 //        console.log("canvas: '%s' %d x %d", title, w, h);
 //        console.log("canvas opts: fmt %j", this.WS281X_FMT);
 //        console.log("canvas opts: limits %j", this.SHOW_LIMITS);
-        initGL.call(this);
+//        var wndw = this.size.scrw, wndh = this.size.scrh; //full screen
+//        if (!Screen.gpio) //dev mode; leave some room for other stuff on screen
+//        {
+//            var scale = Math.min(Screen.horiz
+//            var scanw = wndw * 24/23.25;
+//            wndh = Math.min(wndh, scanw * 3 / 4);
+//            wndw = 
+//        }
+        initGL.call(this); //, wndw, wndh);
         document.setTitle(title || "WS281X demo");
 //        initTexture(w, h);
 //??        h = Math.max(w, h); //kludge: make width <= height to simplify overlap logic in shader
-        this.txr = new Texture(this.gl, Math.ceil(w), Math.ceil(h)); //round up; can't have fractional pixels
+        this.txr = new Texture(this.gl, w, h);
         glcheck("init txtr", this.getError());
         initShaders.call(this);
         initBuffers.call(this);
@@ -121,7 +138,7 @@ class GpuCanvas
 //        this.id = all.uniqid;
         GpuCanvas.all.push(this);
         if (GpuCanvas.all.length == 1) rAF(true); //start screen refresh loop
-        else debug("possible canvas conflict: %d".red_lt, GpuCanvas.all.length);
+        else debug(`possible canvas conflict: ${GpuCanvas.all.length}`.red_lt);
 //    gl.enable(gl.DEPTH_TEST);
 //    gl.clearColor(0.0, 0.0, 0.0, 1.0); //start out blank
         onexit(this.destroy.bind(this)); //stop rAF loop for clean exit
@@ -130,7 +147,7 @@ class GpuCanvas
     destroy() //dtor
     {
         var inx = GpuCanvas.all.indexOf(this); //findIndex(function(that) { return that.id == this.id; }.bind(this)); //all.indexOf(this);
-        debug("destroy: found@ %d, #canv %d, del? %s".yellow_lt, inx, GpuCanvas.all.length, inx != -1);
+        debug(`destroy: found@ ${inx}, #canv %{GpuCanvas.all.length}, del? ${inx != -1}`.yellow_lt);
         if (inx != -1) GpuCanvas.all.splice(inx, 1);
         if (!GpuCanvas.all.length) rAF(false); //cancel screen refresh loop
     }
@@ -144,7 +161,7 @@ class GpuCanvas
 //console.log("elapsed", newval);
         var new_filter = this.interval? Math.floor(newval / this.duration / this.interval): newval / this.duration;
         if (new_filter == this.elapsed_filter) return;
-        debug(10, "elapsed: was %d, is now %d / %d, #rAF %d".blue_lt, micro(this.prior_elapsed), micro(newval), this.duration, rAF.count); //, new_filter);
+        debug(10, `elapsed: was ${micro(this.prior_elapsed)}, is now ${micro(newval)} / ${this.duration}, #rAF ${rAF.count || 0}`.blue_lt); //, new_filter);
 rAF.count = 0;
         this.elapsed_filter = new_filter;
         this.gl.uniform1f(this.shpgm.uniforms.elapsed, newval);
@@ -296,11 +313,11 @@ function setup()
 
 
 //GpuCanvas.prototype.initGL = 
-function initGL() //canvas)
+function initGL(w, h) //canvas)
 {
     try
     {
-        var canvas = document.createElement("ws281x-canvas"); //NOTE: name needs to include "canvas" for node-webgl to work
+        var canvas = /*BROKEN Screen.canvas ||*/ document.createElement("ws281x-canvas", Screen.canvas.width, Screen.canvas.height); //reuse Screen canvas if there; NOTE: name needs to include "canvas" for node-webgl to work
         var gl = this.gl = canvas.getContext("experimental-webgl");
         gl.isGLES = (gl.getParameter(gl.SHADING_LANGUAGE_VERSION).indexOf("GLSL ES") != -1); //check desktop (non-RPi) vs. embedded (RPi) version
 
@@ -319,6 +336,11 @@ function initGL() //canvas)
         gl.clearColor(R(BLACK), G(BLACK), B(BLACK), A(BLACK)); //color to clear buf to; clamped
         glcheck("init-5", this.getError());
 
+//NOTE: var keys requires ES6
+        gl.FMTS = {[gl.BGRA]: "BGRA", [gl.RGBA]: "RGBA"}; //for debug msgs
+        gl.SHTYPES = {[gl.FRAGMENT_SHADER]: "fragment", [gl.VERTEX_SHADER]: "vertex"};
+//console.log("fmts %j, shtypes %j", gl.FMTS, gl.SHTYPES);
+
         if (!this.SHOW_LIMITS) return;
         debug(10, "canvas: w %s, h %s, viewport: w %s, h %s".blue_lt, canvas.width, canvas.height, gl.viewportWidth, gl.viewportHeight);
         debug(10, "glsl ver# %s, is GL ES? %s".blue_lt, gl.getParameter(gl.SHADING_LANGUAGE_VERSION), gl.isGLES);
@@ -327,7 +349,7 @@ function initGL() //canvas)
         debug(10, "medium int precision/range: vsh %j, fsh %j".blue_lt, gl.getShaderPrecisionFormat(gl.VERTEX_SHADER, gl.MEDIUM_INT), gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.MEDIUM_INT)); //[-126,127], 0 on RPi
         debug(10, "high float prec/range: vsh %j, fsh %j".blue_lt, gl.getShaderPrecisionFormat(gl.VERTEX_SHADER, gl.HIGH_FLOAT), gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT)); //[-126,127], -23 on RPi
         debug(10, "high int precision/range: vsh %j, fsh %j".blue_lt, gl.getShaderPrecisionFormat(gl.VERTEX_SHADER, gl.HIGH_INT), gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_INT)); //[-126,127], 0 on RPi
-        debug(10, "max viewport dims: %s".blue_lt, gl.getParameter(gl.MAX_VIEWPORT_DIMS)); //2K,2K on RPi
+        debug(10, "max viewport dims: %j".blue_lt, gl.getParameter(gl.MAX_VIEWPORT_DIMS)); //2K,2K on RPi
         debug(10, "max #textures: vertex %d, fragment %d, combined %d".blue_lt, gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS), gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS)); //8 on RPi
         debug(10, "aliased line width range: %j".blue_lt, gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE)); //[0,256] on RPi
         debug(10, "aliased point size range: %j".blue_lt, gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)); //[0,256] on RPi
@@ -391,11 +413,11 @@ function initShaders() //vzoom)
 //        const ist = initShaders.ShaderTypes = {};
 //        ist[gl.FRAGMENT_SHADER] = "fragment";
 //        ist[gl.VERTEX_SHADER] = "vertex";
-        const ist = initShaders.ShaderTypes = //NOTE: var keys requires ES6
-        {
-            [gl.FRAGMENT_SHADER]: "fragment",
-            [gl.VERTEX_SHADER]: "vertex",
-        };
+//        const ist = initShaders.ShaderTypes = //NOTE: var keys requires ES6
+//        {
+//            [gl.FRAGMENT_SHADER]: "fragment",
+//            [gl.VERTEX_SHADER]: "vertex",
+//        };
 //        ist[gl.FRAGMENT_SHADER] = "fragment";
 //        ist[gl.VERTEX_SHADER] = "vertex";
 //    }
@@ -414,8 +436,8 @@ function initShaders() //vzoom)
             reason = "; reason: " + gl.getProgramInfoLog(shpgm);
         if (!this.SHOW_SHSRC)
         {
-            showsrc(null, ist[gl.VERTEX_SHADER], true);
-            showsrc(null, ist[gl.FRAGMENT_SHADER], true);
+            showsrc(null, gl.SHTYPES[gl.VERTEX_SHADER], true);
+            showsrc(null, gl.SHTYPES[gl.FRAGMENT_SHADER], true);
         }
         alert("Could not initialise shaders %s".red_lt, reason);
 		gl.deleteProgram(shpgm);
@@ -432,7 +454,8 @@ function initShaders() //vzoom)
     gl.gAL = gl.getAttribLocation;
     gl.gUL = gl.getUniformLocation;
     gl.eVAA = gl.enableVertexAttribArray;
-//these will always be used, so just enable them once here
+//these will always be used, so just enable them once here:
+//undefined errors here if GLSL compiler optimizes them out
     gl.eVAA(shpgm.vxinfo.vXYZ = glcheck("vXYZ", gl.gAL(shpgm, "vXYZ")));
     gl.eVAA(shpgm.vxinfo.hUNM = glcheck("hUNM", gl.gAL(shpgm, "hUNM")));
     gl.eVAA(shpgm.vxinfo.mXYWH = glcheck("mXYWH", gl.gAL(shpgm, "mXYWH")));
@@ -505,10 +528,24 @@ function getShader(type, filename) //str)
 //    if (Screen.gpio || this.WS281X_FMT) cpp.define("WS281X_FMT", ""); //allow this one to change at run-time (for test/debug)
     if (!Screen.gpio && this.WS281X_DEBUG) cpp.define("WS281X_DEBUG", "");
     if (!Screen.gpio && this.SHOW_PROGRESS) cpp.define("PROGRESS_BAR", "");
-    cpp.define("CALLER_SCR_WIDTH", this.size.scrw); //Screen.width); //(Screen.gpio? Screen.horiz.res: scrw)); //NOTE: use h res here; need overscan to align with WS281X T0L
-    cpp.define("CALLER_SCR_HEIGHT", this.size.scrh); //(Screen.gpio? Screen.vert.disp: Screen.height));
-    cpp.define("CALLER_VERTEX_WIDTH", this.size.vtxw); //gl.viewportWidth);
-    cpp.define("CALLER_VERTEX_HEIGHT", this.size.vtxh); //gl.viewportHeight);
+//NOTE: passed as macros so shader can use them for consts or preprocessor (uniforms can't be used for consts)
+//    cpp.define("CALLER_SCR_WIDTH", this.sizes.scrw); //Screen.width); //(Screen.gpio? Screen.horiz.res: scrw)); //NOTE: use h res here; need overscan to align with WS281X T0L
+//    cpp.define("CALLER_SCR_HEIGHT", this.sizes.scrh); //Screen.width); //(Screen.gpio? Screen.horiz.res: scrw)); //NOTE: use h res here; need overscan to align with WS281X T0L
+//    cpp.define("CALLER_WND_WIDTH", this.sizes.wndw); //visible portion of screen
+//    cpp.define("CALLER_WND_HEIGHT", this.sizes.wndh); //(Screen.gpio? Screen.vert.disp: Screen.height));
+////    cpp.define("CALLER_VERTEX_WIDTH", this.sizes.vtxw); //gl.viewportWidth);
+////    cpp.define("CALLER_VERTEX_HEIGHT", this.sizes.vtxh); //gl.viewportHeight);
+//    cpp.define("CALLER_TXR_WIDTH", this.sizes.vtxw); //gl.viewportWidth);
+//    cpp.define("CALLER_TXR_HEIGHT", this.sizes.vtxh); //gl.viewportHeight);
+    cpp.define("CALLER_SCR_WIDTH", Screen.horiz.res); //NOTE: use h res here; need overscan to align with WS281X T0L
+    cpp.define("CALLER_SCR_HEIGHT", Screen.vert.res);
+    cpp.define("CALLER_WND_WIDTH", Screen.horiz.disp); //visible portion of screen
+    cpp.define("CALLER_WND_HEIGHT", Screen.vert.disp);
+//    cpp.define("CALLER_VERTEX_WIDTH", this.sizes.vtxw); //gl.viewportWidth);
+//    cpp.define("CALLER_VERTEX_HEIGHT", this.sizes.vtxh); //gl.viewportHeight);
+    cpp.define("CALLER_TXR_WIDTH", this.txr.width);
+    cpp.define("CALLER_TXR_HEIGHT", this.txr.height);
+    debug(`pass to ${gl.SHTYPES[type]} shader: scr ${Screen.horiz.res} x ${Screen.vert.res}, vis wnd ${Screen.horiz.disp} x ${Screen.vert.disp}, txr ${this.txr.width} x ${this.txr.height}`.blue_lt);
     if (this.gpufx && (type == gl.VERTEX_SHADER)) //insert custom GPU fx
     {
         cpp.define("CUSTOM_GPUFX", "");
@@ -546,8 +583,8 @@ function getShader(type, filename) //str)
 //    getShader.defs = defs;
 //    str = str.replace(/(\WVERTEX_WIDTH\s*=.*?)\?\?/, "$1" + this.size.vtxw); //gl.viewportWidth);
 //    str = str.replace(/(\WVERTEX_HEIGHT\s*=.*?)\?\?/, "$1" + this.size.vtxh); //gl.viewportHeight);
-    getShader[initShaders.ShaderTypes[type] + "_src"] = str; //save src in case error shows up later
-    if (this.SHOW_SHSRC) showsrc(str, initShaders.ShaderTypes[type]);
+    getShader[gl.SHTYPES[type] + "_src"] = str; //save src in case error shows up later
+    if (this.SHOW_SHSRC) showsrc(str, gl.SHTYPES[type]);
 //process.exit(0);
 
     var shader = glcheck("shader", gl.createShader(type)); //gl.FRAGMENT_SHADER);
@@ -555,7 +592,7 @@ function getShader(type, filename) //str)
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
     {
-        if (!this.SHOW_SHSRC) showsrc(str, initShaders.ShaderTypes[type], true);
+        if (!this.SHOW_SHSRC) showsrc(str, gl.SHTYPES[type], true);
         alert(gl.getShaderInfoLog(shader));
         return null;
     }
@@ -677,7 +714,7 @@ function initBuffers()
     var numvert = this.width * this.height;
 //    var vtxw = Screen.horiz.res / this.width, vtxh = Screen.vert.disp / this.height;
 //    var xofs = (vtxw < vtxh)? 0: 0.5, yofs = (vtxw < vtxh)? 0: 0;
-    var xofs = 0, yofs = 0;
+    var xofs = 0, yofs = 0; //use integer coordinates here and adjust viewport later to avoid vertex clipping
 //console.log("vertex shift: w %s, h %s, xofs %s, yofs %s", micro(vtxw), micro(vtxh), xofs, yofs);
         for (var y = 0; y < this.height; ++y)
     for (var x = 0; x < this.width; ++x)
@@ -708,7 +745,7 @@ function initBuffers()
     glcheck("initbufs-1", this.getError());
     vxbuf.itemSize = 3+3+4; //vec3 + vec3 + vec4 per vertex
     vxbuf.numItems = vertices.length / vxbuf.itemSize;
-debug("vertex: data size %s bytes, #items %d x %d = %s, %j".cyan_lt, fllen(vxbuf.itemSize), this.width, this.height, vxbuf.numItems, this.shpgm.vxinfo);
+    debug("vertex: data %s bytes, #items %d x %d = %s, attrs %j".cyan_lt, fllen(vxbuf.itemSize), this.width, this.height, vxbuf.numItems, this.shpgm.vxinfo);
 //    gl.bindBuffer(gl.ARRAY_BUFFER, this.vxbuf);
     gl.vertexAttribPointer(this.shpgm.vxinfo.vXYZ, 3, gl.FLOAT, false, fllen(this.vxbuf.itemSize), fllen(0));
     glcheck("initbufs-2", this.getError());
@@ -815,9 +852,18 @@ function initProjection()
 //    mat4.ortho(0, this.width / overscan, this.height, 0, 0.1, 100.0, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
 //    var vtxw = Screen.horiz.res / this.width, vtxh = Screen.vert.disp / this.height;
 //    var xofs = (vtxw < vtxh)? -1: 0, yofs = (vtxw < vtxh)? 0: 0;
-    var margins = (this.size.vtxw < this.size.vtxh)? {L: -1, R: -0.5, T: -1, B: -0.5}: {L: -0.5, R: -0.5, T: -1, B: -1}; //viewport tuning
-console.log("viewport adjust: vertex w %s, h %s -> margins %j", micro(this.size.vtxw), micro(this.size.vtxh), margins);
-    mat4.ortho(margins.L, this.width - 0.5 + margins.R, this.height + margins.B, margins.T, 0, 100, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
+//    var margins = (this.size.vtxw < this.size.vtxh)? {L: -1, R: -0.5, T: -1, B: -0.5}: {L: -0.5, R: -0.5, T: -1, B: -1}; //viewport tuning
+//    debug("viewport adjust: vertex %s x %s -> margins %j", micro(this.size.vtxw), micro(this.size.vtxh), margins);
+//    var vp = {L: margins.L, R: this.width - 0.5 + margins.R, B: this.height + margins.B, T: margins.T, N: 0, F: 100}; //project x, y as-is
+//NOTE: top left vertex is at (0, 0), so viewport needs to be offset by (-0.5, -0.5) so pixel will be rendered on-screen
+//similarly, bottom of viewport needs to be offset by 0.5; right edge needs to be offset by 1.0 because last column of pixels need to be clipped
+//    var margins = {L: -0.5, R: -1.0, B: -0.5, T: -0.5};
+//????    var vp = {L: -0.5, R: this.width - 1.0, B: this.height - 0.5, T: -0.5, N: 0, F: 100};
+//vertices are integral coordinates, so viewport needs to be shifted -0.5 to prevent clipping
+//expand viewport to include entire vertex; use shader to clip right edge correctly
+    var vp = {L: -0.5, R: this.width - 0.5, B: this.height - 0.5, T: -0.5, N: 0, F: 100};
+    debug("viewport: L %s, R %s, B %s, T %s => %j".blue_lt, diff(vp.L - 0), diff(vp.R - this.width), diff(vp.B - this.height), diff(vp.T - 0), vp);
+    mat4.ortho(vp.L, vp.R, vp.B, vp.T, vp.N, vp.F, this.pMatrix); //project x, y as-is; left, right, bottom, top, near, far
 //    debug("viewport projection: overscan %s vs. %s".cyan_lt, this.width - 0.5, micro(this.width / overscan));  //overscan should be 3/4 pixel
 
 //if (!drawScene.count) drawScene.count = 0;
@@ -1132,7 +1178,7 @@ function init(gl, width, height, want_pixels)
 {
 //    if (this.txtr) return;
     this.gl = gl;
-    this.WS281X_FMT = 
+//    this.WS281X_FMT = ?
     this.txtr = gl.createTexture();
     this.width = Math.floor(width);
     this.height = Math.floor(height); //UNIV_LEN / VGROUP);
@@ -1166,11 +1212,13 @@ function init(gl, width, height, want_pixels)
 //    var uint32s = new Uint32Array(buf); //this.pixel_uint32s =
 //console.log(typeof buf, typeof uint32s);
 //console.log(uint32s);
-    this.pixel_bytes = new Uint8Array(this.width * this.height * Uint32Array.BYTES_PER_ELEMENT);
+    this.pixel_buf = new ArrayBuffer(this.width * this.height * Uint32Array.BYTES_PER_ELEMENT);
+    this.pixel_bytes = new Uint8Array(this.pixel_buf);
+    this.pixel_uint32 = new Uint32Array(this.pixel_buf);
 //byte shuffling to reduce GPU texture lookups:
-//NOTE: RPi (GLES) wants BGRA, R <-> B
-    this.rdpixel = rdpixel_RPi.bind(this); //(this.gl.isGLES? rdpixel_GLES: rdpixel_GL).bind(this); //rdpixel_RPi;
-    this.wrpixel = wrpixel_RPi.bind(this); //(this.gl.isGLES? wrpixel_GLES: wrpixel_GL).bind(this); //wrpixel_RPi;
+//NOTE: RPi (GLES) wants BGRA (R <-> B), GL wants ARGB
+//    this.rdpixel = (this.gl.isGLES? rdpixel_GLES: rdpixel_GL).bind(this); //rdpixel_RPi;
+//    this.wrpixel = (this.gl.isGLES? wrpixel_GLES: wrpixel_GL).bind(this); //wrpixel_RPi;
 //    this.pivot24 = this.gl.isGLES? pivot24_GLES: pivot24_GL;
 //RPi GPU doesn't have enough bandwidth for a 24x24 bit pivot, so use CPU instead
 //NOTE: this puts a greater load on RPi CPU and probably requires a background worker thread
@@ -1183,8 +1231,15 @@ function init(gl, width, height, want_pixels)
 //    for (var retry in [false, true, -1])
 //    {
 //        if (retry == -1) throw "can't figure out byte order";
-    this.wrpixel(0, 0x11223344); //check byte order
-    debug(10, "byte order[%s]: %s %s %s %s".blue_lt, 0, (this.pixel_bytes[0] + 0).toString(16), (this.pixel_bytes[4] + 0).toString(16), (this.pixel_bytes[8] + 0).toString(16), (this.pixel_bytes[12] + 0).toString(16));
+    this.pixel_bytes.set([0x11, 0x22, 0x33, 0x44]); //BGRA test value
+    if (rdpixel_GL.call(this, 0) == 0x44332211) //this.pixel_uint32[0]
+    {
+        this.rdpixel = rdpixel_GL.bind(this); //rdpixel_RPi;
+        this.wrpixel = wrpixel_GL.bind(this); //wrpixel_RPi;
+    }
+//    else if (rdpix
+    else throw `Unknown byte order: 0x${rdpixel_GL.call(this, 0).toString(16)}`.red_lt;
+//    debug(10, "byte order[%s]: %s %s %s %s".blue_lt, 0, this.pixel_bytes[0].toString(16), this.pixel_bytes[1].toString(16), this.pixel_bytes[2].toString(16), this.pixel_bytes[3].toString(16));
 //        if (this.pixel_bytes[0] == 0x22) break; //that's where we want it
 //        splitter.LE = !splitter.LE;
 //    }
@@ -1198,10 +1253,10 @@ function init(gl, width, height, want_pixels)
 //    this.fmt = gl.RGBA;
 //    this.fmt = gl.BGRA;
 //GL_RGB, GL_BGR, GL_RGBA, GL_BGRA
-    var fmt2 = gl.isGLES? gl.BGRA: gl.RGBA; //NOTE: RPi requires BGRA here
+    var fmt2 = gl.isGLES? gl.BGRA: gl.RGBA; //NOTE: RPi (GLES) requires BGRA here; OpenGL wants it the other way
     this.fmt = fmt2;
-    const FMTS = {}; FMTS[gl.BGRA] = "BGRA"; FMTS[gl.RGBA] = "RGBA";
-    debug(10, "fmts: %s %s".blue_lt, FMTS[this.fmt], FMTS[fmt2]);
+//    const FMTS = {}; FMTS[gl.BGRA] = "BGRA"; FMTS[gl.RGBA] = "RGBA";
+    debug(10, "fmts: %s %s".blue_lt, gl.FMTS[this.fmt], gl.FMTS[fmt2]);
 //this.fmt = fmt2;
 //NOTE: first element = lower left, last element = upper right
 //NOTE: pivot flag not set yet, but texture should be updated by caller before first render anyway
@@ -1253,6 +1308,7 @@ function wrpixel_RPi(ofs, argb)
 //read/write pixel ARGB value:
 function rdpixel_GL(ofs)
 {
+    return this.pixel_uint32[ofs];
     splitter.bytes[1] = this.pixel_bytes[ofs + 0];
     splitter.bytes[2] = this.pixel_bytes[ofs + 4];
     splitter.bytes[3] = this.pixel_bytes[ofs + 8];
@@ -1265,7 +1321,10 @@ function rdpixel_GL(ofs)
 
 function wrpixel_GL(ofs, argb)
 {
-    if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
+    this.pixel_uint32[ofs] = argb;
+    this.dirty = true; //assume caller is changing it
+    return;
+//    if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
 //    var rearr = ofs & 3;
 //    splitter.uint32.setUint32(0, argb >>> 0, false); //byteOffset = 0, litteEndian = false
     splitter.uint32 = argb; //[0] = argb; // >>> 0;
@@ -1358,7 +1417,7 @@ function rAF(onoff)
 //check for OpenGL error:
 function glcheck(desc, id)
 {
-    if (id < 0) debug("bad id: %s".red_lt, desc);
+    if (id < 0) { ++debug.nested; debug("bad id: %s".red_lt, desc); }
     return id;
 }
 
@@ -1448,6 +1507,13 @@ function heredoc(func)
     func = func.toString();
     var parse = func.match(/^[^]*\/\*([^]*)\*\/\}$/m);
     return parse? parse[1]: func;
+}
+
+
+//show +/- value:
+function diff(val)
+{
+    return (val < 0)? val: "+" + val;
 }
 
 

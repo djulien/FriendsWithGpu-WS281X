@@ -25,7 +25,7 @@ const DURATION = 60; //how long to run (sec)
 const VGROUP = !Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
 const UNIV_LEN = Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug("window %d x %d, video cfg %d x %d (%d x %d), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
+debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
