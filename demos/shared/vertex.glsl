@@ -185,7 +185,7 @@ void main(void)
 //vColor = vec4((gl_Position.x + 1.0) / 2.0, 0.0, 0.0, 1.0);
 #endif //def WS281X_DEBUG
 #endif
-    debug_val = 0.0; //needs a value even if not used (glsl compiler complains)
+    debug_val = PI; //VERTEX_SIZE; //0.0; //needs a value even if not used (glsl compiler complains)
     vColor = SAMPLE(univ, node); //lookups less expensive in vertex shader than fragment shader
 }
 

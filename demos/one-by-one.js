@@ -18,9 +18,9 @@ const {Screen} = require('./shared/screen');
 const {GpuCanvas} = require('./shared/GpuCanvas');
 
 //display settings:
-const UNIV_LEN = Screen.gpio? Screen.vert.disp: Math.round(Screen.vert.disp / Math.round(Screen.horiz.res / 24)); ///can't exceed #display lines; draw pixels larger (on-screen only, for debug)
+const UNIV_LEN = Screen.gpio? Screen.vert.disp: Math.round(Screen.vert.disp / Math.round(Screen.horiz.res / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug(`window ${Screen.width} x ${Screen.height}, display ${Screen.horiz.disp} x ${Screen.vert.disp}, res ${Screen.horiz.res} x ${Screen.vert.res}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
+debug(`window ${Screen.width} x ${Screen.height}, display ${Screen.horiz.disp} x ${Screen.vert.disp}, res ${Screen.horiz.res} x ${Screen.vert.res}, canvas ${NUM_UNIV} x ${UNIV_LEN}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
@@ -66,12 +66,12 @@ blocking(function*()
         canvas.pop.WS281X_FMT(); //restore to default value
     }
 
-    debug(`begin, turn on ${canvas.width} x ${canvas.height} = ${canvas.width * canvas.height} pixels 1 by 1`.green_lt);
+    console.error(`begin, turn on ${canvas.width} x ${canvas.height} = ${canvas.width * canvas.height} pixels 1 by 1`.green_lt);
     console.error(`Enter ${"q".bold.cyan_lt} to quit, ${"f".bold.cyan_lt} toggles formatting, 1 of ${"rgbycmw".bold.cyan_lt} for color, other for next pixel`);
     canvas.elapsed = 0; //reset progress bar
     canvas.duration = canvas.width * canvas.height; //set progress bar limit
     canvas.fill(BLACK); //start with all pixels off
-    var color = 'r';
+    var color = 'r'; //start with red initially selected
 //canvas.pixel(0, 0, WHITE);
 //canvas.pixel(0, 1, CYAN);
 //canvas.pixel(0, 10, RED);
@@ -89,22 +89,15 @@ blocking(function*()
             for (;;)
             {
                 var ch = yield getchar(`Next pixel (${x}, ${y}), ${color} ${canvas.WS281X_FMT? "": "no-"}fmt?`.pink_lt);
-                if (ch == "q") { debug("quit".green_lt); return; }
+                if (ch == "q") { console.error("quit".green_lt); return; }
                 if (ch == "f") { canvas.WS281X_FMT = !canvas.WS281X_FMT; continue; } //toggle formatting
                 if (ch in PALETTE) { color = ch; continue; } //change color
                 break; //advance to next pixel
             }
             canvas.pixel(x, y, PALETTE[color]);
         }
-    debug("end, pause for 10 sec".green_lt);
-    yield wait(10); //pause at end so screen doesn't disappear
+    console.error("end, pause for 10 sec".green_lt);
+    yield wait(10); //pause at end so screen doesn't disappear too soon
 });
-
-
-//truncate after 3 dec places:
-function milli(val)
-{
-    return Math.floor(val * 1e3) / 1e3;
-}
 
 //eof

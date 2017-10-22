@@ -182,6 +182,7 @@ rAF.count = 0;
 //    draw(cb) { rAF.inner = cb; rAF(cb != null); }
     load(args) { return this.txr.load.apply(this.txr, arguments); }
     fill(args) { return this.txr.fill.apply(this.txr, arguments); }
+//    pixel(args) { console.log("here1"); console.log("cnv px", JSON.stringify(arguments)); return this.txr.pixel.apply(this.txr, arguments); }
     pixel(args) { return this.txr.pixel.apply(this.txr, arguments); }
 };
 
@@ -486,8 +487,9 @@ function getShader(type, filename) //str)
 //    str = heredoc(preamble) + "\n" + heredoc(str);
     var str = fs.readFileSync(filename).toString();
 //kludge: cpp-js #includes are async, so expand them here synchronously:
-    str = str.replace(/^\s*#include\s+"([^"]+)"\s*.*$/m, function(matching, sub1, ofs, entire)
+    str = str.replace(/^\s*#include\s+"([^"]+)"\s*$/mg, function(matching, sub1, ofs, entire)
     {
+//console.log("incl ", matching, path.resolve(__dirname, sub1));
 //console.log("TODO: repl '%s' with contents".red_lt, path.resolve(__dirname, sub1));
         var lines = entire.substr(0, ofs).split("\n");
         return "//" + matching + "\n" + fs.readFileSync(path.resolve(__dirname, sub1)) + "\n#line " + lines.length + "\n";
@@ -545,7 +547,7 @@ function getShader(type, filename) //str)
 //    cpp.define("CALLER_VERTEX_HEIGHT", this.sizes.vtxh); //gl.viewportHeight);
     cpp.define("CALLER_TXR_WIDTH", this.txr.width);
     cpp.define("CALLER_TXR_HEIGHT", this.txr.height);
-    debug(`pass to ${gl.SHTYPES[type]} shader: scr ${Screen.horiz.res} x ${Screen.vert.res}, vis wnd ${Screen.horiz.disp} x ${Screen.vert.disp}, txr ${this.txr.width} x ${this.txr.height}`.blue_lt);
+    debug(`to ${gl.SHTYPES[type]} shader: scr ${Screen.horiz.res} x ${Screen.vert.res}, vis wnd ${Screen.horiz.disp} x ${Screen.vert.disp}, txr ${this.txr.width} x ${this.txr.height}`.blue_lt);
     if (this.gpufx && (type == gl.VERTEX_SHADER)) //insert custom GPU fx
     {
         cpp.define("CUSTOM_GPUFX", "");
@@ -895,10 +897,12 @@ function initProjection()
 //var txtr = {};
 //function initTexture(w, h) { txtr.init(w, h, true); }
 
+const BE32 = true, LE32 = false;
+
+
 //byte splitter:
 const splitter =
 {
-    LE: false, //true, //RPi is bi-endian (running as little endian); Intel is little endian; seems backwards
     buf: new ArrayBuffer(4),
 //    get buf() { return this.bytes; },
 //no worky    uint32: new Uint32Array(this.bytes), //DataView(bytes),
@@ -906,11 +910,27 @@ const splitter =
 //    read: function() { return this.view.getUint32(0, false); },
 //    write: function(val) { this.view.setUint32(0, val, false); },
 //    bytes: new Uint8Array(this.buf),
-    get view() { Object.defineProperty(this, "view", {value: new DataView(this.buf)}); return this.view; }, //replace getter with data after first time
-    get bytes() { Object.defineProperty(this, "bytes", {value: new Uint8Array(this.buf)}); return this.bytes; }, //replace getter with data after first time
+//kludge: can't use sibling buf member at instantiation time, so wrap with getters:
+    get view() { Object.defineProperty(this, "view", {value: new DataView(this.buf)}); return this.view; }, //replace getter with buffer after first time
+    get bytes() { Object.defineProperty(this, "bytes", {value: new Uint8Array(this.buf)}); return this.bytes; }, //replace getter with buffer after first time
 //    uint32: new Uint32Array(this.buf), //always little endian; see http://stackoverflow.com/questions/7869752/javascript-typed-arrays-and-endianness
-    get uint32() { return this.view.getUint32(0, this.LE); },
-    set uint32(val) { this.view.setUint32(0, val, this.LE); },
+    get uint32() { return this.view.getUint32(0, this.isLE); },
+    set uint32(val) { this.view.setUint32(0, val, this.isLE); },
+//determine endianness by trial & error (first time only), then replace with value:
+//RPi is bi-endian (running as little endian); Intel is little endian; seems backwards?
+    get isLE()
+    {
+        this.bytes.set([0x11, 0x22, 0x33, 0x44]);
+        for (const [pattern, isle] of Object.entries({0x44332211: BE32, 0x11223344: LE32}))
+        {
+            Object.defineProperty(this, "isLE", {value: isle}); //NOTE: must replace property before using uint32 to avoid recursion
+//console.log((pattern >>> 0).toString(16), isle, (this.uint32 >>> 0).toString(16), this.uint32 == pattern, this.isLE);
+            if (this.uint32 != pattern) continue;
+            debug("isLE? %d".blue_lt, this.isLE);
+            return this.isLE;
+        }
+        throw `Can't determine endianness: 0x${this.uint32.toString(16)}`.red_lt;
+    },
 };
 //splitter.bytes = new ArrayBuffer(4);
 //splitter.view = new DataView(splitter.bytes);
@@ -978,6 +998,7 @@ function render()
 //console.log("send %d x %d texture", this.width, this.height);
 //    gl.activeTexture(gl.TEXTURE0); //redundant?
 //NOTE: first element = lower left, last element = upper right
+//debug("txr: %j".blue_lt, this.pixel_bytes);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.width, this.height, this.fmt, gl.UNSIGNED_BYTE, this.pixel_bytes);
     glcheck("sub img", this.getError());  //invalid value on RPi?
 //    this.debug_tx("render");
@@ -1058,12 +1079,15 @@ txtr.circle = function(x, y, r, rgba)
 Texture.prototype.pixel = 
 function pixel(x, y, argb)
 {
+//console.log("here2");
+//console.log("txr px", JSON.stringify(arguments));
 //    this.init(true);
     if ((x < 0) || (x >= this.width) || (y < 0) || (y >= this.height))
         return (arguments.length > 2)? 0: this; //fluent setter only, not getter
 //    var ofs = x + y * this.width;
     if (arguments.length > 2) //set color
     {
+//console.log("here3");
 //        if (this.pixels[ofs] != argb)
 //        {
 //console.log("pixel(%d,%d): ofs %d, set color 0x%s", x, y, this.xy(x, y), argb.toString(16));
@@ -1073,6 +1097,7 @@ function pixel(x, y, argb)
 //        }
         return this; //fluent setter
     }
+//console.log("here4");
 //    return this.pixels[this.xy(x, y)]; //non-fluent getter
     return this.rdpixel(this.xy(x, y)); //non-fluent getter
 //    return txtr.image.pixel.apply(null, arguments);
@@ -1096,7 +1121,7 @@ function load(path)
 //NOTE: can't swizzle because caller might also be setting some pixels explicitly
         this.image.pixel = function(x, y) //get ARGB pixel color
         {
-            var ofs = 4 * (x + y * this.width);
+            var ofs = (x + y * this.width) << 2;
             if (!this.img_pixels) { this.img_pixels = new Buffer(this.data.buffer); this.seen = {}; }
 //            var color = this.img_pixels[x + y * this.image.width];
 //            if (need_swap) color = 
@@ -1214,11 +1239,16 @@ function init(gl, width, height, want_pixels)
 //console.log(uint32s);
     this.pixel_buf = new ArrayBuffer(this.width * this.height * Uint32Array.BYTES_PER_ELEMENT);
     this.pixel_bytes = new Uint8Array(this.pixel_buf);
-    this.pixel_uint32 = new Uint32Array(this.pixel_buf);
+//    this.pixel_uint32 = new Uint32Array(this.pixel_buf);
+    this.pixel_view32 = new DataView(this.pixel_buf); //for faster access (quad bytes)
 //byte shuffling to reduce GPU texture lookups:
 //NOTE: RPi (GLES) wants BGRA (R <-> B), GL wants ARGB
-//    this.rdpixel = (this.gl.isGLES? rdpixel_GLES: rdpixel_GL).bind(this); //rdpixel_RPi;
-//    this.wrpixel = (this.gl.isGLES? wrpixel_GLES: wrpixel_GL).bind(this); //wrpixel_RPi;
+    this.rdpixel = (this.gl.isGLES? rdpixel_GLES: rdpixel_GL).bind(this); //rdpixel_RPi;
+    this.wrpixel = (this.gl.isGLES? wrpixel_GLES: wrpixel_GL).bind(this); //wrpixel_RPi;
+//this.pixel_bytes.set([0x11, 0x22, 0x33, 0x44]);
+//debug(this.pixel_uint32[0].toString(16));
+    this.pixel_bytes.set(gl.isGLES? [0x44, 0x33, 0x22, 0x11]: [0x22, 0x33, 0x44, 0x11]); //ARGB 0x11223344
+    if (this.rdpixel(0) != 0x11223344) throw `Wrong byte order function for ${gl.isGLES? "GLES": "GL"}: 0x${this.rdpixel(0).toString(16)}`.red_lt;
 //    this.pivot24 = this.gl.isGLES? pivot24_GLES: pivot24_GL;
 //RPi GPU doesn't have enough bandwidth for a 24x24 bit pivot, so use CPU instead
 //NOTE: this puts a greater load on RPi CPU and probably requires a background worker thread
@@ -1231,14 +1261,6 @@ function init(gl, width, height, want_pixels)
 //    for (var retry in [false, true, -1])
 //    {
 //        if (retry == -1) throw "can't figure out byte order";
-    this.pixel_bytes.set([0x11, 0x22, 0x33, 0x44]); //BGRA test value
-    if (rdpixel_GL.call(this, 0) == 0x44332211) //this.pixel_uint32[0]
-    {
-        this.rdpixel = rdpixel_GL.bind(this); //rdpixel_RPi;
-        this.wrpixel = wrpixel_GL.bind(this); //wrpixel_RPi;
-    }
-//    else if (rdpix
-    else throw `Unknown byte order: 0x${rdpixel_GL.call(this, 0).toString(16)}`.red_lt;
 //    debug(10, "byte order[%s]: %s %s %s %s".blue_lt, 0, this.pixel_bytes[0].toString(16), this.pixel_bytes[1].toString(16), this.pixel_bytes[2].toString(16), this.pixel_bytes[3].toString(16));
 //        if (this.pixel_bytes[0] == 0x22) break; //that's where we want it
 //        splitter.LE = !splitter.LE;
@@ -1253,10 +1275,10 @@ function init(gl, width, height, want_pixels)
 //    this.fmt = gl.RGBA;
 //    this.fmt = gl.BGRA;
 //GL_RGB, GL_BGR, GL_RGBA, GL_BGRA
-    var fmt2 = gl.isGLES? gl.BGRA: gl.RGBA; //NOTE: RPi (GLES) requires BGRA here; OpenGL wants it the other way
+    var fmt2 = gl.isGLES? gl.BGRA: gl.RGBA; //NOTE: RPi (GLES) requires BGRA here; OpenGL wants RGBA
     this.fmt = fmt2;
 //    const FMTS = {}; FMTS[gl.BGRA] = "BGRA"; FMTS[gl.RGBA] = "RGBA";
-    debug(10, "fmts: %s %s".blue_lt, gl.FMTS[this.fmt], gl.FMTS[fmt2]);
+    debug(10, "txr color fmts: %s %s".blue_lt, gl.FMTS[this.fmt], gl.FMTS[fmt2]);
 //this.fmt = fmt2;
 //NOTE: first element = lower left, last element = upper right
 //NOTE: pivot flag not set yet, but texture should be updated by caller before first render anyway
@@ -1265,6 +1287,7 @@ function init(gl, width, height, want_pixels)
 }
 
 
+/*
 //read/write pixel ARGB value:
 //NOTE: RPi GPU has limited memory bandwidth (only allows 8 texture lookups)
 //in order to access 24 values, ARGB bytes are rearranged here so one lookup gets 4 pixels
@@ -1289,7 +1312,7 @@ function wrpixel_RPi(ofs, argb)
     ofs = ((ofs & ~3) << 2) + (ofs & 3); //offset into cluster of 4 pixels
 //    splitter.uint32.setUint32(0, argb >>> 0, false); //byteOffset = 0, litteEndian = false
     splitter.uint32 = argb; //[0] = argb; // >>> 0;
-//    /*if (arguments.length > 1)*/ splitter.write(argb);
+//    / *if (arguments.length > 1)* / splitter.write(argb);
 //console.log((splitter.uint32[0] + 0).toString(16));
     this.pixel_bytes[ofs + 0] = splitter.bytes[1];
     this.pixel_bytes[ofs + 4] = splitter.bytes[2];
@@ -1303,16 +1326,24 @@ function wrpixel_RPi(ofs, argb)
 //if (ofs < 48) console.log("wrpx", arguments[0], arguments[1].toString(16), ofs, buf);
     this.dirty = true; //assume caller is changing it
 }
+*/
 
 
 //read/write pixel ARGB value:
 function rdpixel_GL(ofs)
 {
-    return this.pixel_uint32[ofs];
-    splitter.bytes[1] = this.pixel_bytes[ofs + 0];
-    splitter.bytes[2] = this.pixel_bytes[ofs + 4];
-    splitter.bytes[3] = this.pixel_bytes[ofs + 8];
-    splitter.bytes[0] = this.pixel_bytes[ofs + 12];
+//TODO: which way is faster?
+//    var rgba = this.pixel_uint32[ofs];
+    var rgba = this.pixel_view32.getUint32(ofs << 2, LE32); //, abgr = this.pixel_uint32.getUInt32(ofs, true);
+//    return (abgr & 0xFF00FF00) | (rgba & 0x00FF00FF); //B <-> G
+    return (rgba >>> 8) | (rgba << 24); //RGBA -> ARGB; CAUTION: used unsigned shift here
+//    return (this.pixel_uint32[ofs] >> 8) | (this.pixel_bytes[4 * ofs] << 24);
+
+//    return this.pixel_uint32[ofs];
+    splitter.bytes[0] = this.pixel_bytes[ofs + 3]; //A
+    splitter.bytes[1] = this.pixel_bytes[ofs + 0]; //R
+    splitter.bytes[2] = this.pixel_bytes[ofs + 1]; //G
+    splitter.bytes[3] = this.pixel_bytes[ofs + 2]; //B
 //    return splitter.uint32.getUint32(0, false); //byteOffset = 0, litteEndian = false
 //    return splitter.read(); //splitter.uint32[0];
     return splitter.uint32; //[0];
@@ -1321,7 +1352,21 @@ function rdpixel_GL(ofs)
 
 function wrpixel_GL(ofs, argb)
 {
-    this.pixel_uint32[ofs] = argb;
+//console.log("here6", ofs, ofs < 5);
+//TODO: which way is faster?
+    var rgba = (argb << 8) | (argb >>> 24); //ARGB -> RGBA; CAUTION: use unsigned shift here
+    this.pixel_view32.setUint32(ofs << 2, rgba >>> 0, LE32);
+//console.log("wr px[%d] 0x%s => 0x%s: %s %s %s %s", ofs, argb.toString(16), (rgba >>> 0).toString(16), this.pixel_bytes[4 * ofs].toString(16), this.pixel_bytes[4 * ofs + 1].toString(16), this.pixel_bytes[4 * ofs + 2].toString(16), this.pixel_bytes[4 * ofs + 3].toString(16));
+//     (this.pixel_uint32[ofs] >> 8) | (this.pixel_bytes[4 * ofs] << 24);
+    this.dirty = true; //assume caller is changing it
+    return;
+
+//    this.pixel_uint32[ofs] = argb;
+    splitter.uint32 = argb;
+    this.pixel_bytes[ofs + 3] = splitter.bytes[0]; //A
+    this.pixel_bytes[ofs + 0] = splitter.bytes[1]; //B
+    this.pixel_bytes[ofs + 2] = splitter.bytes[2]; //G
+    this.pixel_bytes[ofs + 1] = splitter.bytes[3]; //R
     this.dirty = true; //assume caller is changing it
     return;
 //    if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B

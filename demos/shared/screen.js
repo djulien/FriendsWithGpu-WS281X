@@ -23,7 +23,7 @@ if (!isRPi()) //non-RPi (dev mode only): leave a little space on screen for othe
 {
 //TODO: enable scroll bars and use full size
     wndh -= 64; //kludge: account for top and bottom bars in Linux (since we're not in full screen mode)
-//try to maintain 4:3 aspect ratio on largest window that will fit on screen:
+//try to preserve 4:3 aspect ratio on largest window that will fit on screen:
 //include WS281X overscan in calculations
     wndh = Math.min(Math.round_even(wndw * 24/23.25 * 3/4), wndh);
     wndw = Math.min(Math.round_even(wndh * 4/3 * 23.25/24), wndw);
@@ -35,6 +35,7 @@ const canvas = Screen.canvas = document.createElement("ws281x-canvas", wndw, wnd
 //gl = canvas.getContext("experimental-webgl");
 
 //export values rather than callable functions (won't change without reboot):
+//give caller drawable window size rather than full screen size
 Screen.width = wndw; //canvas.width;
 Screen.height = wndh; //canvas.height;
 Screen.isRPi = isRPi();
@@ -57,26 +58,26 @@ function isRPi()
 }
 
 
-//check if video sent to GPIO pins:
+//check if video is redirected to GPIO pins:
 function toGPIO()
 {
     if (toGPIO.hasOwnProperty('cached')) return toGPIO.cached;
 //check if various device tree overlays are loaded:
 //dpi24 or vga666 send video to GPIO pins
     var dpi24 = glob.sync("/sys/firmware/devicetree/base/soc/gpio*/dpi24*");
-    if (dpi24 && dpi24.length) return toGPIO.cached = 24;
+    if (dpi24 && dpi24.length) return toGPIO.cached = 8+8+8;
     var vga666 = glob.sync("/sys/firmware/devicetree/base/soc/gpio*/vga666*");
-    if (vga666 && vga666.length) return toGPIO.cached = 18;
-//TODO: is there a vga565 also?
+    if (vga666 && vga666.length) return toGPIO.cached = 6+6+6;
+    var vga565 = glob.sync("/sys/firmware/devicetree/base/soc/gpio*/vga565*");
+    if (vga565 && vga565.length) return toGPIO.cached = 5+6+5;
 //console.log("dpi", dpi);
-    return false;
+    return toGPIO.cached = false;
 }
 
 
 //get RPi display settings:
 //TODO: use userland tvservice to read from memory
-//for now, read from config.txt
-//hdmi_timings=1488 0 12 12 24   1104 0 12 12 24    0 0 0 30 0 50000000 1
+//for now, just read from config.txt
 function timing(path)
 {
     if (timing.hasOwnProperty('cached')) return timing.cached;

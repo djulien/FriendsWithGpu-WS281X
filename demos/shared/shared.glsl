@@ -105,16 +105,17 @@ const float RPI_FIXUP = 0.1; //kludge: fix up incorrect results on RPi
 //CAUTION: use functions if nested macros not being expanded
 //#define MASK24(n)  pow(2.0, 23.0 - n) //exceeds mediump precision :(
 #define BIT(n)  pow(2.0, float(n))
-#define AND(val, mask)  greaterThanEqual(mod((val) * FLOAT2BITS, 2.0 * mask), mask)
-const float FLOAT2BITS = 255.0 / 256.0; //convert normalized [0..1] to sum of bits (negative powers of 2)
+//#define AND(val, mask)  greaterThanEqual(mod((val) * FLOAT2BITS, 2.0 * mask), mask)
+//const float FLOAT2BITS = 255.0 / 256.0; //convert normalized [0..1] to sum of bits (negative powers of 2)
 
 
 //dimensions of vertices on screen:
 //NOTE: values below will be filled in by GpuCanvas; example numbers are from example RPi config.txt
 const float SCR_WIDTH = float(CALLER_SCR_WIDTH); //1536
-const float SCR_HEIGHT = float(CALLER_SCR_HEIGHT); //1152
+const float SCR_HEIGHT = float(CALLER_SCR_HEIGHT); //1152; should be 23.25/24 of SCR_WIDTH
 const float WND_WIDTH = float(CALLER_WND_WIDTH); //1488; portion of hscan that is actually visible
 const float WND_HEIGHT = float(CALLER_WND_HEIGHT); //1104; portion of vscan that is actually visible
+#define OVERSCAN(x)  ((x) * SCR_WIDTH / WND_WIDTH) //effective horizontal value with no hblank period
 //const float VERTEX_WIDTH = float(CALLER_VERTEX_WIDTH); //floor(SCR_WIDTH / NUM_UNIV); //64
 //const float VERTEX_HEIGHT = float(CALLER_VERTEX_HEIGHT); //floor(SCR_HEIGHT / UNIV_LEN); //1 or 46
 //const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex size
@@ -122,8 +123,8 @@ const float NUM_UNIV = float(CALLER_TXR_WIDTH); //ceil(SCR_WIDTH / VERTEX_WIDTH)
 const float UNIV_LEN = float(CALLER_TXR_HEIGHT); //ceil(SCR_HEIGHT / VERTEX_HEIGHT); //float(??); //1104 for GPIO, ~ 18 - 24 for dev/screen
 
 const float VERTEX_WIDTH = floor(SCR_WIDTH / NUM_UNIV); //64
-const float VERTEX_HEIGHT = floor(SCR_HEIGHT / UNIV_LEN); //1 or 46
-const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex size
+const float VERTEX_HEIGHT = floor(SCR_HEIGHT / UNIV_LEN); //1
+const float VERTEX_SIZE = max(VERTEX_WIDTH, VERTEX_HEIGHT); //on-screen vertex bounding box size
 //const float MAX_UNIV = NUM_UNIV - 1.0;
 //const float UNIV_MAX = UNIV_LEN - 1.0;
 //uniform float SCR_WIDTH, SCR_HEIGHT;
