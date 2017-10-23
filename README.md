@@ -1,6 +1,10 @@
 # FriendsWithGpu-WS281X
 Test/sample programs using RPi GPU to control WS281X pixels
 
+# Dependencies:
+on RPi, libpng-dev <- libslang2-dev <- libcaca-dev <- libsdl1.2-dev
+
+# other info
 NOTE: if you get a message like:
 "was compiled against a different Node.js version using
 NODE_MODULE_VERSION ##. This version of Node.js requires

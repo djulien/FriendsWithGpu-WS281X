@@ -1,6 +1,9 @@
 //fragment shader:
 #include "shared.glsl"
-#include "printf.glsl"
+#ifdef WS281X_DEBUG //debug a float value
+// #include "printf.glsl"
+ #define Textout_example()  BLACK
+#endif
 
 //#ifdef GL_ES //RPi
 //http://stackoverflow.com/questions/28540290/why-it-is-necessary-to-set-precision-for-the-fragment-shader
@@ -65,7 +68,7 @@ const float EDGE = 0.5 * 0.5; //to match distance, not using sqrt()
 const vec2 ELLIPSE = vec2(VERTEX_WIDTH / VERTEX_SIZE, VERTEX_HEIGHT / VERTEX_SIZE);
 //const float VERTEX_CLIP = VERTEX_HEIGHT / VERTEX_SIZE; //portion of vertex height to leave empty; NOTE: top = 0
 //const float NODE_BLANK = fract(VERTEX_HEIGHTy * UNIV_LEN); //position within current node timeslot (vertical)
-#define LTBULB_BKG  gray(0.3) //MAGENTA
+#define LTBULB_BKG  gray(0.25) //MAGENTA
 
 
 void main(void)
@@ -88,12 +91,19 @@ void main(void)
 //TODO: incorporate glsl printf
     if (debug_val != 0.0) //!EQ(debug_val, 0.0))
     {
+//#ifdef PRINTF_H
         gl_FragColor = Textout_example();
 //        gl_FragColor = printf(vec2(0.8, 0.9), RGB(0.0, 0.8, 0.2), debug_val);
         if (gl_FragColor != BLACK) return;
-    x *= 4.0;
-        if ((y >= 2.0/100.0) && (y < 3.0/100.0)) { gl_FragColor = IIF(x < debug_val, GREEN, RED); return; } //show value; //LT(noverx, debug_val)? GREEN: RED; return; }
-        if ((y >= 1.0/100.0) && (y < 2.0/100.0)) { gl_FragColor = (abs(x - floor(x * 10.0 + FUD) / 10.0) < 1.0/500.0)? CYAN: (abs(x - floor(x * 100.0 + FUD) / 100.0) < 1.0/500.0)? MAGENTA: BLACK; return; } //ruler
+//#endif
+//    x *= 4.0;
+        if ((y >= 2.0/100.0) && (y < 3.0/100.0)) { gl_FragColor = IIF(x < debug_val, GREEN, RED); return; } //show value
+        if ((y >= 1.0/100.0) && (y < 2.0/100.0)) //show ruler
+            if (abs(x - floor(x * 100.0 + FUD) / 100.0) < 1.0/500.0) //grid marks 1/100ths
+            {
+                gl_FragColor = (abs(x - floor(x * 10.0 + FUD) / 10.0) < 1.0/500.0)? CYAN: MAGENTA;
+                return;
+            }
     }
 #endif
 

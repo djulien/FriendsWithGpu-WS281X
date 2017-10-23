@@ -15,12 +15,13 @@ const {blocking, wait, getchar} = require('blocking-style');
 
 const {debug} = require('./shared/debug');
 const {Screen} = require('./shared/screen');
-const {GpuCanvas} = require('./shared/GpuCanvas');
+const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
 
 //display settings:
-const UNIV_LEN = Screen.gpio? Screen.vert.disp: Math.round(Screen.vert.disp / Math.round(Screen.horiz.res / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+const FPS = 60; //how fast to run in auto mode (performance testing)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug(`window ${Screen.width} x ${Screen.height}, display ${Screen.horiz.disp} x ${Screen.vert.disp}, res ${Screen.horiz.res} x ${Screen.vert.res}, canvas ${NUM_UNIV} x ${UNIV_LEN}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
+const UNIV_LEN = Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+debug(`drawable ${Screen.width} x ${Screen.height}, scan ${Screen.scanw} x ${Screen.scanh}, texture ${NUM_UNIV} x ${UNIV_LEN}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
@@ -67,10 +68,11 @@ blocking(function*()
     }
 
     console.error(`begin, turn on ${canvas.width} x ${canvas.height} = ${canvas.width * canvas.height} pixels 1 by 1`.green_lt);
-    console.error(`Enter ${"q".bold.cyan_lt} to quit, ${"f".bold.cyan_lt} toggles formatting, 1 of ${"rgbycmw".bold.cyan_lt} for color, other for next pixel`);
+    console.error(`Enter ${"q".bold.cyan_lt} to quit, ${"a".bold.cyan_lt} for auto, ${"f".bold.cyan_lt} toggles formatting, 1 of ${"rgbycmw".bold.cyan_lt} for color, other for next pixel`);
     canvas.elapsed = 0; //reset progress bar
     canvas.duration = canvas.width * canvas.height; //set progress bar limit
     canvas.fill(BLACK); //start with all pixels off
+    var started; //timing for auto mode
     var color = 'r'; //start with red initially selected
 //canvas.pixel(0, 0, WHITE);
 //canvas.pixel(0, 1, CYAN);
@@ -86,18 +88,28 @@ blocking(function*()
     for (var x = 0; x < canvas.width; ++x)
         for (var y = 0; y < canvas.height; ++y, ++canvas.elapsed)
         {
-            for (;;)
+            if (started) yield wait(started + canvas.elapsed / FPS - now_sec()); ///use cumulative time to avoid drift
+            else for (;;)
             {
-                var ch = yield getchar(`Next pixel (${x}, ${y}), ${color} ${canvas.WS281X_FMT? "": "no-"}fmt?`.pink_lt);
-                if (ch == "q") { console.error("quit".green_lt); return; }
-                if (ch == "f") { canvas.WS281X_FMT = !canvas.WS281X_FMT; continue; } //toggle formatting
-                if (ch in PALETTE) { color = ch; continue; } //change color
+                var cmd = yield getchar(`Next pixel (${x}, ${y}), ${color} ${canvas.WS281X_FMT? "": "no-"}fmt?`.pink_lt);
+                if (cmd == "q") { console.error("quit".green_lt); return; }
+                if (cmd == "f") { canvas.WS281X_FMT = !canvas.WS281X_FMT; continue; } //toggle formatting
+                if (cmd == "a") { canvas.render.stats(true); started = now_sec() - canvas.elapsed / FPS; break; } ///back-dated to compensate for pixels that are already set
+                if (cmd in PALETTE) { color = cmd; continue; } //change color
                 break; //advance to next pixel
             }
             canvas.pixel(x, y, PALETTE[color]);
         }
+    if (started) debug("auto fps: target %d, actual %d, #render/sec %d".cyan_lt, FPS, Math.round(10 * canvas.elapsed / (now_sec() - started)) / 10, Math.round(10 * canvas.render.stats()) / 10);
     console.error("end, pause for 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too soon
 });
+
+
+//current time in seconds:
+function now_sec()
+{
+    return Date.now() / 1000;
+}
 
 //eof

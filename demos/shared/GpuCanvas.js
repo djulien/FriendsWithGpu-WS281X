@@ -147,9 +147,10 @@ class GpuCanvas
     destroy() //dtor
     {
         var inx = GpuCanvas.all.indexOf(this); //findIndex(function(that) { return that.id == this.id; }.bind(this)); //all.indexOf(this);
-        debug(`destroy: found@ ${inx}, #canv %{GpuCanvas.all.length}, del? ${inx != -1}`.yellow_lt);
+        debug(`destroy: found@ ${inx}, #canv ${GpuCanvas.all.length}, del? ${inx != -1}`.yellow_lt);
         if (inx != -1) GpuCanvas.all.splice(inx, 1);
         if (!GpuCanvas.all.length) rAF(false); //cancel screen refresh loop
+//        debug(`rAF: 
     }
 
     getError() { var err = this.gl.getError(); return err? -1: err; }
@@ -161,8 +162,11 @@ class GpuCanvas
 //console.log("elapsed", newval);
         var new_filter = this.interval? Math.floor(newval / this.duration / this.interval): newval / this.duration;
         if (new_filter == this.elapsed_filter) return;
-        debug(10, `elapsed: was ${micro(this.prior_elapsed)}, is now ${micro(newval)} / ${this.duration}, #rAF ${rAF.count || 0}`.blue_lt); //, new_filter);
-rAF.count = 0;
+  //      if (!this.prevraf) this.prevraf = 0;
+        debug(10, `elapsed: ${micro(this.prior_elapsed)} -> ${micro(newval)} / ${this.duration}, #render ${render.count || 0} (+${(render.count || 0) - (render.previous || 0)})`.blue_lt); //, ${Math.round(10 * (rAF.count || 0) / this.duration) / 10}/sec`.blue_lt); //, new_filter);
+//        this.rafcount = rAF.previous = rAF.count;
+        render.previous = render.count;
+//rAF.count = 0;
         this.elapsed_filter = new_filter;
         this.gl.uniform1f(this.shpgm.uniforms.elapsed, newval);
         this.prior_elapsed = newval;
@@ -198,17 +202,34 @@ function clear(color)
 }
 
 
+const render =
 GpuCanvas.prototype.render = 
 function render(want_clear)
 {
 //    if (!this.txr.dirty) return; //NOTE: RPi needs refresh each time
     var gl = this.gl;
     if (arguments.length && (want_clear !== false)) this.clear(want_clear);
+    if (isNaN(++render.count)) render.count = 1;
 //NOTE: need to do this each time:
+//    if (render.count == 1)
     gl.drawArrays(gl.POINTS, 0, this.vxbuf.numItems); //squareVertexPositionBuffer.numItems);
     this.txr.render();
     return (glcheck("render", this.getError()) >= 0);
 //    return this; //fluent
+}
+
+
+//give render stats to caller for debug / performance analysis:
+render.stats = function(start)
+{
+    if (start) render.save = {count: render.count || 0, time: Date.now()};
+    else
+    {
+        var num = render.count - render.save.count;
+        var den = (Date.now() - render.save.time) / 1000; //sec
+debug("render.stats", num, den, num / den);
+        return num / den;
+    }
 }
 
 
@@ -539,15 +560,15 @@ function getShader(type, filename) //str)
 ////    cpp.define("CALLER_VERTEX_HEIGHT", this.sizes.vtxh); //gl.viewportHeight);
 //    cpp.define("CALLER_TXR_WIDTH", this.sizes.vtxw); //gl.viewportWidth);
 //    cpp.define("CALLER_TXR_HEIGHT", this.sizes.vtxh); //gl.viewportHeight);
-    cpp.define("CALLER_SCR_WIDTH", Screen.horiz.res); //NOTE: use h res here; need overscan to align with WS281X T0L
-    cpp.define("CALLER_SCR_HEIGHT", Screen.vert.res);
-    cpp.define("CALLER_WND_WIDTH", Screen.horiz.disp); //visible portion of screen
-    cpp.define("CALLER_WND_HEIGHT", Screen.vert.disp);
+    cpp.define("CALLER_SCAN_WIDTH", Screen.scanw); //horiz.res); //NOTE: use h res here; need overscan to align with WS281X T0L
+    cpp.define("CALLER_SCAN_HEIGHT", Screen.scanh); //vert.res);
+    cpp.define("CALLER_WND_WIDTH", Screen.width); //horiz.disp); //visible portion of screen
+    cpp.define("CALLER_WND_HEIGHT", Screen.height); //vert.disp);
 //    cpp.define("CALLER_VERTEX_WIDTH", this.sizes.vtxw); //gl.viewportWidth);
 //    cpp.define("CALLER_VERTEX_HEIGHT", this.sizes.vtxh); //gl.viewportHeight);
     cpp.define("CALLER_TXR_WIDTH", this.txr.width);
     cpp.define("CALLER_TXR_HEIGHT", this.txr.height);
-    debug(`to ${gl.SHTYPES[type]} shader: scr ${Screen.horiz.res} x ${Screen.vert.res}, vis wnd ${Screen.horiz.disp} x ${Screen.vert.disp}, txr ${this.txr.width} x ${this.txr.height}`.blue_lt);
+    debug(`to ${gl.SHTYPES[type]} shader: wnd ${Screen.width} x ${Screen.height}, scan ${Screen.scanw} x ${Screen.scanh}, txr ${this.txr.width} x ${this.txr.height}, vtx ${Math.round(Screen.scanw / this.txr.width)} x ${Math.round(Screen.height / this.txr.height)}`.blue_lt);
     if (this.gpufx && (type == gl.VERTEX_SHADER)) //insert custom GPU fx
     {
         cpp.define("CUSTOM_GPUFX", "");
@@ -1338,7 +1359,7 @@ function rdpixel_GL(ofs)
 //    return (abgr & 0xFF00FF00) | (rgba & 0x00FF00FF); //B <-> G
     return (rgba >>> 8) | (rgba << 24); //RGBA -> ARGB; CAUTION: used unsigned shift here
 //    return (this.pixel_uint32[ofs] >> 8) | (this.pixel_bytes[4 * ofs] << 24);
-
+/*
 //    return this.pixel_uint32[ofs];
     splitter.bytes[0] = this.pixel_bytes[ofs + 3]; //A
     splitter.bytes[1] = this.pixel_bytes[ofs + 0]; //R
@@ -1347,6 +1368,7 @@ function rdpixel_GL(ofs)
 //    return splitter.uint32.getUint32(0, false); //byteOffset = 0, litteEndian = false
 //    return splitter.read(); //splitter.uint32[0];
     return splitter.uint32; //[0];
+*/
 }
 
 
@@ -1359,8 +1381,8 @@ function wrpixel_GL(ofs, argb)
 //console.log("wr px[%d] 0x%s => 0x%s: %s %s %s %s", ofs, argb.toString(16), (rgba >>> 0).toString(16), this.pixel_bytes[4 * ofs].toString(16), this.pixel_bytes[4 * ofs + 1].toString(16), this.pixel_bytes[4 * ofs + 2].toString(16), this.pixel_bytes[4 * ofs + 3].toString(16));
 //     (this.pixel_uint32[ofs] >> 8) | (this.pixel_bytes[4 * ofs] << 24);
     this.dirty = true; //assume caller is changing it
-    return;
-
+//    return;
+/*
 //    this.pixel_uint32[ofs] = argb;
     splitter.uint32 = argb;
     this.pixel_bytes[ofs + 3] = splitter.bytes[0]; //A
@@ -1373,7 +1395,7 @@ function wrpixel_GL(ofs, argb)
 //    var rearr = ofs & 3;
 //    splitter.uint32.setUint32(0, argb >>> 0, false); //byteOffset = 0, litteEndian = false
     splitter.uint32 = argb; //[0] = argb; // >>> 0;
-//    /*if (arguments.length > 1)*/ splitter.write(argb);
+//    / *if (arguments.length > 1)* / splitter.write(argb);
 //console.log((splitter.uint32[0] + 0).toString(16));
     this.pixel_bytes[ofs + 0] = splitter.bytes[1];
     this.pixel_bytes[ofs + 4] = splitter.bytes[2];
@@ -1386,12 +1408,19 @@ function wrpixel_GL(ofs, argb)
 //    buf += " " + (this.pixel_bytes[i] + 0).toString(16);
 //if (ofs < 48) console.log("wrpx", arguments[0], arguments[1].toString(16), ofs, buf);
     this.dirty = true; //assume caller is changing it
+*/
 }
 
 
 //read/write pixel ARGB value:
 function rdpixel_GLES(ofs)
 {
+//TODO: which way is faster?
+//    var rgba = this.pixel_uint32[ofs];
+    var argb = this.pixel_view32.getUint32(ofs << 2, BE32); //, abgr = this.pixel_uint32.getUInt32(ofs, true);
+//    return (abgr & 0xFF00FF00) | (rgba & 0x00FF00FF); //B <-> G
+    return argb; //(rgba >>> 8) | (rgba << 24); //RGBA -> ARGB; CAUTION: used unsigned shift here
+/*
     if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
     splitter.bytes[1] = this.pixel_bytes[ofs + 0];
     splitter.bytes[2] = this.pixel_bytes[ofs + 4];
@@ -1400,16 +1429,24 @@ function rdpixel_GLES(ofs)
 //    return splitter.uint32.getUint32(0, false); //byteOffset = 0, litteEndian = false
 //    return splitter.read(); //splitter.uint32[0];
     return splitter.uint32; //[0];
+*/
 }
 
 
 function wrpixel_GLES(ofs, argb)
 {
+//TODO: which way is faster?
+//    var rgba = (argb << 8) | (argb >>> 24); //ARGB -> RGBA; CAUTION: use unsigned shift here
+    this.pixel_view32.setUint32(ofs << 2, argb >>> 0, BE32);
+//console.log("wr px[%d] 0x%s => 0x%s: %s %s %s %s", ofs, argb.toString(16), (rgba >>> 0).toString(16), this.pixel_bytes[4 * ofs].toString(16), this.pixel_bytes[4 * ofs + 1].toString(16), this.pixel_bytes[4 * ofs + 2].toString(16), this.pixel_bytes[4 * ofs + 3].toString(16));
+//     (this.pixel_uint32[ofs] >> 8) | (this.pixel_bytes[4 * ofs] << 24);
+    this.dirty = true; //assume caller is changing it
+/*
     if (this.gl.isGLES && !(ofs & 1)) ofs ^= 2; //NOTE: RPi wants BGRA here, R <-> B
 //    var rearr = ofs & 3;
 //    splitter.uint32.setUint32(0, argb >>> 0, false); //byteOffset = 0, litteEndian = false
     splitter.uint32 = argb; //[0] = argb; // >>> 0;
-//    /*if (arguments.length > 1)*/ splitter.write(argb);
+//    / *if (arguments.length > 1)* / splitter.write(argb);
 //console.log((splitter.uint32[0] + 0).toString(16));
     this.pixel_bytes[ofs + 0] = splitter.bytes[1];
     this.pixel_bytes[ofs + 4] = splitter.bytes[2];
@@ -1422,6 +1459,7 @@ function wrpixel_GLES(ofs, argb)
 //    buf += " " + (this.pixel_bytes[i] + 0).toString(16);
 //if (ofs < 48) console.log("wrpx", arguments[0], arguments[1].toString(16), ofs, buf);
     this.dirty = true; //assume caller is changing it
+*/
 }
 
 
@@ -1432,13 +1470,15 @@ function wrpixel_GLES(ofs, argb)
 
 //screen refresh:
 //typically 60 Hz (when window is active), but controlled by browser or caller
+//const rAF =
+//module.exports.rAF =
 function rAF(onoff)
 {
     if (typeof onoff == "boolean") rAF.isrunning = onoff;
     if (rAF.isrunning) document.requestAnimationFrame(rAF);
 //    draw(my_draw.prog || 0);
 //    if (rAF.inner) rAF.inner();
-    ++rAF.count; //for debug
+    if (isNaN(++rAF.count)) rAF.count = 1; //for debug, performance analysis
     GpuCanvas.all.forEach(canvas =>
     {
 //        canvas.first();
@@ -1457,6 +1497,20 @@ function rAF(onoff)
 //if (isNaN(++rAF.count)) rAF.count = 0;
 //console.log("rAF %s? %s", rAF.count, rAF.isrunning);
 }
+/*
+//give rAF stats to caller for debug / performance analysis:
+rAF.stats = function(start)
+{
+    if (start) rAF.save = {count: rAF.count || 0, time: Date.now()};
+    else
+    {
+        var num = rAF.count - rAF.save.count;
+        var den = (Date.now() - rAF.save.time) / 1000; //sec
+//debug("rAF.stats", num, den, num / den);
+        return num / den;
+    }
+}
+*/
 
 
 //check for OpenGL error:

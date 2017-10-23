@@ -1,5 +1,6 @@
-//get RPi screen config info:
-//query hdmi timing settings, device tree overlays
+//get screen config info:
+//for RPi, we want the actual (full screen) size + horiz/vert blank info; ssh can be used for console
+//for non-RPi, we want a window + simulated horiz/vert blank info; this leaves a little room for console
 
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output colors
@@ -15,33 +16,40 @@ Math.round_even = function(val) { return this.round(val) & ~1; } //even values s
 
 const Screen = 
 module.exports.Screen = {};
+//export values rather than callable functions (can't change without reboot):
+Screen.isRPi = isRPi();
+Screen.gpio = toGPIO();
 
 //get actual display res:
-//on RPi assume: screen res set as desired (running in full screen mode), ssh can use entire screen
-var [wndw, wndh] = scrres.get();
-if (!isRPi()) //non-RPi (dev mode only): leave a little space on screen for other stuff
+//on RPi assume screen res is set as desired (running in full screen mode), ssh can be used for console
+var [scrw, scrh] = scrres.get();
+Screen.fullw = scrw;
+Screen.fullh = scrh;
+
+//non-RPi (dev mode only): choose largest window size that will fit on screen
+var [wndw, wndh] = [scrw, scrh];
+if (!isRPi())
+//leave a little space on screen for console
 {
-//TODO: enable scroll bars and use full size
+//TODO: enable scroll bars and use full screen size?
     wndh -= 64; //kludge: account for top and bottom bars in Linux (since we're not in full screen mode)
 //try to preserve 4:3 aspect ratio on largest window that will fit on screen:
-//include WS281X overscan in calculations
-    wndh = Math.min(Math.round_even(wndw * 24/23.25 * 3/4), wndh);
-    wndw = Math.min(Math.round_even(wndh * 4/3 * 23.25/24), wndw);
+    wndh = Math.min(Math.round_even(wndw * 3/4), wndh);
+    wndw = Math.min(Math.round_even(wndh * 4/3), wndw);
 }
-
 const document = WebGL.document(); //create window to simulate browser
 //var canvas = {width: scrw, height: scrh};
 const canvas = Screen.canvas = document.createElement("ws281x-canvas", wndw, wndh); //NOTE: name needs to include "canvas"
 //gl = canvas.getContext("experimental-webgl");
-
-//export values rather than callable functions (won't change without reboot):
-//give caller drawable window size rather than full screen size
-Screen.width = wndw; //canvas.width;
-Screen.height = wndh; //canvas.height;
-Screen.isRPi = isRPi();
-Screen.gpio = toGPIO();
 Object.assign(Screen, timing());
-debug(10, `screen ${scrres.get().join("x")}, wnd ${[wndw, wndh].join("x")}, canvas ${[canvas.width, canvas.height].join("x")}, isRPi? ${Screen.isRPi}, gpio? ${Screen.gpio}`.blue_lt);
+
+//give caller drawable window size (non-RPi dev mode):
+Screen.width = canvas.width; //wndw; //canvas.width;
+Screen.height = canvas.height; //wndh; //canvas.height;
+//give caller overscan sizes also (needed for clipping compensation):
+Screen.scanw = Math.round_even(Screen.width * Screen.horiz.res / Screen.horiz.disp);
+Screen.scanh = Math.round_even(Screen.height * Screen.vert.res / Screen.vert.disp);
+debug(10, `full ${[scrw, scrh].join("x")}, wnd ${[wndw, wndh].join("x")}, drawable ${[canvas.width, canvas.height].join("x")}, scan ${[Screen.scanw, Screen.scanh].join("x")}, isRPi? ${Screen.isRPi}, gpio? ${Screen.gpio}`.blue_lt);
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -54,11 +62,12 @@ function isRPi()
 {
     if (isRPi.hasOwnProperty('cached')) return isRPi.cached;
 //TODO: is there a better way to check?
-    return isRPi.cached = fs.existsSync("/boot/config.sys");
+    return isRPi.cached = fs.existsSync("/boot/config.txt");
 }
 
 
 //check if video is redirected to GPIO pins:
+//query device tree overlays
 function toGPIO()
 {
     if (toGPIO.hasOwnProperty('cached')) return toGPIO.cached;
@@ -75,8 +84,8 @@ function toGPIO()
 }
 
 
-//get RPi display settings:
-//TODO: use userland tvservice to read from memory
+//query hdmi timing settings:
+//TODO: use RPi userland tvservice to read from memory
 //for now, just read from config.txt
 function timing(path)
 {

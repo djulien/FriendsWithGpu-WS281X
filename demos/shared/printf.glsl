@@ -4,6 +4,7 @@
 //precision highp float;
 //#endif
 
+#define PRINTF_H
 
 //uniform float time;
 //uniform vec2 mouse;
@@ -297,7 +298,7 @@ vec4 printf(vec2 start_pos, vec3 text_color, float val)
 	
 //	text_color = RGB(sin(2. * time+uv.x * 0.03)/2. +0.5,  -sin(4. * time-uv.y * 0.03)/2. +0.5,  cos(5. * time+dot(cos(uv), sin(uv))/3.)/2. +0.5)
 //    text_color = RGB(0.8, 0.3, 0.8);
-    float digit = 0;
+    float digit = 0.0;
     _R _P _i _ _G _P _U _exc
 
     px_color *= text_color; //just apply color once at end
