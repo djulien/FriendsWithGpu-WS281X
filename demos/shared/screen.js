@@ -12,7 +12,14 @@ const WebGL = require('node-webgl'); //NOTE: for RPi must be lukaaash/node-webg 
 //const cfg = require('./package.json');
 const {debug} = require('./debug');
 
-Math.round_even = function(val) { return this.round(val) & ~1; } //even values seem to work better for screen sizes
+//even values seem to work better for screen sizes
+const even =
+//Math.round_even = 
+module.exports.even =
+function even(val)
+{
+    return Math.round(val) & ~1;
+}
 
 const Screen = 
 module.exports.Screen = {};
@@ -34,8 +41,8 @@ if (!isRPi())
 //TODO: enable scroll bars and use full screen size?
     wndh -= 64; //kludge: account for top and bottom bars in Linux (since we're not in full screen mode)
 //try to preserve 4:3 aspect ratio on largest window that will fit on screen:
-    wndh = Math.min(Math.round_even(wndw * 3/4), wndh);
-    wndw = Math.min(Math.round_even(wndh * 4/3), wndw);
+    wndh = Math.min(even(Math.round(wndw * 3/4)), wndh);
+    wndw = Math.min(even(Math.round(wndh * 4/3)), wndw);
 }
 const document = WebGL.document(); //create window to simulate browser
 //var canvas = {width: scrw, height: scrh};
@@ -47,8 +54,8 @@ Object.assign(Screen, timing());
 Screen.width = canvas.width; //wndw; //canvas.width;
 Screen.height = canvas.height; //wndh; //canvas.height;
 //give caller overscan sizes also (needed for clipping compensation):
-Screen.scanw = Math.round_even(Screen.width * Screen.horiz.res / Screen.horiz.disp);
-Screen.scanh = Math.round_even(Screen.height * Screen.vert.res / Screen.vert.disp);
+Screen.scanw = even(Math.round(Screen.width * Screen.horiz.res / Screen.horiz.disp));
+Screen.scanh = even(Math.round(Screen.height * Screen.vert.res / Screen.vert.disp));
 debug(10, `full ${[scrw, scrh].join("x")}, wnd ${[wndw, wndh].join("x")}, drawable ${[canvas.width, canvas.height].join("x")}, scan ${[Screen.scanw, Screen.scanh].join("x")}, isRPi? ${Screen.isRPi}, gpio? ${Screen.gpio}`.blue_lt);
 
 

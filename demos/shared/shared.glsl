@@ -66,6 +66,8 @@
 
 const float PI = 3.1415926535897932384626433832795;
 
+#define round(val)  floor(val + 0.5)
+
 //compensate for floating point precision:
 const float FUD = 1.0e-6;
 //#define NOT(expr)  (1.0 - BOOL(expr))
