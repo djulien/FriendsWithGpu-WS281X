@@ -94,7 +94,7 @@ void main(void)
 //#ifdef PRINTF_H
         gl_FragColor = Textout_example();
 //        gl_FragColor = printf(vec2(0.8, 0.9), RGB(0.0, 0.8, 0.2), debug_val);
-        if (gl_FragColor != BLACK) return;
+//        if (gl_FragColor != BLACK) return;
 //#endif
 //    x *= 4.0;
         if ((y >= 2.0/100.0) && (y < 3.0/100.0)) { gl_FragColor = IIF(x < debug_val, GREEN, RED); return; } //show value

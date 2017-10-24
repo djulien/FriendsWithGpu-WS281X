@@ -14,14 +14,13 @@ require('colors').enabled = true; //for console output colors
 const {blocking, wait, getchar} = require('blocking-style');
 
 const {debug} = require('./shared/debug');
-const {Screen, even} = require('./shared/screen');
+const {Screen} = require('./shared/screen');
 const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
-function noteven(val) { return val; }
 
 //display settings:
 const FPS = 60; //how fast to run in auto mode (performance testing)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-const UNIV_LEN = Screen.gpio? Screen.height: noteven(Math.round(Screen.height / Math.round(Screen.scanw / 24))); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+const UNIV_LEN = Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
 debug(`drawable ${Screen.width} x ${Screen.height}, scan ${Screen.scanw} x ${Screen.scanh}, texture ${NUM_UNIV} x ${UNIV_LEN}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
 
 //show extra debug info:
@@ -34,7 +33,7 @@ const OPTS =
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
-    WS281X_DEBUG: true, //show timing debug info
+//    WS281X_DEBUG: true, //show timing debug info; NOTE: debug display will slow RPi down from 60 FPS to 20 FPS
 };
 
 //ARGB primary colors:
@@ -99,7 +98,7 @@ blocking(function*()
                 if (cmd in PALETTE) { color = cmd; continue; } //change color
                 break; //advance to next pixel
             }
-            canvas.pixel(x, y, PALETTE[color]);
+//            canvas.pixel(x, y, PALETTE[color]);
         }
     if (started) debug("auto fps: target %d, actual %d, #render/sec %d".cyan_lt, FPS, Math.round(10 * canvas.elapsed / (now_sec() - started)) / 10, Math.round(10 * canvas.render.stats()) / 10);
     console.error("end, pause for 10 sec".green_lt);
