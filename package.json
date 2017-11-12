@@ -32,15 +32,20 @@
     "node": ">=5",
     "npm": ">=3"
   },
+  "broken-dependencies": {
+    "colors": "github:djulien/colors.js",
+    "node-webgl": "github:djulien/node-webgl",
+    "screenres": "git+https://github.com/djulien/screenres.git"
+  },
   "dependencies": {
     "blocking-style": "^1.0.0",
     "callsite": "^1.0.0",
-    "colors": "github:djulien/colors.js",
+    "colors": "https://github.com/djulien/colors.js",
     "debug": "^2.2.0",
     "glob": "^7.1.1",
     "keypress": "^0.2.1",
-    "node-webgl": "github:djulien/node-webgl",
-    "screenres": "git+https://github.com/djulien/screenres.git"
+    "node-webgl": "https://github.com/djulien/node-webgl",
+    "screenres": "https://github.com/djulien/screenres"
   },
   "BROKEN-devDependencies": {
     "node-sdl2": "^2.1.2"
