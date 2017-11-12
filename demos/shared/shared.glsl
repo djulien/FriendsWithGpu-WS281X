@@ -34,6 +34,7 @@
 //To avoid branches one should always use functions like mix, step, smoothstep, etc."
 
 //useful info:
+//https://www.khronos.org/opengles/sdk/docs/reference_cards/OpenGL-ES-2_0-Reference-card.pdf
 // https://www.khronos.org/opengl/wiki/OpenGL_Error
 // https://www.khronos.org/opengl/wiki/GLSL_Optimizations
 // http://aras-p.info/blog/2010/09/29/glsl-optimizer/

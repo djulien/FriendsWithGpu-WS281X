@@ -3,6 +3,7 @@ Test/sample programs using RPi GPU to control WS281X pixels
 
 # Dependencies:
 on RPi, libpng-dev <- libslang2-dev <- libcaca-dev <- libsdl1.2-dev
+TODO: see Makefile at https://github.com/mattgodbolt/compiler-explorer/blob/master/Makefile
 
 # other info
 NOTE: if you get a message like:

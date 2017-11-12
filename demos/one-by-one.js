@@ -20,7 +20,7 @@ const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
 //display settings:
 const FPS = 60; //how fast to run in auto mode (performance testing)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-const UNIV_LEN = Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+const UNIV_LEN = Screen.height; //Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
 debug(`drawable ${Screen.width} x ${Screen.height}, scan ${Screen.scanw} x ${Screen.scanh}, texture ${NUM_UNIV} x ${UNIV_LEN}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
 
 //show extra debug info:
@@ -72,6 +72,8 @@ blocking(function*()
     canvas.elapsed = 0; //reset progress bar
     canvas.duration = canvas.width * canvas.height; //set progress bar limit
     canvas.fill(BLACK); //start with all pixels off
+//var pxbuf = canvas.txr.pixel_bytes;
+
     var started; //timing for auto mode
     var color = 'r'; //start with red initially selected
 //canvas.pixel(0, 0, WHITE);
@@ -98,7 +100,7 @@ blocking(function*()
                 if (cmd in PALETTE) { color = cmd; continue; } //change color
                 break; //advance to next pixel
             }
-//            canvas.pixel(x, y, PALETTE[color]);
+            canvas.pixel(x, y, PALETTE[color]);
         }
     if (started) debug("auto fps: target %d, actual %d, #render/sec %d".cyan_lt, FPS, Math.round(10 * canvas.elapsed / (now_sec() - started)) / 10, Math.round(10 * canvas.render.stats()) / 10);
     console.error("end, pause for 10 sec".green_lt);
