@@ -20,7 +20,7 @@ const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
 //display settings:
 const FPS = 60; //how fast to run in auto mode (performance testing)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-const UNIV_LEN = Screen.height; //Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+const UNIV_LEN = 24; //Screen.height; //Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
 debug(`drawable ${Screen.width} x ${Screen.height}, scan ${Screen.scanw} x ${Screen.scanh}, texture ${NUM_UNIV} x ${UNIV_LEN}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
 
 //show extra debug info:

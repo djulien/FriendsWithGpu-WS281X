@@ -1,0 +1,30 @@
+http://www.shaderific.com/glsl-functions/
+https://www.khronos.org/registry/OpenGL-Refpages/gl2.1/xhtml/glDrawPixels.xml
+http://www.harborfreight.com/8-in-5-speed-bench-drill-press-60238.html
+http://www.harborfreight.com/1-2-half-inch-jacobs-keyed-chuck-45731.html
+http://www.northerntool.com/shop/tools/product_200234874_200234874
+https://github.com/djulien/FriendsWithGpu-WS281X
+
+SDL2:
+https://raspberrypi.stackexchange.com/questions/42628/has-anyone-managed-to-get-sdl-2-3-working-without-x-in-raspbian
+** https://solarianprogrammer.com/2015/01/22/raspberry-pi-raspbian-getting-started-sdl-2/
+ sudo apt-get update
+ sudo apt-get upgrade
+ sudo apt-get install build-essential libfreeimage-dev libopenal-dev libpango1.0-dev libsndfile-dev libudev-dev libasound2-dev libjpeg8-dev libtiff5-dev libwebp-dev automake
+ cd ~
+ wget https://www.libsdl.org/release/SDL2-2.0.5.tar.gz
+ tar zxvf SDL2-2.0.3.tar.gz
+ cd SDL2-2.0.5 && mkdir build && cd build
+ #PI-1 ../configure --disable-pulseaudio --disable-esd --disable-video-mir --disable-video-wayland --disable-video-x11 --disable-video-opengl
+ ../configure --host=armv7l-raspberry-linux-gnueabihf --disable-pulseaudio --disable-esd --disable-video-mir --disable-video-wayland --disable-video-x11 --disable-video-opengl  #PI 2
+ make -j 4
+ sudo make install
+ g++ -o program_name program_name.cpp `sdl2-config --cflags --libs`
+
+maybe useful SR for phase 3:
+BU2152FS (too slow, but works with 3.3V?)
+http://media.digikey.com/PDF/Data%20Sheets/Rohm%20PDFs/BU2152FS.pdf
+74F675A (16-bit but fast enough and works with 3.3V?)
+http://www.mouser.com/ds/2/308/74f675a-1116668.pdf
+STP24DP05 
+http://www.st.com/en/power-management/stp24dp05.html
