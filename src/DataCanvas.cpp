@@ -51,6 +51,17 @@
 //- can run from ssh console
 //- fewer dependencies/easier to install
 
+//perf: newtest maxed at 24 x 1024 = 89% idle (single core)
+
+//TODO:
+//- fix avg time used stats
+//- add music
+//- read Vix2 seq
+//- map channels
+//- WS281X-to-Renard
+//- fix/add JS pivot props
+//- fix JS Screen
+
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
@@ -719,6 +730,7 @@ private:
                     for (int bit3 = 1; bit3 < TXR_WIDTH; bit3 += 3, color <<= 1)
                         if (color & 0x800000) pxbuf32[yofs + bit3] |= xmask; //set data bit
             	}
+                continue; //next row
             }
 #endif
 //just copy pixels as-is (dev/debug only):
