@@ -24,7 +24,7 @@ const UNIV_LEN = Screen.height; //must be == screen height for live show (else v
 //this.pixel_bytes = new Uint8Array(this.pixel_buf);
 const pixels = new Uint32Array(NUM_UNIV * UNIV_LEN); //this.pixel_buf); //NOTE: platform byte order
 //this.pixel_view32 = new DataView(this.pixel_buf); //for faster access (quad bytes); //caller-selectable byte order
-const canvas = new DataCanvas("Friends2017", NUM_UNIV, UNIV_LEN, false);
+const canvas = new DataCanvas("Friends2017", NUM_UNIV, UNIV_LEN, true);
 
 const BLACK = 0xff000000; //NOTE: need A set for color to take effect
 const RED = 0xffff0000;
