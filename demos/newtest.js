@@ -18,7 +18,7 @@ console.log("screen %dx%d, is RPi? %s".blue_lt, Screen.width, Screen.height, isR
 //};
 
 const NUM_UNIV = 24; //10; //max 24;
-const UNIV_LEN = 20; //Screen.height; //must be == screen height for live show (else vgrouping)
+const UNIV_LEN = Screen.height; //must be == screen height for live show (else vgrouping)
 //const pixels = new Buffer(Uint32Array(NUM_UNIV * UNIV_LEN);
 //const pixels = new ArrayBuffer(NUM_UNIV * UNIV_LEN * Uint32Array.BYTES_PER_ELEMENT);
 //this.pixel_bytes = new Uint8Array(this.pixel_buf);

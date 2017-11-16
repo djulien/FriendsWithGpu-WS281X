@@ -47,6 +47,11 @@
 //to recompile this file:  npm run rebuild   or   npm install
 
 
+//advantages of SDL2 over webgl, glfw, etc:
+//- can run from ssh console
+//- fewer dependencies/easier to install
+
+
 ////////////////////////////////////////////////////////////////////////////////
 ////
 /// Headers, general macros, inline functions
@@ -525,46 +530,53 @@ public:
     int num_univ, univ_len; //called-defined
     bool WantPivot;
 public:
-    DataCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true)
+    DataCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): num_univ(0), univ_len(0), WantPivot(want_pivot)
     {
         if (!count++) Init();
+        if (!title) title = "DataCanvas";
+        myprintf(3, BLUE_LT "Init(title '%s', #univ %d, univ len %d, pivot? %d)" ENDCOLOR, title, num_univ, univ_len, want_pivot);
+
 #define IGNORED_X_Y_W_H  0, 0, 200, 100 //not used for full screen mode
+        int wndw, wndh;
         window = isRPi()?
             SDL_CreateWindow(title, IGNORED_X_Y_W_H, SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_SHOWN): //| SDL_WINDOW_OPENGL): //don't use OpenGL; too slow
             SDL_CreateWindow(title, 10, 10, MaxFit().w, MaxFit().h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN); //| SDL_WINDOW_OPENGL);
         if (!window) return_void(err(RED_LT "Create window failed" ENDCOLOR));
+        uint32_t fmt = SDL_GetWindowPixelFormat(window); //desktop OpenGL: 24 RGB8888, RPi: 32 ARGB8888
+        if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(err(RED_LT "Can't get window format" ENDCOLOR));
+        SDL_GL_GetDrawableSize(window, &wndw, &wndh);
         debug_info(window);
+
+        this->num_univ = num_univ;
+        this->univ_len = univ_len;
+        this->WantPivot = want_pivot;
+        if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(err(RED_LT "Too many universes: %d (max %d)" ENDCOLOR, num_univ, WS281X_BITS));
+        if ((univ_len < 1) || (univ_len > wndh)) return_void(err(RED_LT "Universe too big: %d (max %d)" ENDCOLOR, univ_len, wndh));
 
 	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
         if (!renderer) return_void(err(RED_LT "Create renderer failed" ENDCOLOR));
         debug_info(renderer);
 
-#if 1
+#if 0 //NOTE: RPi does not like this; prevents texture creation below
 //NOTE: SDL_GetWindowSurface calls SDL_CreateWindowFramebuffer which calls internal CreateWindowFramebuffer (SDL_CreateWindowTexture) in which SDL_Renderer is created.
         SDL_Surface* wnd_surf = SDL_GetWindowSurface(window); //NOTE: wnd will dealloc, so don't need auto_ptr here
         if (!wnd_surf) return_void(err(RED_LT "Can't get window surface" ENDCOLOR));
 //NOTE: wnd_surf info is gone after SDL_CreateRenderer! (benign if info was saved already)
 //    if (!wnd_surf->w || !wnd_surf->h) myprintf(12, YELLOW_LT "Window surface %dx%d (ignored)" ENDCOLOR, wnd_surf->w, wnd_surf->h);
         debug_info(wnd_surf);
-#else
-        SDL_Surface surf, *wnd_surf = &surf;
-        surf.h = Screen().h;
+//        SDL_Surface surf = {0}, *wnd_surf = &surf;
+//        surf.h = Screen().h;
 #endif
 
-        if (!title) title = "DataCanvas";
-        if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(err(RED_LT "Too many universes: %d (max %d)" ENDCOLOR, num_univ, WS281X_BITS));
-        if ((univ_len < 1) || (univ_len > wnd_surf->h)) return_void(err(RED_LT "Universe too big: %d (max %d)" ENDCOLOR, univ_len, wnd_surf->h));
-        myprintf(3, BLUE_LT "Init(title '%s', #univ %d, univ len %d, pivot? %d)" ENDCOLOR, title, num_univ, univ_len, want_pivot);
-        this->num_univ = num_univ;
-        this->univ_len = univ_len;
-        this->WantPivot = want_pivot;
 //        int wndw, wndh;
 //        SDL_GL_GetDrawableSize(window, &wndw, &wndh);
 //NOTE: surface + texture must always be 3 * WS281X_BITS - 1 pixels wide
 //data signal is generated at 3x bit rate, last bit overlaps H blank
 //surface + texture height determine max # WS281X nodes per universe
 //SDL will stretch texture to fill window (V-grouping); OpenGL not needed for this
-        pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, 8+8+8+8, SDL_PIXELFORMAT_ARGB8888);
+//use same fmt + depth as window; TODO: is this more efficient?
+//        pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, 8+8+8+8, SDL_PIXELFORMAT_ARGB8888);
+        pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, SDL_BITSPERPIXEL(fmt), fmt);
         if (!pxbuf) return_void(err(RED_LT "Can't alloc pixel buf" ENDCOLOR));
         if ((pxbuf.cast->w != TXR_WIDTH) || (pxbuf.cast->h != univ_len)) return_void(err(RED_LT "Pixel buf wrong size: got %d x %d, wanted %d x %d" ENDCOLOR, pxbuf.cast->w, pxbuf.cast->h, TXR_WIDTH, univ_len));
         if (toint(pxbuf.cast->pixels) & 3) return_void(err(RED_LT "Pixel buf not quad byte aligned" ENDCOLOR));
@@ -631,13 +643,13 @@ public:
 //TODO: allow caller to resume in parallel
         SDL_RenderPresent(renderer); //update screen before delay (uploads to GPU)
         delta = now() - previous; present_time += delta; previous += delta;
-        if (!(++numfr % 100)) stats();
+        if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec
         return true;
     }
     void stats()
     {
         uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
-        myprintf(12, YELLOW_LT "#fr %d, elapsed %2.1f sec, %2.1f fps, avg: update %2.1f, render %2.1f, present %2.1f, caller %2.1f (msec), %2.1f%% idle" ENDCOLOR, numfr, (double)elapsed / freq, (double)numfr / elapsed * freq, (double)update_time / freq / numfr, (double)render_time / freq / numfr, (double)present_time / freq / numfr, (double)caller_time / freq / numfr, 100. * (elapsed - update_time - render_time - caller_time) / elapsed);
+        myprintf(12, YELLOW_LT "#fr %d, elapsed %2.1f sec, %2.1f fps, avg (msec): update %2.1f, render %2.1f, present %2.1f, caller %2.1f, %2.1f%% idle" ENDCOLOR, numfr, (double)elapsed / freq, (double)numfr / elapsed * freq, (double)update_time / freq / numfr, (double)render_time / freq / numfr, (double)present_time / freq / numfr, (double)caller_time / freq / numfr, 100. * (elapsed - update_time - render_time - caller_time) / elapsed);
     }
     bool Release()
     {
@@ -1203,9 +1215,26 @@ void debug_info(SDL_Window* window)
     int wndw, wndh;
     SDL_GL_GetDrawableSize(window, &wndw, &wndh);
 //        return err(RED_LT "Can't get drawable window size" ENDCOLOR);
-    myprintf(12, BLUE_LT "window %dx%d" ENDCOLOR, wndw, wndh);
-
+    uint32_t fmt = SDL_GetWindowPixelFormat(window);
+//    if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(err(RED_LT "Can't get window format" ENDCOLOR));
     uint32_t flags = SDL_GetWindowFlags(window);
+    std::ostringstream desc;
+    if (flags & SDL_WINDOW_FULLSCREEN) desc << ";FULLSCR";
+    if (flags & SDL_WINDOW_OPENGL) desc << ";OPENGL";
+    if (flags & SDL_WINDOW_SHOWN) desc << ";SHOWN";
+    if (flags & SDL_WINDOW_HIDDEN) desc << ";HIDDEN";
+    if (flags & SDL_WINDOW_BORDERLESS) desc << ";BORDERLESS";
+    if (flags & SDL_WINDOW_RESIZABLE) desc << ";RESIZABLE";
+    if (flags & SDL_WINDOW_MINIMIZED) desc << ";MIN";
+    if (flags & SDL_WINDOW_MAXIMIZED) desc << ";MAX";
+    if (flags & SDL_WINDOW_INPUT_GRABBED) desc << ";GRABBED";
+    if (flags & SDL_WINDOW_INPUT_FOCUS) desc << ";FOCUS";
+    if (flags & SDL_WINDOW_MOUSE_FOCUS) desc << ";MOUSE";
+    if (flags & SDL_WINDOW_FOREIGN) desc << ";FOREIGN";
+    if (!desc.tellp()) desc << ";";
+    myprintf(12, BLUE_LT "window %dx%d, fmt %i bpp %s %s" ENDCOLOR, wndw, wndh, SDL_BITSPERPIXEL(fmt), SDL_PixelFormatShortName(fmt), desc.str().c_str() + 1);
+
+#if 0
     myprintf(22, BLUE_LT "SDL_WINDOW_FULLSCREEN    [%c]" ENDCOLOR, (flags & SDL_WINDOW_FULLSCREEN) ? 'X' : ' ');
     myprintf(22, BLUE_LT "SDL_WINDOW_OPENGL        [%c]" ENDCOLOR, (flags & SDL_WINDOW_OPENGL) ? 'X' : ' ');
     myprintf(22, BLUE_LT "SDL_WINDOW_SHOWN         [%c]" ENDCOLOR, (flags & SDL_WINDOW_SHOWN) ? 'X' : ' ');
@@ -1218,6 +1247,7 @@ void debug_info(SDL_Window* window)
     myprintf(22, BLUE_LT "SDL_WINDOW_INPUT_FOCUS   [%c]" ENDCOLOR, (flags & SDL_WINDOW_INPUT_FOCUS) ? 'X' : ' ');
     myprintf(22, BLUE_LT "SDL_WINDOW_MOUSE_FOCUS   [%c]" ENDCOLOR, (flags & SDL_WINDOW_MOUSE_FOCUS) ? 'X' : ' ');
     myprintf(22, BLUE_LT "SDL_WINDOW_FOREIGN       [%c]" ENDCOLOR, (flags & SDL_WINDOW_FOREIGN) ? 'X' : ' '); 
+#endif
 
 //NO
 //    SDL_Surface* wnd_surf = SDL_GetWindowSurface(window); //NOTE: wnd will dealloc, so don't need auto_ptr here
@@ -1238,13 +1268,15 @@ void debug_info(SDL_Renderer* renderer)
         if (!i) which << "active";
         else which << i << "/" << SDL_GetNumRenderDrivers();
         if (!OK(i? SDL_GetRenderDriverInfo(i - 1, &info): SDL_GetRendererInfo(renderer, &info))) { err(RED_LT "Can't get renderer[%s] info" ENDCOLOR, which.str().c_str()); continue; }
-        if (info.flags & SDL_RENDERER_SOFTWARE) flags << ";" << "SW";
-        if (info.flags & SDL_RENDERER_ACCELERATED) flags << ";" << "ACCEL";
-        if (info.flags & SDL_RENDERER_PRESENTVSYNC) flags << ";" << "VSYNC";
-        if (info.flags & SDL_RENDERER_TARGETTEXTURE) flags << ";" << "TARGET";
+        if (info.flags & SDL_RENDERER_SOFTWARE) flags << ";SW";
+        if (info.flags & SDL_RENDERER_ACCELERATED) flags << ";ACCEL";
+        if (info.flags & SDL_RENDERER_PRESENTVSYNC) flags << ";VSYNC";
+        if (info.flags & SDL_RENDERER_TARGETTEXTURE) flags << ";TOTXR";
         if (info.flags & ~(SDL_RENDERER_SOFTWARE | SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_TARGETTEXTURE)) flags << ";????";
+        if (!flags.tellp()) flags << ";";
         for (unsigned int i = 0; i < info.num_texture_formats; ++i) fmts << ", " << SDL_BITSPERPIXEL(info.texture_formats[i]) << " bpp " << skip(SDL_GetPixelFormatName(info.texture_formats[i]), "SDL_PIXELFORMAT_");
-        if (info.num_texture_formats != 1) count << info.num_texture_formats << " fmts: ";
+        if (!info.num_texture_formats) { count << "no fmts"; fmts << "  "; }
+        else if (info.num_texture_formats != 1) count << info.num_texture_formats << " fmts: ";
         myprintf(12, BLUE_LT "Renderer[%s]: '%s', flags 0x%x %s, max %dx%d, %s%s" ENDCOLOR, which.str().c_str(), info.name, info.flags, flags.str().c_str() + 1, info.max_texture_width, info.max_texture_height, count.str().c_str(), fmts.str().c_str() + 2);
     }
 }
