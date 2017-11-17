@@ -54,13 +54,25 @@
 //perf: newtest maxed at 24 x 1024 = 89% idle (single core)
 
 //TODO:
-//- fix avg time used stats
 //- add music
 //- read Vix2 seq
 //- map channels
 //- WS281X-to-Renard
 //- fix/add JS pivot props
 //- fix JS Screen
+//- ABGR8888 on RPi
+
+//WS281X:
+//30 usec = 33.3 KHz node rate
+//1.25 usec = 800 KHz bit rate; x3 = 2.4 MHz data rate => .417 usec
+//AC SSRs:
+//120 Hz = 8.3 msec; x256 ~= 32.5 usec (close enough to 30 usec); OR x200 = .0417 usec == 10x WS281X data rate
+//~ 1 phase angle dimming time slot per WS281X node
+//invert output
+//2.7 Mbps serial date rate = SPBRG 2+1
+//8+1+1 bits = 3x WS281X data rate; 3 bytes/WS281X node
+//10 serial bits compressed into 8 WS281X data bits => 2/3 reliable, 1/3 unreliable bits
+//5 serial bits => SPBRG 5+1, 1.35 Mbps; okay since need to encode anyway?
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -533,7 +545,7 @@ private:
     static auto_ptr<SDL_lib> sdl;
     static int count;
 //performance stats:
-    uint64_t pivot_time, update_time, render_time, present_time, caller_time;
+    uint64_t caller_time, pivot_time, update_time, unlock_time, copy_time, present_time;
     uint64_t started, previous;
     uint32_t numfr;
     inline static uint64_t now() { return SDL_GetPerformanceCounter(); }
@@ -599,7 +611,7 @@ public:
         if (!canvas) return_void(err(RED_LT "Can't create canvas texture" ENDCOLOR));
 
 //        Paint(NULL); //start with all pixels dark
-        pivot_time = update_time = render_time = present_time = caller_time = numfr = 0;
+        caller_time = pivot_time = update_time = unlock_time = copy_time = present_time = numfr = 0;
         started = previous = now();
 //        return true;
     }
@@ -633,16 +645,18 @@ public:
 //NOTE: pixel data must be in correct (texture) format
 //NOTE: SDL_UpdateTexture is reportedly slow; use Lock/Unlock and copy pixel data directly for better performance
         memcpy(txr_info.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
+        delta = now() - previous; update_time += delta; previous += delta;
         SDL_UnlockTexture(canvas);
 #else //slower; doesn't work with streaming texture?
         if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
             return err(RED_LT "Can't update texture" ENDCOLOR);
-#endif
         delta = now() - previous; update_time += delta; previous += delta;
+#endif
+        delta = now() - previous; unlock_time += delta; previous += delta;
 
     	if (!OK(SDL_RenderCopy(renderer, canvas, NORECT, NORECT))) //&renderQuad, angle, center, flip ))
             return err(RED_LT "Unable to render to screen" ENDCOLOR);
-        delta = now() - previous; render_time += delta; previous += delta;
+        delta = now() - previous; copy_time += delta; previous += delta;
 
 //    if (!OK(SDL_GL_MakeCurrent(gpu.wnd, NULL)))
 //        return err(RED_LT "Can't unbind current context" ENDCOLOR);
@@ -654,13 +668,19 @@ public:
 //TODO: allow caller to resume in parallel
         SDL_RenderPresent(renderer); //update screen before delay (uploads to GPU)
         delta = now() - previous; present_time += delta; previous += delta;
+//myprintf(22, BLUE_LT "fr[%d] deltas: %lld, %lld, %lld, %lld, %lld" ENDCOLOR, numfr, delta1, delta2, delta3, delta4, delta5);
         if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec
         return true;
     }
     void stats()
     {
         uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
-        myprintf(12, YELLOW_LT "#fr %d, elapsed %2.1f sec, %2.1f fps, avg (msec): update %2.1f, render %2.1f, present %2.1f, caller %2.1f, %2.1f%% idle" ENDCOLOR, numfr, (double)elapsed / freq, (double)numfr / elapsed * freq, (double)update_time / freq / numfr, (double)render_time / freq / numfr, (double)present_time / freq / numfr, (double)caller_time / freq / numfr, 100. * (elapsed - update_time - render_time - caller_time) / elapsed);
+        uint64_t unknown_time = elapsed - caller_time - pivot_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
+        uint64_t idle_time = isRPi()? present_time: unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
+        double fps = (double)numfr * freq / elapsed;
+#define avg(val)  (double)(val) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
+        myprintf(12, YELLOW_LT "#fr %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec = caller %2.3f + pivot %2.3f + update %2.3f + unlock %2.3f + copy %2.3f + present %2.3f + unknown %2.3f, %2.1f%% idle" ENDCOLOR, numfr, (double)elapsed / freq, fps, 1000 / fps, avg(1000 * caller_time), avg(1000 * pivot_time), avg(1000 * update_time), avg(1000 * unlock_time), avg(1000 * copy_time), avg(1000 * present_time), avg(1000 * unknown_time), (double)100 * idle_time / elapsed);
+myprintf(22, BLUE_LT "times: caller %lld, pivot %lld, update %lld, unlock %lld, copy %lld, present %lld, unknown %lld, elapsed %lld, freq %lld" ENDCOLOR, caller_time, pivot_time, update_time, unlock_time, copy_time, present_time, unknown_time, elapsed, freq);
     }
     bool Release()
     {
@@ -896,10 +916,15 @@ NAN_METHOD(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 #endif
 
 
+//   String::Utf8Value fileName(args[0]->ToString());
+
+
 //?? https://nodejs.org/docs/latest/api/addons.html#addons_wrapping_c_objects
+//https://github.com/nodejs/nan/blob/master/doc/methods.md
 class DataCanvas_js: public Nan::ObjectWrap
 {
-private:
+//private:
+public:
     DataCanvas inner;
 public:
 //    static void Init(v8::Handle<v8::Object> exports);
@@ -917,8 +942,11 @@ private:
 //    static NAN_GETTER(WidthGetter);
 //    static NAN_GETTER(PitchGetter);
     static NAN_METHOD(paint);
-    static NAN_PROPERTY_GETTER(get_pivot);
-    static NAN_PROPERTY_SETTER(set_pivot);
+//??    static NAN_PROPERTY_GETTER(get_pivot);
+//??    static NAN_PROPERTY_SETTER(set_pivot);
+//    static NAN_GETTER(get_pivot);
+//    static NAN_SETTER(set_pivot);
+    static NAN_METHOD(pivot_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that
     static NAN_METHOD(release);
 //    static void paint(const Nan::FunctionCallbackInfo<v8::Value>& info);
 //private:
@@ -949,9 +977,13 @@ void DataCanvas_js::Init(v8::Local<v8::Object> exports)
 //    Nan::SetPrototypeMethod(proto, "paint", paint);
 //    NODE_SET_PROTOTYPE_METHOD(ctor, "paint", DataCanvas_js::paint);
     Nan::SetPrototypeMethod(ctor, "paint", DataCanvas_js::paint);
-    Nan::SetPrototypeMethod(ctor, "release", DataCanvas_js::release);
+//TODO    Nan::SetPrototypeMethod(ctor, "utype", DataCanvas_js::utype);
+    Nan::SetPrototypeMethod(ctor, "pivot_tofix", DataCanvas_js::pivot_tofix); //TODO: fix this
     Nan::SetPrototypeMethod(ctor, "release", DataCanvas_js::release);
 //    Nan::SetAccessor(proto,JS_STR("width"), WidthGetter);
+//    Nan::SetAccessor(ctor, JS_STR(iso, "pivotprop"), DataCanvas_js::getprop_pivot, DataCanvas_js::setprop_pivot);
+//ambiguous:    Nan::SetAccessor(ctor, JS_STR(iso, "pivot"), DataCanvas_js::get_pivot, DataCanvas_js::set_pivot);
+//    ctor->SetAccessor(JS_STR(iso, "pivot"), DataCanvas_js::get_pivot, DataCanvas_js::set_pivot);
 //    Nan::SetAccessor(proto,JS_STR("height"), HeightGetter);
 //    Nan::SetAccessor(proto,JS_STR("pitch"), PitchGetter);
 //    Nan::SetAccessor(proto,JS_STR("src"), SrcGetter, SrcSetter);
@@ -987,6 +1019,7 @@ void DataCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
         bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
         DataCanvas_js* canvas = new DataCanvas_js(*title? *title: NULL, w, h, pivot);
         canvas->Wrap(info.This());
+//??        Nan::SetAccessor(*canvas, JS_STR(iso, "pivot"), DataCanvas_js::get_pivot, DataCanvas_js::set_pivot);
         info.GetReturnValue().Set(info.This());
     }
     else //Invoked as plain function `MyObject(...)`, turn into construct call.
@@ -999,6 +1032,68 @@ void DataCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
         info.GetReturnValue().Set(result);
     }
 }
+
+
+#if 0
+NAN_PROPERTY_GETTER(DataCanvas_js::get_pivot)
+//void DataCanvas_js::get_pivot(v8::Local<v8::String> property, Nan::NAN_PROPERTY_GETTER_ARGS_TYPE info)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+myprintf(1, "pivot was = %d" ENDCOLOR, canvas->inner.WantPivot);
+    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.WantPivot));
+}
+
+NAN_PROPERTY_SETTER(DataCanvas_js::set_pivot)
+//void DataCanvas_js::set_pivot(v8::Local<v8::String> property, v8::Local<v8::Value> value, Nan::NAN_PROPERTY_SETTER_ARGS_TYPE info)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+    canvas->inner.WantPivot = value->BooleanValue();
+myprintf(1, "pivot is now = %d" ENDCOLOR, canvas->inner.WantPivot);
+//return_void(errjs(iso, "DataCanvas.paint: failed"));
+    info.GetReturnValue().Set(0); //TODO: what value to return?
+}
+#endif
+
+#if 0
+NAN_GETTER(DataCanvas_js::get_pivot)
+//void DataCanvas_js::get_pivot(v8::Local<v8::String> property, Nan::NAN_PROPERTY_GETTER_ARGS_TYPE info)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+myprintf(1, "pivot was = %d" ENDCOLOR, canvas->inner.WantPivot);
+    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.WantPivot));
+}
+
+
+NAN_SETTER(DataCanvas_js::set_pivot)
+//void DataCanvas_js::set_pivot(v8::Local<v8::String> property, v8::Local<v8::Value> value, Nan::NAN_PROPERTY_SETTER_ARGS_TYPE info)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+    canvas->inner.WantPivot = value->BooleanValue();
+myprintf(1, "pivot is now = %d" ENDCOLOR, canvas->inner.WantPivot);
+//return_void(errjs(iso, "DataCanvas.paint: failed"));
+    info.GetReturnValue().Set(0); //TODO: what value to return?
+}
+#endif
+
+
+#if 1
+//get/set pivot flag:
+void DataCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(DataCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+
+    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
+    if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue();
+//if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
+//else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
+}
+#endif
 
 
 //xfr/xfm Javascript array to GPU:
@@ -1040,20 +1135,6 @@ void DataCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
 }
 
 
-NAN_PROPERTY_GETTER(get_pivot)
-//void get_pivot(v8::Local<v8::String> property, Nan::NAN_PROPERTY_GETTER_ARGS_TYPE info)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-}
-
-
-NAN_PROPERTY_SETTER(set_pivot)
-//void set_pivot(v8::Local<v8::String> property, v8::Local<v8::Value> value, Nan::NAN_PROPERTY_SETTER_ARGS_TYPE info)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-}
-
-
 void DataCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(DataCanvas_js::release) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
@@ -1071,6 +1152,11 @@ void DataCanvas_js::Quit(void* ignored)
 }
 
 
+//#define CONST_INT(name, value)  \
+//  Nan::ForceSet(target, Nan::New(name).ToLocalChecked(), Nan::New(value),  \
+//      static_cast<PropertyAttribute>(ReadOnly|DontDelete));
+
+
 //tell Node.js about my entry points:
 NAN_MODULE_INIT(exports_js) //defines target
 //void exports_js(v8::Local<v8::Object> exports, v8::Local<v8::Object> module)
@@ -1079,7 +1165,7 @@ NAN_MODULE_INIT(exports_js) //defines target
 //    NODE_SET_METHOD(exports, "isRPi", isRPi_js);
 //    NODE_SET_METHOD(exports, "Screen", Screen_js); //TODO: property instead of method
     Nan::Export(target, "isRPi", isRPi_js);
-    Nan::Export(target, "Screen", Screen_js);
+    Nan::Export(target, "Screen_tofix", Screen_js);
 //    target->SetAccessor(JS_STR(iso, "Screen"), Screen_js);
     DataCanvas_js::Init(target);
 //  Nan::SetAccessor(proto, Nan::New("fillColor").ToLocalChecked(), GetFillColor);
@@ -1089,6 +1175,10 @@ NAN_MODULE_INIT(exports_js) //defines target
 //    NODE_SET_METHOD(exports, "DataCanvas", DataCanvas_js);
 //https://github.com/Automattic/node-canvas/blob/b470ce81aabe2a78d7cdd53143de2bee46b966a7/src/CanvasRenderingContext2d.cc#L764
 //    NODE_SET_METHOD(module, "exports", CreateObject);
+
+//    CONST_INT("api_version", 1.0);
+//    CONST_INT("name", "data-canvas");
+//    CONST_INT("description", "GPU data canvas for WS281X");
 
 //    Init();
 //    node::AtExit(Quit_js);
@@ -1120,7 +1210,7 @@ uint32_t PALETTE[] = {RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE};
 int main(int argc, const char* argv[])
 {
     myprintf(1, CYAN_LT "test/standalone routine" ENDCOLOR);
-//{
+{
     DataCanvas canvas(0, NUM_UNIV, UNIV_LEN, false);
     uint32_t pixels[NUM_UNIV * UNIV_LEN] = {0};
 #if 0 //gradient fade
@@ -1128,7 +1218,7 @@ int main(int argc, const char* argv[])
     uint32_t color = hsv2rgb((double)(hue++ % 360) / 360, 1, 1); //gradient fade on hue
     surf.FillRect(RECT_ALL, color);
 #endif
-#if 1 //one-by-one rainbow
+#if 1 //one-by-one, palette colors
     for (int xy = 0;; ++xy) //xy < 10 * 10; ++xy)
     {
         int x = (xy / UNIV_LEN) % NUM_UNIV, y = xy % UNIV_LEN; //cycle thru [0..9,0..9]
@@ -1140,9 +1230,9 @@ int main(int argc, const char* argv[])
 //        SDL_Delay(1000);
     }
 #endif
-    myprintf(1, GREEN_LT "done, wait 5 sec" ENDCOLOR);
-//}
+} //force DataCanvas out of scope before delay
 //    canvas.Paint(pixels);
+    myprintf(1, GREEN_LT "done, wait 5 sec" ENDCOLOR);
     SDL_Delay(5000);
     return 0;
 }
@@ -1161,7 +1251,7 @@ bool eventh(int max /*= INT_MAX*/)
 //       if (SDL_WaitEvent(&evt)) //execution suspends here while waiting on an event
 		if (SDL_PollEvent(&evt))
 		{
-            myprintf(14, BLUE_LT "evt type 0x%x" ENDCOLOR, evt.type);
+//            myprintf(14, BLUE_LT "evt type 0x%x" ENDCOLOR, evt.type);
 			if (evt.type == SDL_QUIT) return true; //quit = true; //return;
 			if (evt.type == SDL_KEYDOWN)
             {
