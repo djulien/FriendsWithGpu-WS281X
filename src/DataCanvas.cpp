@@ -74,6 +74,9 @@
 //10 serial bits compressed into 8 WS281X data bits => 2/3 reliable, 1/3 unreliable bits
 //5 serial bits => SPBRG 5+1, 1.35 Mbps; okay since need to encode anyway?
 
+//SDL multi-threading info:
+//https://gamedev.stackexchange.com/questions/117041/multi-threading-for-rhythm-game
+
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
@@ -88,6 +91,7 @@
 //#include <math.h> //sqrt
 //#include <sys/time.h>
 #include <sys/stat.h>
+#include <stdarg.h> //varargs
 //#include <iostream> //std::cin
 //using std::cin;
 //#include <cstring> //std::string
@@ -96,7 +100,7 @@
 //#include <sstream> //std::ostringstream
 //using std::ostringstream;
 //#include <type_traits> //std::conditional, std::enable_if, std::is_same, std::disjunction, etc
-//#include <stdexcept> //std::runtime_error
+#include <stdexcept> //std::runtime_error
 //using std::runtime_error;
 //#include <memory> //shared_ptr<>
 #include <regex> //regex*, *match
@@ -106,6 +110,8 @@
 //using std::regex_search;
 #include <algorithm> //std::min, std::max
 //using std::min;
+#include <vector> //std::vector
+#include <mutex> //std::mutex
 
 
 #define rdiv(n, d)  int(((n) + ((d) >> 1)) / (d))
@@ -118,6 +124,8 @@
 //inline int toint(void* val) { return (int)(long)val; }
 //#define toint(ptr)  reinterpret_cast<int>(ptr) //gives "loses precision" warning/error
 #define toint(expr)  (int)(long)(expr)
+
+#define CONST  //should be const but function signatures aren't defined that way
 
 
 //kludge: need nested macros to stringize correctly:
@@ -169,7 +177,7 @@ inline const char* skip(const char* str, const char* prefix)
 }
 
 //text line out to stream:
-inline void fputline(const char* buf, FILE* stm)
+inline void fputline(FILE* stm, const char* buf)
 {
     fputs(buf, stm);
     fputc('\n', stm); 
@@ -181,15 +189,42 @@ inline void fputline(const char* buf, FILE* stm)
 #define WANT_LEVEL  99 //[0..9] for high-level, [10..19] for main logic, [20..29] for mid logic, [30..39] for lower level alloc/dealloc
 #define myprintf(level, ...)  ((WANT_LEVEL >= (level))? printf(__VA_ARGS__): noop())
 
+//examples:
 //#define eprintf(args…) fprintf (stderr, args)
 //#define eprintf(format, …) fprintf (stderr, format, __VA_ARGS__)
 //#define eprintf(format, …) fprintf (stderr, format, ##__VA_ARGS__)
-#define NOERROR  -1
-#define err(...)  errprintf(SDL_GetError(), __VA_ARGS__)
+
+#define NOERROR  (const char*)-1
+//TODO: SDL and non-SDL versions of exc, err
+#define exc(...)  errprintf(stdexc, SDL_GetError(), __VA_ARGS__) //TODO: add red
+#define err(...)  errprintf(stdpopup, SDL_GetError(), __VA_ARGS__) //TODO: add red
 //TODO #define err(fmt, ...)  errprintf(SDL_GetError(), fmt, __VA_ARGS__)
 //#define myerr(reason, ...)  errprintf(reason, __VA_ARGS__)
-#define printf(...)  errprintf((const char*)NOERROR, __VA_ARGS__)
-bool errprintf(const char* reason /*= 0*/, const char* fmt, ...); //fwd ref
+#define printf(...)  errprintf(stderr, NOERROR, __VA_ARGS__) //stderr to keep separate from data output
+bool errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...); //fwd ref
+//pseudo-destinations:
+CONST FILE* stdpopup = (FILE*)-2;
+CONST FILE* stdexc = (FILE*)-3;
+
+
+//simpler log to file:
+void log(const char* fmt, ...)
+{
+//    char fmtbuf[500];
+    static std::mutex serialize;
+    static int count = 0;
+    serialize.lock();
+    FILE* f = fopen("my.log", "a");
+    if (!count++) fprintf(f, "-----------\n");
+    va_list args;
+    va_start(args, fmt);
+//    size_t needlen = vsnprintf(fmtbuf, sizeof(fmtbuf), fmt, args);
+    vfprintf(f, fmt, args);
+    va_end(args);
+    fputc('\n', f);
+    fclose(f);
+    serialize.unlock();
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -269,7 +304,7 @@ bool errprintf(const char* reason /*= 0*/, const char* fmt, ...); //fwd ref
 #define GRAY_LT  ANSI_COLOR("0;37")
 //#define ENDCOLOR  ANSI_COLOR("0")
 //append the src line# to make debug easier:
-#define ENDCOLOR_ATLINE(n)  " &" TOSTR(n) ANSI_COLOR("0") "\n"
+#define ENDCOLOR_ATLINE(n)  " &" TOSTR(n) ANSI_COLOR("0") //"\n"
 #define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%d) //NOTE: requires extra param
 #define ENDCOLOR  ENDCOLOR_ATLINE(__LINE__)
 
@@ -309,28 +344,35 @@ inline float _mix(float x, float y, float a) { return (1 - a) * x + a * y; }
 #define UNUSED  0
 #define NORECT  NULL
 #define FIRST_MATCH  -1
-//#define THIS_THREAD  NULL
+#define THIS_THREAD  NULL
 
-
-//allow libs to be treated like other allocated SDL objects:
-typedef struct { /*int dummy;*/ } SDL_lib;
-//typedef struct { int dummy; } IMG_lib;
-
-
-//lib init shims to work with auto_ptr<> and OK macro:
-inline SDL_lib* SDL_INIT(uint32_t flags, int where) // = 0)
-{
-    static SDL_lib ok;
-    SDL_lib* retval = OK(SDL_Init(flags))? &ok: NULL;  //dummy non-NULL address for success
-    if (where) myprintf(22, YELLOW_LT "SDL_Init(0x%x) = 0x%x ok? %d (from %d)" ENDCOLOR, flags, toint(retval), !!retval, where);
-    return retval;
-}
-//NOTE: cpp avoids recursion so macro names can match actual function names here
-//#define IMG_INIT(flags)  ((IMG_Init(flags) & (flags)) != (flags)) //0 == Success
-#define SDL_INIT(flags)  SDL_INIT(flags, __LINE__)
 
 //reduce verbosity:
 #define SDL_PixelFormatShortName(fmt)  skip(SDL_GetPixelFormatName(fmt), "SDL_PIXELFORMAT_")
+
+
+#if 0
+//include SDL reason when throwing exceptions:
+class SDL_Exception: public std::runtime_error
+{
+public:
+    SDL_Exception(const char* fmt, ...) //: std::runtime_error(errmsg(fmt)) {};
+    {
+        char fmtbuf[500];
+        va_list args;
+        va_start(args, fmt);
+        size_t needlen = vsnprintf(fmtbuf, sizeof(fmtbuf), fmt, args);
+        va_end(args);
+        const char* reason = SDL_GetError();
+        if (!reason || !reason[0]) reason = "(no details)";
+//	: std::runtime_error(make_what(function, SDL_GetError())),
+//        static std::string str; //NOTE: must be static to preserve contents after return
+        str = desc + ": " + reason;
+        return str.c_str();
+    }
+};
+#endif
+
 
 /*
 inline const char* ThreadName(const SDL_Thread* thr = THIS_THREAD)
@@ -342,6 +384,49 @@ inline const char* ThreadName(const SDL_Thread* thr = THIS_THREAD)
     return name.c_str();
 }
 */
+
+
+//augmented data types:
+//allow inited libs or locked objects to be treated like other allocated SDL objects:
+typedef struct { /*int dummy;*/ } SDL_lib;
+//typedef struct { int dummy; } IMG_lib;
+typedef struct { /*const*/ SDL_mutex* mutex; } SDL_LockedMutex;
+//cache texture info in Surface struct for easier access:
+typedef struct { /*const*/ SDL_Texture* txr; SDL_Surface surf; uint32_t fmt; int acc; } SDL_LockedTexture;
+
+
+//define type names (for debug or error messages):
+inline const char* TypeName(const SDL_lib*) { return "SDL_Init"; }
+//inline const char* TypeName(const IMG_lib*) { return "IMG_Init"; }
+inline const char* TypeName(const SDL_Window*) { return "SDL_Window"; }
+inline const char* TypeName(const SDL_Renderer*) { return "SDL_Renderer"; }
+inline const char* TypeName(const SDL_Texture*) { return "SDL_Texture"; }
+inline const char* TypeName(const SDL_LockedTexture*) { return "SDL_LockedTexture"; }
+inline const char* TypeName(const SDL_Surface*) { return "SDL_Surface"; }
+inline const char* TypeName(const SDL_mutex*) { return "SDL_mutex"; }
+inline const char* TypeName(const SDL_LockedMutex*) { return "SDL_LockedMutex"; }
+inline const char* TypeName(const SDL_cond*) { return "SDL_cond"; }
+inline const char* TypeName(const SDL_Thread*) { return "SDL_Thread"; }
+
+
+//overloaded deallocator function for each type:
+//avoids logic specialization by object type
+//TODO: remove printf
+#define debug(ptr)  myprintf(28, YELLOW_LT "dealloc %s 0x%x" ENDCOLOR, TypeName(ptr), toint(ptr))
+inline int Release(/*const*/ SDL_lib* that) { debug(that); SDL_Quit(); return SDL_Success; }
+//inline int Release(IMG_lib* that) { IMG_Quit(); return SDL_Success; }
+inline int Release(/*const*/ SDL_Window* that) { debug(that); SDL_DestroyWindow(that); return SDL_Success; }
+inline int Release(/*const*/ SDL_Renderer* that) { debug(that); SDL_DestroyRenderer(that); return SDL_Success; }
+//inline int Release(SDL_GLContext* that) { debug(that); SDL_GL_DeleteContext(that); return SDL_Success; }
+inline int Release(/*const*/ SDL_Texture* that) { debug(that); SDL_DestroyTexture(that); return SDL_Success; }
+inline int Release(/*const*/ SDL_LockedTexture* that) { /*debug(that)*/; SDL_UnlockTexture(that->txr); return SDL_Success; }
+inline int Release(/*const*/ SDL_Surface* that) { debug(that); SDL_FreeSurface(that); return SDL_Success; }
+inline int Release(/*const*/ SDL_mutex* that) { debug(that); SDL_DestroyMutex(that); return SDL_Success; }
+inline int Release(/*const*/ SDL_LockedMutex* that) { /*debug(that)*/; return SDL_UnlockMutex(that->mutex); } //the only one that directly returns a value
+inline int Release(/*const*/ SDL_cond* that) { debug(that); SDL_DestroyCond(that); return SDL_Success; }
+//inline int Release(SDL_PendingCond* that) { Release(that->mutex); Release(that->cond); return SDL_Success; }
+inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_WaitThread(that, &exitval); return exitval; } //this is one of the few dealloc funcs with a ret code, so might as well check it
+#undef debug
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -360,12 +445,10 @@ class auto_ptr
 {
 //TODO: private:
 public:
-//CAUTION: do not initialize info here; it will overwrite results from nested member calls
-    DataType* cast; //= NULL;
-    static DataType* latest;
+    DataType* cast;
 public:
 //ctor/dtor:
-    auto_ptr(DataType* that = NULL): cast(that) { if (that) latest = that; myprintf(22, YELLOW_LT "assign %s 0x%x" ENDCOLOR, TypeName(that), toint(that)); };
+    auto_ptr(DataType* that = NULL): cast(that) {}; // myprintf(22, YELLOW_LT "assign %s 0x%x" ENDCOLOR, TypeName(that), toint(that)); };
     ~auto_ptr() { this->release(); }
 //cast to regular pointer:
 //    operator const PtrType*() { return this->cast; }
@@ -373,18 +456,15 @@ public:
 //conversion:
 //NO; lval bypasses op=    operator /*const*/ DataType*&() { return this->cast; } //allow usage as l-value; TODO: would that preserve correct state?
     operator /*const*/ DataType*() { return this->cast; } //r-value only; l-value must use op=
-//redundant?    operator bool() { return this->cast != NULL; }
 //assignment:
-//    PtrType*& operator=(/*const*/ PtrType* /*&*/ that)
     auto_ptr& operator=(/*const*/ DataType* /*&*/ that)
     {
-        if (this->cast != that) //avoid self-assignment
+        if (that != this->cast) //avoid self-assignment
         {
             this->release();
 //set new state:
-            myprintf(22, YELLOW_LT "assign %s 0x%x" ENDCOLOR, TypeName(that), toint(that));
+            myprintf(22, YELLOW_LT "reassign %s 0x%x" ENDCOLOR, TypeName(that), toint(that));
             this->cast = that; //now i'm responsible for releasing new object (no ref counting)
-            if (that) latest = that;
         }
         return *this; //chainable
     }
@@ -394,7 +474,7 @@ public:
         if (this->cast) Release(this->cast); //overloaded
         this->cast = NULL;
     }
-    DataType* keep()
+    DataType* keep() //scope-crossing helper
     {
         DataType* retval = this->cast;
         this->cast = NULL; //new owner is responsible for dealloc
@@ -404,50 +484,241 @@ public:
 //#define auto_ptr(type)  auto_ptr<type, TOSTR(type)>
 //#define auto_ptr  __SRCLINE__ auto_ptr_noline
 
-template<>
-SDL_lib* auto_ptr<SDL_lib>::latest = NULL;
-template<>
-SDL_Window* auto_ptr<SDL_Window>::latest = NULL;
-template<>
-SDL_Renderer* auto_ptr<SDL_Renderer>::latest = NULL;
-template<>
-SDL_Texture* auto_ptr<SDL_Texture>::latest = NULL;
-template<>
-SDL_Surface* auto_ptr<SDL_Surface>::latest = NULL;
+
+//auto_ptr template specializations:
+//NOTE: compiler chooses more specialized template instead of more general template
+//https://stackoverflow.com/questions/44550976/how-stdconditional-works
+#define DUMMY_TYPE  int //can be anything except "void"
+
+template<typename DataType>
+class auto_ptr<DataType, typename std::enable_if<std::is_same<DataType, SDL_Window>::value>::type>: public auto_ptr<DataType, DUMMY_TYPE>
+{
+public:
+    static DataType* latest;
+public:
+    auto_ptr(DataType* that = NULL): auto_ptr<DataType, DUMMY_TYPE>(that) { if (that) latest = that; }; //remember most recent
+    auto_ptr& operator=(/*const*/ DataType* /*&*/ that)
+    {
+        if (that) latest = that;
+        auto_ptr<DataType, DUMMY_TYPE>::operator=(that); //super
+        return *this; //chainable
+    }
+};
+template<> SDL_Window* auto_ptr<SDL_Window>::latest = NULL;
 
 
-//define type names (for debug or error messages):
-inline const char* TypeName(const SDL_lib*) { return "SDL_lib"; }
-//inline const char* TypeName(const IMG_lib*) { return "IMG_lib"; }
-inline const char* TypeName(const SDL_Window*) { return "SDL_Window"; }
-inline const char* TypeName(const SDL_Renderer*) { return "SDL_Renderer"; }
-inline const char* TypeName(const SDL_Texture*) { return "SDL_Texture"; }
-inline const char* TypeName(const SDL_Surface*) { return "SDL_Surface"; }
-//inline const char* TypeName(const SDL_LockedTexture*) { return "SDL_LockedTexture"; }
-//inline const char* TypeName(const SDL_mutex*) { return "SDL_mutex"; }
-//inline const char* TypeName(const SDL_LockedMutex*) { return "SDL_LockedMutex"; }
-//inline const char* TypeName(const SDL_cond*) { return "SDL_cond"; }
-//inline const char* TypeName(const SDL_Thread*) { return "SDL_Thread"; }
+//TODO: combine LockedMutex and LockedTexture
+template<typename DataType>
+class auto_ptr<DataType, typename std::enable_if<std::is_same<DataType, SDL_LockedMutex>::value>::type>: public auto_ptr<DataType, DUMMY_TYPE>
+{
+public:
+    DataType data = {0}; //alloc with auto_ptr to simplify memory mgmt; init in case that == NULL
+public:
+    auto_ptr(DataType* that): auto_ptr<DataType, DUMMY_TYPE>(that) { if (that) data = *that; }; //make local copy of locked data
+};
+template<typename DataType>
+class auto_ptr<DataType, typename std::enable_if<std::is_same<DataType, SDL_LockedTexture>::value>::type>: public auto_ptr<DataType, DUMMY_TYPE>
+{
+public:
+    DataType data = {0}; //alloc with auto_ptr to simplify memory mgmt; init in case that == NULL
+public:
+    auto_ptr(DataType* that): auto_ptr<DataType, DUMMY_TYPE>(that) { if (that) data = *that; }; //make local copy of locked data
+};
 
 
-//overloaded deallocator function for each type:
-//avoids template specialization
-//TODO: remove printf
-#define debug(ptr)  myprintf(28, YELLOW_LT "dealloc %s 0x%x" ENDCOLOR, TypeName(ptr), toint(ptr))
-inline int Release(SDL_lib* that) { debug(that); SDL_Quit(); return SDL_Success; }
-//inline int Release(IMG_lib* that) { IMG_Quit(); return SDL_Success; }
-inline int Release(SDL_Window* that) { debug(that); SDL_DestroyWindow(that); return SDL_Success; }
-inline int Release(SDL_Renderer* that) { debug(that); SDL_DestroyRenderer(that); return SDL_Success; }
-//inline int Release(SDL_GLContext* that) { debug(that); SDL_GL_DeleteContext(that); return SDL_Success; }
-inline int Release(SDL_Texture* that) { debug(that); SDL_DestroyTexture(that); return SDL_Success; }
-inline int Release(SDL_Surface* that) { debug(that); SDL_FreeSurface(that); return SDL_Success; }
-//inline int Release(SDL_LockedTexture* that) { myprintf(28, YELLOW_LT "SDL_UnlockTexture" ENDCOLOR); SDL_UnlockTexture(that->txr); return SDL_Success; }
-//inline int Release(SDL_mutex* that) { myprintf(28, YELLOW_LT "SDL_DestroyMutex" ENDCOLOR); SDL_DestroyMutex(that); return SDL_Success; }
-//inline int Release(SDL_LockedMutex* that) { myprintf(28, YELLOW_LT "SDL_UnlockMutex" ENDCOLOR); return SDL_UnlockMutex(that->mutex); } //the only one that directly returns a value
-//inline int Release(SDL_cond* that) { myprintf(28, YELLOW_LT "SDL_DestroyCond" ENDCOLOR); SDL_DestroyCond(that); return SDL_Success; }
-//inline int Release(SDL_PendingCond* that) { Release(that->mutex); Release(that->cond); return SDL_Success; }
-//inline int Release(SDL_Thread* that) { int exitval; SDL_WaitThread(that, &exitval); return exitval; } //this is one of the few dealloc funcs with a ret code, so might as well check it
-#undef debug
+//shims to work with auto_ptr<> and OK macro:
+/*inline*/ SDL_lib* SDL_INIT(uint32_t flags = SDL_INIT_VIDEO, int where = 0)
+{
+    static SDL_lib ok;
+    SDL_lib* retval = NULL;
+    uint32_t already = SDL_WasInit(flags);
+    std::ostringstream desc;
+    if (flags & SDL_INIT_TIMER) desc << ";TIMER";
+    if (flags & SDL_INIT_AUDIO) desc << ";AUDIO";
+    if (flags & SDL_INIT_VIDEO) desc << ";VIDEO";
+    if (flags & ~(SDL_INIT_TIMER | SDL_INIT_AUDIO | SDL_INIT_VIDEO)) desc << ";OTHER";
+    if (!flags) desc << ";NONE";
+    if (already == flags) retval = &ok;
+    else if (already) retval = OK(SDL_InitSubSystem(flags & ~already))? &ok: NULL;
+    else retval = OK(SDL_Init(flags))? &ok: NULL;
+    if (already) myprintf(22, YELLOW_LT "SDL %s (0x%x) was already %sinitialized (0x%x) from %d" ENDCOLOR, desc.str().c_str() + 1, flags, (already != flags)? "partly ": "", already, where);
+    if (where) myprintf(22, YELLOW_LT "SDL_Init %s (0x%x) = 0x%x ok? %d (from %d)" ENDCOLOR, desc.str().c_str() + 1, flags, toint(retval), !!retval, where);
+    if (!retval) exc(RED_LT "SDL_Init failed" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_Init");
+    return retval;
+}
+//#define IMG_INIT(flags)  ((IMG_Init(flags) & (flags)) != (flags)) //0 == Success
+
+/*inline*/ SDL_LockedMutex* SDL_LOCK(SDL_mutex* mutex, int where = 0)
+{
+    static SDL_LockedMutex locked = {0};
+    SDL_LockedMutex* retval = (mutex && OK(SDL_LockMutex(mutex)))? &locked: NULL;  //dummy non-NULL address for success
+//    if (where) myprintf(22, YELLOW_LT "SDL_LockMutex(0x%x) = 0x%x ok? %d (from %d)" ENDCOLOR, toint(mutex), toint(retval), !!retval, where);
+    if (!retval) exc(RED_LT "SDL_LockMutex failed" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
+    locked.mutex = mutex;
+    return retval;
+}
+
+/*inline*/ SDL_LockedTexture* SDL_LOCK(SDL_Texture* txr, int where = 0, int chk_w = 0, int chk_h = 0, uint32_t chk_fmt = 0)
+{
+    static SDL_LockedTexture locked = {0};
+    SDL_LockedTexture* retval = (txr && OK(SDL_QueryTexture(txr, &locked.fmt, &locked.acc, &locked.surf.w, &locked.surf.h)) && OK(SDL_LockTexture(txr, NORECT, &locked.surf.pixels, &locked.surf.pitch)))? &locked: NULL;  //non-NULL address for success
+//    if (where) myprintf(22, YELLOW_LT "SDL_LockTexture(0x%x) = 0x%x ok? %d (from %d)" ENDCOLOR, toint(txr), toint(retval), !!retval, where);
+    if (!retval) exc(RED_LT "SDL_LockTexture failed" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
+//additional validation:
+    if (!locked.surf.w || (chk_w && (locked.surf.w != chk_w)) || !locked.surf.h || (chk_h && (locked.surf.h != chk_h)))
+        return err(RED_LT "Unexpected texture size: %dx%d should be %dx%d" ENDCOLOR_MYLINE, locked.surf.w, locked.surf.h, chk_w, chk_h, where), (SDL_LockedTexture*)NULL; //NUM_UNIV, UNIV_LEN);
+    if (!locked.surf.pixels || (toint(locked.surf.pixels) & 7))
+        return err(RED_LT "Texture pixels not aligned on 8-byte boundary" ENDCOLOR_MYLINE, where), (SDL_LockedTexture*)NULL; //*(auto_ptr*)0;
+    if ((size_t)locked.surf.pitch != sizeof(uint32_t) * locked.surf.w)
+        return err(RED_LT "Unexpected pitch: %d should be %zu * %d = %zu" ENDCOLOR_MYLINE, locked.surf.pitch, sizeof(uint32_t), locked.surf.w, sizeof(uint32_t) * locked.surf.w, where), (SDL_LockedTexture*)NULL;
+    if (!locked.fmt || (chk_fmt && (locked.fmt != chk_fmt)))
+        return err(RED_LT "Unexpected texture format: %i bpp %s should be %i bpp %s" ENDCOLOR_MYLINE, SDL_BITSPERPIXEL(locked.fmt), SDL_PixelFormatShortName(locked.fmt), SDL_BITSPERPIXEL(chk_fmt), SDL_PixelFormatShortName(chk_fmt), where), (SDL_LockedTexture*)NULL;
+    locked.txr = txr;
+    return retval;
+}
+
+//capture line# for easier debug:
+//NOTE: cpp avoids recursion so macro names can match actual function names here
+#define SDL_INIT(...)  SDL_INIT(__VA_ARGS__, __LINE__)
+#define SDL_LOCK(...)  SDL_LOCK(__VA_ARGS__, __LINE__) //TODO: arg shuffle
+
+
+//SDL_Init must be called before most other SDL functions and only once, so put it at global scope:
+auto_ptr<SDL_lib> sdl = SDL_INIT(SDL_INIT_VIDEO);
+
+
+////////////////////////////////////////////////////////////////////////////////
+////
+/// Multi-threading
+//
+
+//TODO: extend SDL2p with Mutex, Cond, Thread
+
+//send or wait for a signal (cond + mutex):
+class Signal
+{
+private:
+    std::vector<void*> pending; //SDL discards signal if nobody waiting (CondWait must occur before CondSignal), so remember it
+    auto_ptr<SDL_cond> cond;
+//TODO: use smart_ptr with ref count
+    static auto_ptr<SDL_mutex> mutex; //low usage, so share it across all signals
+    static int count;
+//NO-doesn't make sense to send-then-rcv immediately, and rcv-then-send needs processing in between:
+//    enum Direction {SendOnly = 1, RcvOnly = 2, Both = 3};
+public:
+    Signal() //: cond(NULL)
+    {
+        if (!count++)
+            if (!(mutex = SDL_CreateMutex())) exc(RED_LT "Can't create signal mutex" ENDCOLOR); //throw SDL_Exception("SDL_CreateMutex");
+        if (!(cond = SDL_CreateCond())) exc(RED_LT "Can't create signal cond" ENDCOLOR); //throw SDL_Exception("SDL_CreateCond");
+    }
+    ~Signal() { if (!--count) mutex = NULL; }
+public:
+    void* wait()
+    {
+        auto_ptr<SDL_LockedMutex> lock(SDL_LOCK(mutex));
+//        log("here-rcv %d", this->pending.size());
+        while (!this->pending.size())
+            if (!cond || !OK(SDL_CondWait(cond, mutex))) exc(RED_LT "Wait for signal 0x%x failed" ENDCOLOR, toint(this)); //throw SDL_Exception("SDL_CondWait");
+        void* data = pending.back(); //signal already happened
+//        log("here-rcv got 0x%x", toint(data));
+        pending.pop_back();
+//        myprintf(22, BLUE_LT "rcved[%d] 0x%x from signal 0x%x" ENDCOLOR, this->pending.size(), toint(data), toint(this));
+        return data;
+    }
+    void wake(void* msg = NULL)
+    {
+        auto_ptr<SDL_LockedMutex> lock(SDL_LOCK(mutex));
+//        log("here-send 0x%x", toint(msg));
+        this->pending.push_back(msg); //remember signal happened in case receiver is not listening yet
+        if (!cond || !OK(SDL_CondSignal(cond))) exc(RED_LT "Send signal 0x%x failed" ENDCOLOR, toint(this)); //throw SDL_Exception("SDL_CondSignal");
+//        log("here-sent 0x%x", toint(msg));
+//        myprintf(22, BLUE_LT "sent[%d] 0x%x to signal 0x%x" ENDCOLOR, this->pending.size(), toint(msg), toint(this));
+    }
+};
+auto_ptr<SDL_mutex> Signal::mutex;
+int Signal::count = 0;
+
+
+class Thread: public auto_ptr<SDL_Thread>
+{
+protected:
+//    static SDL_mutex* mutex;
+//    static int count;
+//    void* data;
+//    int exitval;
+//    static Signal ack;
+    Signal in, out; //direction is relative to thread
+public:
+    Thread(const char* name, bool async = false): auto_ptr<SDL_Thread>(SDL_CreateThread(start_thread, name, this)) //: data(NULL) //, SDL_ThreadFunction& thread_func, void* data = 0)
+    {
+//        log("here-launch: thread 0x%x, async %d", toint(this->cast), async);
+//        if (!count++)
+//            if (!(mutex = SDL_CreateMutex())) throw Exception("SDL_CreateMutex");
+//        if (!OK(SDL_LockMutex(mutex))) throw Exception("SDL_LockMutex");
+        if (!this->cast) exc(RED_LT "Can't create thead '%s'" ENDCOLOR, name);
+//    		throw SDL_Exception("SDL_CreateThread");
+ //           SDL_UnlockMutex(mutex);
+        if (async) SDL_DetachThread(this->keep()); //thread.cast);
+//        {
+//            thread = NULL; //thread can exit at any time, so it's not safe to reference it any more
+//        }
+//        SDL_Delay(1); //give new thread time to start up
+    }
+//    /*virtual*/ ~Thread() {};
+//    {
+////        if (mutex_) { SDL_UnlockMutex(mutex_); SDL_DestroyMutex(mutex_); mutex_ = nullptr; }
+//    	if (!thread_) return;
+//        int exitcode = -1;
+//        SDL_WaitThread(thread_, &exitcode);
+//        if (!OK(exitcode)) throw Exception("SDL_WaitThread");
+//        thread_ = NULL;
+//    }
+/*
+    Thread& operator=(const Thread& that)
+    {
+        if (that != this) //avoid self-assignment
+        {
+            this->release();
+//set new state:
+            myprintf(22, YELLOW_LT "reassign %s 0x%x" ENDCOLOR, TypeName(that), toint(that));
+            this->cast = that; //now i'm responsible for releasing new object (no ref counting)
+//            if (that) latest = that;
+        }
+        return *this; //chainable
+    }    
+*/
+private:
+    static int start_thread(void* data)
+    {
+        Thread* that = static_cast<Thread*>(data);
+//        log("here-starter");
+//        if (!OK(SDL_LockMutex(that->mutex_))) throw Exception("SDL_LockMutex");
+//        that->ack.wait();
+//        this->exitval = that->main(that->data);
+//        that->ack.send();
+        log("kick child thread data 0x%x" ENDCOLOR, toint(that));
+        that->out.wake(that->main(that->in.wait()));
+        log("child done async 0x%x" ENDCOLOR, toint(that));
+        return SDL_Success; //TODO?
+    }
+public:
+    virtual void* main(void* data) = 0; //must override in derived class
+//    void* run(void* data = NULL, bool async = false)
+//    {
+////        UnlockMutex(mutex_);
+//        send(data); //wake up child thread
+//        return async? SDL_Success: wait(); //wait for child to reply
+////        return this->exitval;
+//    }
+//public-facing:
+    void* message(void* msg = NULL) { wake(msg); return wait(); }
+    void wake(void* msg = NULL) { in.wake(msg); }
+    void* wait() { return out.wait(); }
+};
+//Signal Thread::ack;
+//SDL_mutex* Thread::mutex = NULL;
+//int Thread::count = 0;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -457,17 +728,12 @@ inline int Release(SDL_Surface* that) { debug(that); SDL_FreeSurface(that); retu
 
 typedef struct WH { uint16_t w, h; } WH; //pack width, height into single word for easy return from functions
 
-//auto_ptr<SDL_lib> sdl;
-//auto_ptr<SDL_Window> window;
-//auto_ptr<SDL_Renderer> renderer;
-//auto_ptr<SDL_Texture> canvas;
-//auto_ptr<SDL_Surface> pixels;
 
 //fwd refs:
-void debug_info(SDL_lib*);
-void debug_info(SDL_Window*);
-void debug_info(SDL_Renderer*);
-void debug_info(SDL_Surface*);
+void debug_info(CONST SDL_lib*);
+void debug_info(CONST SDL_Window*);
+void debug_info(CONST SDL_Renderer*);
+void debug_info(CONST SDL_Surface*);
 WH Screen();
 WH MaxFit();
 uint32_t limit(uint32_t color);
@@ -505,8 +771,9 @@ WH Screen()
 
     if (!wh.w || !wh.h)
     {
-        auto_ptr<SDL_lib> sdl(SDL_INIT(SDL_INIT_VIDEO)); //for access to video info; do this in case not already done
-        if (!SDL_WasInit(0)) err(RED_LT "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
+//        auto_ptr<SDL_lib> sdl(SDL_INIT(SDL_INIT_VIDEO)); //for access to video info; do this in case not already done
+        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
+//        if (!sdl && !(sdl = SDL_INIT(SDL_INIT_VIDEO))) err(RED_LT "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
         myprintf(22, BLUE_LT "%d display(s):" ENDCOLOR, SDL_GetNumVideoDisplays());
         for (int i = 0; i < SDL_GetNumVideoDisplays(); ++i)
         {
@@ -530,6 +797,43 @@ WH Screen()
 }
 
 
+//put GPU rendering in separate thread:
+//allows SDL_RenderPresent to finish asynchronously so libuv event loop in main thread is not impacted
+//NOTE: console messages don't come out here
+class RenderingThread: public Thread
+{
+public:
+    auto_ptr<SDL_Renderer> renderer;
+    bool done;
+//    int state;
+public:
+    RenderingThread(const char* name, bool async = false): Thread(name, async), done(false) {}; //log("here-renthr ctor"); };
+    void* main(void* data)
+    {
+        log("here-into main");
+        SDL_Window* window = reinterpret_cast<SDL_Window*>(data); //window was created in main thread where events are handled
+        myprintf(8, MAGENTA_LT "renderer thread: create renderer" ENDCOLOR);
+        debug_info(window);
+	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        debug_info(renderer);
+        for (;;) //render loop
+        {
+            log("here-main send");
+            out.wake(renderer);
+            log("here-main wait");
+            if (!in.wait()) break; //ask main thread for (more) work
+            log("here-main rcvd");
+//            myprintf(8, MAGENTA_LT "renderer thread: render+wait" ENDCOLOR);
+            SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync
+        }
+        myprintf(8, MAGENTA_LT "renderer thread: exit" ENDCOLOR);
+        log("here-main exit");
+        done = true;
+        return 0;
+    }
+};
+
+
 #define WS281X_BITS  24 //each WS281X node has 24 data bits
 #define TXR_WIDTH  (3 * WS281X_BITS - 1) //data signal is generated at 3x bit rate, last bit overlaps H blank
 
@@ -537,13 +841,16 @@ WH Screen()
 class DataCanvas
 {
 private:
+//    auto_ptr<SDL_lib> sdl; //NOTE: this must occur before thread; TODO: use ref counter
     auto_ptr<SDL_Window> window;
-    auto_ptr<SDL_Renderer> renderer;
+//    auto_ptr<SDL_Renderer> renderer;
+    RenderingThread render_thread;
+    auto_ptr<SDL_Renderer>& renderer = render_thread.renderer;
     auto_ptr<SDL_Texture> canvas;
     auto_ptr<SDL_Surface> pxbuf;
 //shared data:
-    static auto_ptr<SDL_lib> sdl;
-    static int count;
+//    static auto_ptr<SDL_lib> sdl;
+//    static int count;
 //performance stats:
     uint64_t caller_time, pivot_time, update_time, unlock_time, copy_time, present_time;
     uint64_t started, previous;
@@ -552,33 +859,51 @@ private:
 public:
     int num_univ, univ_len; //called-defined
     bool WantPivot;
+    enum UniverseTypes { WS281X = 0, BARE_SSR = 1, CHIPIPLEXED_SSR = 2}; //TODO: make extensible
+    std::vector<UniverseTypes> Types; //universe types
 public:
-    DataCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): num_univ(0), univ_len(0), WantPivot(want_pivot)
+    DataCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): /*sdl(SDL_INIT(SDL_INIT_VIDEO)),*/ render_thread("renderer", true), num_univ(0), univ_len(0), WantPivot(want_pivot)
     {
-        if (!count++) Init();
+        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
+//        if (!count++) Init();
         if (!title) title = "DataCanvas";
         myprintf(3, BLUE_LT "Init(title '%s', #univ %d, univ len %d, pivot? %d)" ENDCOLOR, title, num_univ, univ_len, want_pivot);
 
+//NOTE: scaling *must* be set to nearest pixel sampling (0) because texture is stretched horizontally to fill screen
+        if (SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0") != SDL_TRUE) //set texture filtering to linear; TODO: is this needed?
+            err(YELLOW_LT "Warning: Linear texture filtering not enabled" ENDCOLOR);
+//TODO??    SDL_bool SDL_SetHintWithPriority(const char*      name, const char*      value,SDL_HintPriority priority)
+
 #define IGNORED_X_Y_W_H  0, 0, 200, 100 //not used for full screen mode
+//leave window on main thread so it can process events:
         int wndw, wndh;
         window = isRPi()?
             SDL_CreateWindow(title, IGNORED_X_Y_W_H, SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_SHOWN): //| SDL_WINDOW_OPENGL): //don't use OpenGL; too slow
             SDL_CreateWindow(title, 10, 10, MaxFit().w, MaxFit().h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN); //| SDL_WINDOW_OPENGL);
-        if (!window) return_void(err(RED_LT "Create window failed" ENDCOLOR));
+        if (!window) exc(RED_LT "Create window failed" ENDCOLOR);
         uint32_t fmt = SDL_GetWindowPixelFormat(window); //desktop OpenGL: 24 RGB8888, RPi: 32 ARGB8888
-        if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(err(RED_LT "Can't get window format" ENDCOLOR));
+        if (fmt == SDL_PIXELFORMAT_UNKNOWN) exc(RED_LT "Can't get window format" ENDCOLOR);
         SDL_GL_GetDrawableSize(window, &wndw, &wndh);
         debug_info(window);
 
         this->num_univ = num_univ;
         this->univ_len = univ_len;
         this->WantPivot = want_pivot;
+        this->Types.resize(num_univ, WS281X);
         if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(err(RED_LT "Too many universes: %d (max %d)" ENDCOLOR, num_univ, WS281X_BITS));
         if ((univ_len < 1) || (univ_len > wndh)) return_void(err(RED_LT "Universe too big: %d (max %d)" ENDCOLOR, univ_len, wndh));
 
+#if 0
 	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        if (!renderer) return_void(err(RED_LT "Create renderer failed" ENDCOLOR));
-        debug_info(renderer);
+//        render_thread.wake();
+#else
+//        SDL_Renderer* renderer =
+//        render_thread.run(window, true); //allow renderer to continue asynchronously
+        void* ret = render_thread.message(window); //send renderer my window, get response
+myprintf(14, "renderer sent back 0x%x, rend.rend 0x%x cast 0x%x" ENDCOLOR, toint(ret), toint(&render_thread.renderer), toint(render_thread.renderer.cast));
+#endif
+        if (!renderer) exc(RED_LT "Create renderer failed" ENDCOLOR);
+//        debug_info(renderer);
 
 #if 0 //NOTE: RPi does not like this; prevents texture creation below
 //NOTE: SDL_GetWindowSurface calls SDL_CreateWindowFramebuffer which calls internal CreateWindowFramebuffer (SDL_CreateWindowTexture) in which SDL_Renderer is created.
@@ -600,7 +925,7 @@ public:
 //use same fmt + depth as window; TODO: is this more efficient?
 //        pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, 8+8+8+8, SDL_PIXELFORMAT_ARGB8888);
         pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, SDL_BITSPERPIXEL(fmt), fmt);
-        if (!pxbuf) return_void(err(RED_LT "Can't alloc pixel buf" ENDCOLOR));
+        if (!pxbuf) exc(RED_LT "Can't alloc pixel buf" ENDCOLOR);
         if ((pxbuf.cast->w != TXR_WIDTH) || (pxbuf.cast->h != univ_len)) return_void(err(RED_LT "Pixel buf wrong size: got %d x %d, wanted %d x %d" ENDCOLOR, pxbuf.cast->w, pxbuf.cast->h, TXR_WIDTH, univ_len));
         if (toint(pxbuf.cast->pixels) & 3) return_void(err(RED_LT "Pixel buf not quad byte aligned" ENDCOLOR));
         if (pxbuf.cast->pitch != 4 * pxbuf.cast->w) return_void(err(RED_LT "Pixel buf pitch: got %d, expected %d" ENDCOLOR, pxbuf.cast->pitch, 4 * pxbuf.cast->w));
@@ -608,7 +933,7 @@ public:
 //        if (!OK(SDL_FillRect(pxbuf, NORECT, BLACK))) return_void(err(RED_LT "Fill rect failed" ENDCOLOR));
 
         canvas = SDL_CreateTexture(renderer, pxbuf.cast->format->format, SDL_TEXTUREACCESS_STREAMING, pxbuf.cast->w, pxbuf.cast->h); //SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, wndw, wndh);
-        if (!canvas) return_void(err(RED_LT "Can't create canvas texture" ENDCOLOR));
+        if (!canvas) exc(RED_LT "Can't create canvas texture" ENDCOLOR);
 
 //        Paint(NULL); //start with all pixels dark
         caller_time = pivot_time = update_time = unlock_time = copy_time = present_time = numfr = 0;
@@ -618,7 +943,8 @@ public:
     ~DataCanvas()
     {
         stats();
-        if (!--count) Quit();
+        render_thread.wake(0); //eof
+//        if (!--count) Quit();
         myprintf(22, YELLOW_LT "DataCanvas dtor" ENDCOLOR);
     };
 public:
@@ -635,18 +961,17 @@ public:
         pivot(pixels, fill);
         delta = now() - previous; pivot_time += delta; previous += delta;
 
+        if (numfr) render_thread.wait(); //block until renderer is idle (canvas might be busy until then?)
 //NOTE: texture must be owned by render thread (according to various sources):
 //this copies pixel data to GPU memory?
-//TODO: wrap in locker template/class
 #if 1
-        SDL_Surface txr_info;
-        if (!OK(SDL_LockTexture(canvas, NORECT, &txr_info.pixels, &txr_info.pitch)))
-            return err(RED_LT "Can't lock texture" ENDCOLOR);
+        { //scope for locked texture
+            auto_ptr<SDL_LockedTexture> lock(SDL_LOCK(canvas));
 //NOTE: pixel data must be in correct (texture) format
 //NOTE: SDL_UpdateTexture is reportedly slow; use Lock/Unlock and copy pixel data directly for better performance
-        memcpy(txr_info.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
-        delta = now() - previous; update_time += delta; previous += delta;
-        SDL_UnlockTexture(canvas);
+            memcpy(lock.data.surf.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
+            delta = now() - previous; update_time += delta; previous += delta;
+        }
 #else //slower; doesn't work with streaming texture?
         if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
             return err(RED_LT "Can't update texture" ENDCOLOR);
@@ -666,7 +991,11 @@ public:
 //    myprintf(22, RED_LT "TODO: delay music_time - now" ENDCOLOR);
 //NOTE: RenderPresent() doesn't return until next frame if V-synced; this gives accurate 60 FPS (avoids jitter; O/S wait is +/- 10 msec)
 //TODO: allow caller to resume in parallel
+#if 0
         SDL_RenderPresent(renderer); //update screen before delay (uploads to GPU)
+#else
+        render_thread.wake(canvas.cast); //update screen asynchronously
+#endif
         delta = now() - previous; present_time += delta; previous += delta;
 //myprintf(22, BLUE_LT "fr[%d] deltas: %lld, %lld, %lld, %lld, %lld" ENDCOLOR, numfr, delta1, delta2, delta3, delta4, delta5);
         if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec
@@ -728,13 +1057,17 @@ private:
         }
 //            memcpy(&pxbuf32[yofs], rowbuf, TXR_WIDTH * sizeof(uint32_t)); //initialze start, data, stop bits
 #endif
+        uint32_t leading_edges = BLACK;
+        for (uint32_t x = 0, xmask = 0x800000; (int)x < this->num_univ; ++x, xmask >>= 1)
+            if (this->Types[(int)x] == WS281X) leading_edges |= xmask; //turn on leading edge of data bit for WS281X
+//myprintf(22, BLUE_LT "start bits = 0x%x (based on univ type)" ENDCOLOR, leading_edges);
         for (int y = 0, yofs = 0; y < this->univ_len; ++y, yofs += TXR_WIDTH) //outer
         {
             for (int x3 = 0; x3 < TXR_WIDTH; x3 += 3) //inner; locality of reference favors destination
             {
-                pxbuf32[yofs + x3 + 0] = WHITE; //start bits
-                pxbuf32[yofs + x3 + 1] = BLACK; //data bits (will be overwritten with pivoted color bits)
-                if (x3) pxbuf32[yofs + x3 - 1] = BLACK; //stop bits (right-most overlaps H-blank)
+                pxbuf32[yofs + x3 + 0] = leading_edges; //WHITE;
+                pxbuf32[yofs + x3 + 1] = BLACK; //data bit body (will be overwritten with pivoted color bits)
+                if (x3) pxbuf32[yofs + x3 - 1] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
             }
 #if 1
 //fill with pivoted data bits:
@@ -759,11 +1092,12 @@ private:
         }
     }
 public:
+#if 0 //some sources say to only do it once
 //initialize SDL:
     static bool Init()
     {
 	    sdl = SDL_INIT(/*SDL_INIT_AUDIO |*/ SDL_INIT_VIDEO); //| SDL_INIT_EVENTS); //events, file, and threads are always inited, so they don't need to be flagged here; //| ??SDL_INIT_TIMER); //SDL_init(SDL_INIT_EVERYTHING);
-        if (!OK(sdl)) return err(RED_LT "SDL init failed" ENDCOLOR);
+        if (!OK(sdl)) exc(RED_LT "SDL init failed" ENDCOLOR);
         debug_info(sdl);
 
 //NOTE: scaling *must* be set to nearest pixel sampling (0) because texture is stretched horizontally to fill screen
@@ -801,9 +1135,10 @@ public:
         myprintf(3, BLUE_LT "Quit()" ENDCOLOR);
         return true;
     }
+#endif
 };
-auto_ptr<SDL_lib> DataCanvas::sdl;
-int DataCanvas::count = 0;
+//auto_ptr<SDL_lib> DataCanvas::sdl;
+//int DataCanvas::count = 0;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -867,7 +1202,7 @@ void errjs(v8::Isolate* iso, const char* errfmt, ...)
 //	printf("THROW: %s\n", buf);
 //	Nan::ThrowTypeError(buf);
 //    iso->ThrowException(v8::Exception::TypeError(v8::String::NewFromUtf8(iso, buf)));
-    fputline(buf, stderr); //send to console in case not seen by Node.js; don't mix with stdout
+    fputline(stderr, buf); //send to console in case not seen by Node.js; don't mix with stdout
     iso->ThrowException(v8::Exception::TypeError(JS_STR(iso, buf)));
 //    return;    
 }
@@ -1148,12 +1483,13 @@ void DataCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
 
 void DataCanvas_js::Quit(void* ignored)
 {
-    DataCanvas::Quit();
+//    DataCanvas::Quit();
+    myprintf(22, RED_LT "any cleanup TODO here?" ENDCOLOR);
 }
 
 
-//#define CONST_INT(name, value)  \
-//  Nan::ForceSet(target, Nan::New(name).ToLocalChecked(), Nan::New(value),  \
+//#define CONST_INT(name, value)  
+//  Nan::ForceSet(target, Nan::New(name).ToLocalChecked(), Nan::New(value),  
 //      static_cast<PropertyAttribute>(ReadOnly|DontDelete));
 
 
@@ -1161,6 +1497,7 @@ void DataCanvas_js::Quit(void* ignored)
 NAN_MODULE_INIT(exports_js) //defines target
 //void exports_js(v8::Local<v8::Object> exports, v8::Local<v8::Object> module)
 {
+//??    SDL_SetMainReady();
     v8::Isolate* iso = target->GetIsolate(); //~vm heap
 //    NODE_SET_METHOD(exports, "isRPi", isRPi_js);
 //    NODE_SET_METHOD(exports, "Screen", Screen_js); //TODO: property instead of method
@@ -1210,6 +1547,7 @@ uint32_t PALETTE[] = {RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE};
 int main(int argc, const char* argv[])
 {
     myprintf(1, CYAN_LT "test/standalone routine" ENDCOLOR);
+//??    SDL_SetMainReady();
 {
     DataCanvas canvas(0, NUM_UNIV, UNIV_LEN, false);
     uint32_t pixels[NUM_UNIV * UNIV_LEN] = {0};
@@ -1219,7 +1557,8 @@ int main(int argc, const char* argv[])
     surf.FillRect(RECT_ALL, color);
 #endif
 #if 1 //one-by-one, palette colors
-    for (int xy = 0;; ++xy) //xy < 10 * 10; ++xy)
+    myprintf(1, GREEN_LT "loop for 8 sec (480 frames) ..." ENDCOLOR);
+    for (int xy = 0; xy < 8*60; ++xy) //xy < 10 * 10; ++xy)
     {
         int x = (xy / UNIV_LEN) % NUM_UNIV, y = xy % UNIV_LEN; //cycle thru [0..9,0..9]
         if (eventh(1)) break; //user quit
@@ -1227,7 +1566,7 @@ int main(int argc, const char* argv[])
 //        myprintf(1, BLUE_LT "px[%d, %d] = 0x%x" ENDCOLOR, x, y, color);
         pixels[xy % SIZE(pixels)] = color;
         canvas.Paint(pixels); //60 FPS
-//        SDL_Delay(1000);
+//        SDL_Delay(1000 / 60);
     }
 #endif
 } //force DataCanvas out of scope before delay
@@ -1458,21 +1797,338 @@ uint32_t ARGB2ABGR(uint32_t color)
 }
 
 
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Chipiplexing encoder
+//
+
+#if 0
+	Private Sub ChipiplexedEvent(ByRef channelValues As Byte())
+		on error goto errh
+		If channelValues.Length <> Me.m_numch Then Throw New Exception(String.Format("event received {0} channels but configured for {1}", channelValues.Length, Me.m_numch))
+		Me.total_inlen += channelValues.Length
+		Me.total_evts += 1
+''TODO: show more or less data
+		If Me.m_trace Then LogMsg(String.Format("Chipiplex[{0}] {1} bytes in: ", Me.total_evts, channelValues.Length) & DumpHex(channelValues, channelValues.Length, 80))
+''format output buf for each PIC (groups of up to 56 chipiplexed channels):
+		Dim buflen As Integer, protolen As Integer 
+		Dim overflow_retry As Integer, overflow_adjust As Integer, merge_retry As Integer 
+		Dim brlevel As Integer, brinx As Integer, row As Integer, col As Integer 
+		Dim i As Integer
+		Dim pic As Integer
+''NOTE to style critics: I hate line numbers but I also hate cluttering up source code with a lot of state/location info
+''I''m only using line#s because they are the most compact way to show the location of errors (kinda like C++''s __LINE__ macro), and there is no additional overhead
+12:
+''send out data to PICs in *reverse* order (farthest PICs first, closest PICs last):
+''this will allow downstream PICs to get their data earlier and start processing while closer PICs are getting their data
+''if we send data to closer PICs first, they will have processed all their channels before downstream PICs even get theirs, which could lead to partially refreshed frames
+''at 115k baud, 100 chars take ~ 8.7 mec, which is > 1 AC half-cycle at 60 Hz; seems like this leads to slight sync problems
+''TODO: make forward vs. reverse processing a config option
+		For pic = Me.m_numch - (Me.m_numch - 1) Mod 56 To 1 Step -56 ''TODO: config #channels per PIC?
+			Dim status As String = "" ''show special processing flags in trace file
+			Dim numbr As Integer = 0 ''#brightness levels
+			Dim numrows As Integer = 0, numcols As Integer ''#rows, columns occupied for this frame
+			For i = 0 To 255 ''initialize brightness level index to all empty
+				Me.m_brindex(i) = 0 ''empty
+			Next i
+14:
+			Dim ch As Integer
+			For ch = pic To pic+55 ''each channel for this PIC (8*7 = 56 for a regular Renard PIC); 1-based
+				If ch > Me.m_numch Then Exit For
+				brlevel = channelValues(ch-1)
+16:
+				If brlevel < Me.m_minbright Then ''don''t need to send this channel to controller (it''s off)
+					If brlevel = 0 then
+						Me.total_realnulls += 1
+					Else
+						Me.total_nearnulls += 1
+					End If
+				Else ''need to send this channel to the controller (it''s not off)
+18:
+					Dim overflow_limit As Integer = Me.m_closeness ''allow overflow into this range of values
+					If brlevel >= Me.m_maxbright Then ''treat as full on
+						If brlevel < 255 Then Me.total_nearfulls += 1
+						overflow_limit += Me.m_fullbright - Me.m_maxbright ''at full-on, expand the allowable overflow range
+						brlevel = Me.m_fullbright ''255
+					End If
+					row = (ch - pic)\7 ''row# relative to this PIC (0..7); do not round up
+					col = (ch - pic) Mod 7 ''column# relative to this row
+					If col >= row Then col += 1 ''skip over row address line (chipiplexing matrix excludes diagonal row/column down the middle)
+#If BOARD1_INCOMPAT Then ''whoops; wired the pins differently between boards; rotate them here rather than messing with channel reordering in Vixen
+''					Dim svch As Integer = ch - pic: ch = 0
+''					If svch And &h80 Then ch += &h10
+''					If svch And &h40 Then ch += 1
+''					If svch And &h20 Then ch += &h40
+''					If svch And &h10 Then ch += &h20
+''					If svch And 8 Then ch += &h80
+''					If svch And 4 Then ch += 8
+''					If svch And 2 Then ch += 4
+''					If svch And 1 Then ch += 2
+''					ch += pic
+					Select Case row
+						Case 0: row = 4''3
+						Case 1: row = 2''7
+						Case 2: row = 3''1
+						Case 3: row = 0''2
+						Case 4: row = 5''0
+						Case 5: row = 6''4
+						Case 6: row = 7''5
+						Case 7: row = 1''6
+					End Select
+					Select Case col
+						Case 0: col = 4''3
+						Case 1: col = 2''7
+						Case 2: col = 3''1
+						Case 3: col = 0''2
+						Case 4: col = 5''0
+						Case 5: col = 6''4
+						Case 6: col = 7''5
+						Case 7: col = 1''6
+					End Select
+#End If
+20:
+					For overflow_retry = 0 To 2 * overflow_limit
+						If (overflow_retry And 1) = 0 Then ''try next higher (brighter) level
+							overflow_adjust = brlevel + overflow_retry\2 ''do not round up
+							If overflow_adjust > Me.m_fullbright Then Continue For
+						Else ''try next lower (dimmer) value
+							overflow_adjust = brlevel - overflow_retry\2 ''do not round up
+							If overflow_adjust < Me.m_minbright Then Continue For
+						End If
+22:
+						brinx = Me.m_brindex(overflow_adjust)
+						If brinx = 0 Then ''allocate a new brightness level
+							If Me.IsRenardByte(overflow_adjust) Then Me.num_avoids += 1: status &= "@": Continue For ''avoid special protocol chars
+							numbr += 1: brinx = numbr ''entry 0 is used as an empty; skip it
+							Me.m_brindex(overflow_adjust) = brinx ''indexing by brightness level automatically sorts them by brightness
+''							Me.m_levels(brinx).level = brlevel ''set brightness level for this entry
+							Me.m_rowindex(brinx) = 0 ''no rows yet for this brightness level
+''							Me.m_levels(brinx).numrows = 0
+							For i = 0 To 7 ''no columns yet for this brightness level
+								Me.m_columns(brinx, i) = 0
+							Next i
+						End If
+24:
+						If Me.m_columns(brinx, row) = 0 Then ''allocate a new row
+''							If Me.m_levels(brinx).numrows >= Me.m_maxrpl Then Continue For ''this level is full; try another one that is close (lossy dimming)
+''enforce maxRPL here to avoid over-fillings brightness levels; lossy dimming will degrade with multiple full levels near each other
+							If Me.NumBits(Me.m_rowindex(brinx)) >= Me.m_maxrpl Then Continue For ''this level is full; try another one that is close (lossy dimming)
+''maxRPL can''t be more than 2 in this version, so we don''t need to check for reserved bytes here (the only one that matters has 7 bits on)
+''							If Me.IsRenardByte(overflow_adjust) Then Me.num_avoids += 1: status &= "@": Continue For ''avoid special protocol chars
+							Me.m_rowindex(brinx) = Me.m_rowindex(brinx) Or 1<<(7 - row)
+''							Me.m_levels(brinx).numrows += 1
+							numrows += 1
+						End If
+						Dim newcols As Byte = Me.m_columns(brinx, row) Or 1<<(7 - col)
+						If Me.IsRenardByte(newcols) Then Me.num_avoids += 1: status &= "@": Continue For ''avoid special protocol chars; treat as full row
+						Me.m_columns(brinx, row) = newcols ''Me.m_columns(brinx, row) Or 1<<(7 - col)
+						If overflow_retry <> 0 Then Me.total_rowsoverflowed += 1: status &= "*"
+						Exit For
+					Next overflow_retry
+26:
+					If overflow_retry > 2 * overflow_limit Then
+						If Me.m_nodiscard Then Throw New Exception(String.Format("Unable to overflow full row after {0} tries.", 2 * overflow_limit))
+						Me.total_rowsdropped += 1
+						status &= "-"
+					End If
+				End If
+			Next ch
+28:
+#If False Then ''obsolete merge/reduction code
+''			Dim brlimit As Integer = Me.m_maxbright + 8\Me.m_maxrpl - 1 ''allow for overflow of max bright level
+''			If brlimit > 255 Then brlimit = 255 ''don''t overshoot real top end of brightness range
+			For merge_retry = 0 To Me.m_closeness
+				If 2+2 + 2*numbr + numrows <= Me.m_outbuf.Length Then Exit For ''no need to merge brightness levels
+				If merge_retry = 0 Then Continue For ''dummy loop entry to perform length check first time
+				For brlevel = Me.m_minbright To Me.m_fullbright 
+					Dim tobrinx As Byte = Me.m_brindex(brlevel)
+					If tobrinx = 0 Then Continue For
+					Dim otherlevel As Integer 
+					Dim mergelimit As Integer = brlevel + merge_retry
+					if brlevel >= Me.m_maxbright Then mergelimit = 255
+30:
+					For otherlevel = brlevel - merge_retry To merge_limit Step 2*merge_retry
+						If (otherlevel < Me.m_minbright) Or (otherlevel > brlimit) Then Continue For
+						Dim frombrinx As Byte = Me.m_brindex(otherlevel)
+						If (frombrinx = 0) or (Me.numbits(Me.m_rowindex(tobrinx) And Me.m_rowindex(frombrinx)) = 0) Then continue for ''can''t save some space by coalescing
+						numrows -= Me.numbits(Me.m_rowindex(tobrinx) And Me.m_rowindex(frombrinx))
+						Me.m_rowindex(tobrinx) = Me.m_rowindex(tobrinx) Or Me.m_rowindex(frombrinx) ''merge row index
+						For row = 0 To 7 ''merge columns
+							Me.m_columns(tobrinx, row) = Me.m_columns(tobrinx, row) Or Me.m_columns(frombrinx, row)
+						Next row
+32:
+						Me.m_brindex(otherlevel) = 0 ''hide entry so it won''t be used again
+						numbr -= 1
+						Me.total_levelsmerged += 1
+						status &= "^"
+						If 2+2 + 2*numbr + numrows <= Me.m_outbuf.Length Then Exit For ''no need to coalesce more brightness levels
+						Continue For
+					Next otherlevel
+				Next brlevel
+			Next merge_retry
+34:
+			If merge_retry > Me.m_closeness Then
+				If Me.m_nodiscard Then Throw New Exception(String.Format("Unable to merge brightness level after {0} tries.", 2*Me.m_closeness))
+				Me.total_levelsdropped += 1
+				status &= "X"
+			End If
+#End If
+			Dim prevlevel As Integer = 0, prevbrinx As Integer 
+''TODO: use MaxData length here
+			While 3+2 + 2*numbr + numrows > Me.m_outbuf.Length ''need to merge brightness levels
+''this is expensive, so config params should be set to try to avoid it
+''TODO: this could be smarter; prioritize and then merge rows that are closest or sparsest first
+				For brlevel = Me.m_minbright To Me.m_fullbright 
+					brinx = Me.m_brindex(brlevel)
+					If brinx = 0 Then Continue For
+					If prevlevel < 256 Then ''merge row with previous to save space
+30:
+						If prevlevel = 0 Then prevlevel = brlevel: prevbrinx = brinx: Continue For ''need 2 levels to compare
+						If (prevlevel + Me.m_closeness < brlevel) And (prevlevel + Me.m_closeness < Me.m_maxbright) Then Continue For ''too far apart to merge
+						Dim newrows As Byte = Me.m_rowindex(brinx) Or Me.m_rowindex(prevbrinx) ''merge row index
+						If Me.NumBits(newrows) > Me.m_maxrpl Then
+''							If Not String.IsNullOrEmpty(Me.m_logfile) Then LogMsg("row " & brlevel & "->" & brinx & " full; can''t merge")
+							Continue For ''can''t merge; row is already full
+						End If
+						If Me.IsRenardByte(newrows) Then Me.num_avoids += 1: status &= "@": Continue For ''can''t merge (would general special protocol chars)
+						Dim newcols(8 - 1) As Byte
+						For row = 0 To 7 ''merge columns
+							newcols(row) = Me.m_columns(brinx, row) Or Me.m_columns(prevbrinx, row)
+							If Me.IsRenardByte(newcols(row)) Then Me.num_avoids += 1: status &= "@": Exit For ''can''t merge (would general special protocol chars)
+						Next row
+						If row <= 7 Then Continue For ''can''t merge (would general special protocol chars)
+						numrows -= Me.NumBits(Me.m_rowindex(brinx) And Me.m_rowindex(prevbrinx))
+						Me.m_rowindex(brinx) = newrows ''Me.m_rowindex(brinx) Or Me.m_rowindex(prevbrinx) ''merge row index
+						For row = 0 To 7 ''merge columns
+							Me.m_columns(brinx, row) = newcols(row) ''Me.m_columns(brinx, row) Or Me.m_columns(prevbrinx, row)
+						Next row
+						If Me.m_trace Then LogMsg(String.Format("merged level {0} with {1}", prevlevel, brlevel))
+						Me.m_brindex(prevlevel) = 0 ''hide this entry so it won''t be used again
+						Me.total_levelsmerged += 1
+						status &= "^"
+					Else ''last try; just drop the row
+						If Me.m_trace Then LogMsg(String.Format("dropped level {0}", brlevel))
+						Me.m_brindex(brlevel) = 0 ''hide this entry so it won''t be used again
+						numrows -= Me.NumBits(Me.m_rowindex(brinx))
+						Me.total_levelsdropped += 1
+						status &= "!"
+					End If
+32:
+					numbr -= 1
+					If 3+2 + 2*numbr + numrows <= Me.m_outbuf.Length Then Exit While ''no need to merge/drop more brightness levels
+				Next brlevel
+				If Me.m_nodiscard Then Throw New Exception(String.Format("Unable to merge brightness level after {0} tries.", 2*Me.m_closeness))
+				prevlevel = 256 ''couldn''t find rows to merge, so start dropping them
+34:
+			End While
+''TODO: resend data after a while even if it hasn''t changed?
+''no, unless dup:			If numbr < 1 Then Continue For ''no channels to send this PIC
+''format data to send to PIC:
+''TODO: send more than 1 SYNC the first time, in case baud rate not yet selected
+			buflen = 0
+			protolen = 0
+''			If pic = 1 Then ''only needed for first PIC in chain?  TODO
+				Me.m_outbuf(buflen) = Renard_SyncByte: buflen += 1 ''&h7E
+				protolen += 1
+''			End If
+			Me.m_outbuf(buflen) = Renard_CmdAdrsByte + pic\56: buflen += 1 ''&h80
+''			Me.m_outbuf(buflen) = Renard_PadByte: buflen += 1 ''&h7D ''TODO?
+			Me.m_outbuf(buflen) = Me.m_cfg: buflen += 1 ''config byte comes first
+			protolen += 2
+			For brlevel = Me.m_fullbright To Me.m_minbright Step -1 ''send out brightess levels in reverse order (brightest first)
+36:
+				brinx = Me.m_brindex(brlevel)
+				If brinx = 0 Then Continue For
+38:
+				If (brlevel = 0) Or (Me.m_rowindex(brinx) = 0) Then SentBadByte(IIf(brlevel = 0, brlevel, Me.m_rowindex(brinx)), buflen, pic\56) ''paranoid
+				If Me.IsRenardByte(brlevel) Then SentBadByte(brlevel, buflen, pic\56) ''paranoid
+				If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = brlevel ''send brightness level; avoid outbuf overflow
+				buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
+				If Me.IsRenardByte(Me.m_rowindex(brinx)) Then SentBadByte(Me.m_rowindex(brinx), buflen, pic\56) ''paranoid
+				If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = Me.m_rowindex(brinx) ''send row index byte; avoid outbuf overflow
+				buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
+40:
+				For row = 0 To 7
+''					If buflen >= m_outbuf.Length Then LogMsg("ERROR: outbuf overflow at row " & row & " of brinx " & brinx & ", brlevel " & brlevel & ", thought I needed 4+2*" & numbr & "+" & numrows & "=" & (2+2 + 2*numbr + numrows) & ", outbuf so far is " & buflen & ":" & DumpHex(Me.m_outbuf, buflen, 80))
+''					If Not String.IsNullOrEmpty(Me.m_logfile) Then LogMsg("err 9 debug: brinx " & brinx & ", row " & row & ", buflen " & buflen)
+					If Me.m_columns(brinx, row) <> 0 Then ''send columns for this row
+						If Me.IsRenardByte(Me.m_columns(brinx, row)) Then SentBadByte(Me.m_columns(brinx, row), buflen, pic\56) ''paranoid
+						If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = Me.m_columns(brinx, row) ''avoid outbuf overflow
+						buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
+					End If
+					numcols += Me.NumBits(Me.m_columns(brinx, row))
+				Next row
+			Next brlevel
+42:
+			If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = 0: ''end of list indicator; avoid outbuf overflow
+			buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
+''			If pic = 1 Then ''last packet; send sync to kick out of packet receive loop (to allow console/debug commands); send this on all, in case last one is dropped as a dup
+''TODO: trailing Sync might not be needed any more
+				If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = Renard_SyncByte: ''&h7E; avoid outbuf overflow
+				buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
+				protolen += 1
+''			End If
+			If buflen > m_outbuf.Length Then ''outbuf overflowed; this is a bug if it happens
+				Throw New Exception(String.Format("ERROR: outbuf overflow, thought I needed 5+2*{0}+{1}={2}, but really needed {3}:", numbr, numrows, 3+2 + 2*numbr + numrows, buflen) & DumpHex(Me.m_outbuf, Math.Min(buflen, Me.m_outbuf.Length), 80))
+			End If
+			If (pic\56 = Me.m_bufdedup) And (buflen = Me.m_prevbuflen) Then ''compare current buffer to previous buffer
+				For i = 1 To buflen
+					If Me.m_outbuf(i-1) <> Me.m_prevbuf(i-1) Then Exit For ''need to send output buffer
+				Next i
+				If i > buflen Then ''outbuf was same as last time; skip it
+					Me.num_dups += 1
+					If Me.m_trace Then LogMsg(String.Format("Chipiplex[{0}]= duplicate buffer on {1} discarded", Me.total_evts, Me.m_bufdedup))
+					Continue For
+				End If
+			End If
+			Me.total_outlen += buflen
+			Me.protocol_outlen += protolen
+			Me.total_levels += numbr
+			Me.total_rows += numrows
+			Me.total_columns += numcols
+			If (numbr > 0) And (numbr < Me.min_levels) Then Me.min_levels = numbr
+			If numbr > Me.max_levels Then Me.max_levels = numbr
+			If (numrows > 0) And (numrows < Me.min_rows) Then Me.min_rows = numrows
+			If numrows > Me.max_rows Then Me.max_rows = numrows
+			If (numcols > 0) And (numcols < Me.min_columns) Then Me.min_columns = numcols
+			If numcols > Me.max_columns Then Me.max_columns = numcols
+			If (buflen > 0) And (buflen < Me.min_outlen) Then Me.min_outlen = buflen
+			If buflen > Me.max_outlen Then Me.max_outlen = buflen
+44:
+''TODO: append multiple bufs together, and only write once
+			Me.m_selectedPort.Write(Me.m_outbuf, 0, buflen)
+			If pic\56 = Me.m_bufdedup Then ''save current buffer to compare to next time
+				For i = 1 To buflen 
+					Me.m_prevbuf(i-1) = Me.m_outbuf(i-1)
+				Next i
+				Me.m_prevbuflen = buflen
+			End If
+46:
+			If Me.m_trace Then LogMsg(String.Format("Chipiplex[{0}]{1} {2}+{3} bytes out: ", Me.total_evts, status, protolen, buflen - protolen) & DumpHex(Me.m_outbuf, buflen, 80))
+		Next pic
+		Exit Sub
+	errh:
+		ReportError("ChipiplexedEvent")
+	End Sub
+#End If
+#endif
+
+
 ////////////////////////////////////////////////////////////////////////////////
 ////
 /// Misc helper functions
 //
 
-//display a console message:
-//only for dev/debug
-#undef printf //want real printf from now on
-bool errprintf(const char* reason /*= 0*/, const char* fmt, ...)
+//display a message:
+//popup + console for dev/debug only
+//#undef printf //want real printf from now on
+bool errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...)
 {
-    bool want_popup = (reason != (const char*)NOERROR);
+//    bool want_popup = (reason != NOERROR);
     std::string details; //need to save err msg in case error below changes it
-    if (want_popup)
+    if (reason != NOERROR)
     {
-        if (!reason) reason = SDL_GetError();
+//        if (!reason) reason = SDL_GetError();
         if (!reason || !reason[0]) reason = "(no details)";
         details = ": "; details += reason; //need to save err msg in case MessageBox error below changes it
     }
@@ -1505,9 +2161,15 @@ bool errprintf(const char* reason /*= 0*/, const char* fmt, ...)
 //    else { if (!isdigit(*lastchar)) ++lastchar; shortname[0] = thrname[0]; strcpy(shortname + 1, lastchar); }
 //    bool locked = console.busy/*.cast*/ && OK(SDL_LockMutex(console.busy/*.cast*/)); //can't use auto_ptr<> (recursion); NOTE: mutex might not be created yet
 //insert details, fmtbuf warning (if applicable), and abreviated thread name:
-    printf("%.*s%s%.*s%s!%s%s", (int)srcline_ofs, fmtbuf, details.c_str(), (int)(lastcolor_ofs - srcline_ofs), fmtbuf + srcline_ofs, tooshort.str().c_str(), shortname, fmtbuf + lastcolor_ofs);
-fflush(stdout);
-    if (want_popup) //TODO: send to stderr instead
+    FILE* stm = ((dest == stdpopup) || (dest == stdexc))? stderr: dest;
+//    static std::mutex serialize; serialize.lock();
+    fprintf(stm, "%.*s%s%.*s%s!%s%s\n", (int)srcline_ofs, fmtbuf, details.c_str(), (int)(lastcolor_ofs - srcline_ofs), fmtbuf + srcline_ofs, tooshort.str().c_str(), shortname, fmtbuf + lastcolor_ofs);
+    if (dest != stm) fflush(stm); //make sure it gets out
+//    serialize.unlock();
+#ifndef BUILDING_NODE_EXTENSION //set by node-gyp
+    if (dest == stdexc) throw std::runtime_error(fmtbuf); //TODO: add details, etc
+#endif
+    if ((dest == stdpopup) || (dest == stdexc)) //want_popup)
     {
 //strip ANSI color codes from string:
         std::smatch match;
@@ -1520,7 +2182,7 @@ fflush(stdout);
         }
         nocolor += str;
         if (!OK(SDL_ShowSimpleMessageBox(0, nocolor.c_str(), details.c_str() + 2, auto_ptr<SDL_Window>::latest)))
-            printf(RED_LT "Show msg failed: %s" ENDCOLOR, SDL_GetError());
+            printf(RED_LT "Show msg failed: %s" ENDCOLOR, SDL_GetError()); //CAUTION: recursion
     }
 //    if (locked) locked = !OK(SDL_UnlockMutex(console.busy/*.cast*/)); //CAUTION: stays locked across ShowMessage(); okay if system-modal?
     return false; //probable caller ret val

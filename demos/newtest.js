@@ -38,25 +38,31 @@ const WHITE = 0xffffffff;
 
 const PALETTE = [RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE];
 
+//burn some CPU cycles:
+function fibo(n) { return (n < 3)? n: fibo(n - 1) + fibo(n - 2); }
+
+
 var retval = 
-step(function*()
-{
-for (var xy = 0; xy < 8*60; ++xy) //8sec @60 FPS
+0; //step(function*()
+//{
+console.log("loop for 11 sec (660 frames) ...".green_lt);
+for (var xy = 0; xy < 11*60; ++xy) //11sec @60 FPS
 {
     var x = Math.floor(xy / UNIV_LEN) % NUM_UNIV, y = xy % UNIV_LEN; //cycle thru [0..9,0..9]
 //    if (eventh(1)) break; //user quit
     var color = PALETTE[(x + y + Math.floor(xy / pixels.length)) % PALETTE.length]; //vary each cycle
     pixels[xy % pixels.length] = color;
     canvas.paint(pixels); //60 FPS
-    yield; //process events
+    fibo(25);
+//    yield; //process events
 //        SDL_Delay(1000);
 }
 //console.log("done=%d, wait 5 sec".green_lt, retval);
 //SDL_Delay(5000);
-return 12;
-});
-console.log("done=%d, wait 10 sec".green_lt, retval);
-setTimeout(function() {}, 10000);
+//return 12;
+//});
+console.log("done=%d, wait 12 sec".green_lt, retval);
+setTimeout(function() {}, 12000);
 clearInterval(timer);
 //SDL_Delay(5000);
 

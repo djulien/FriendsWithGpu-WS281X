@@ -28,3 +28,16 @@ http://media.digikey.com/PDF/Data%20Sheets/Rohm%20PDFs/BU2152FS.pdf
 http://www.mouser.com/ds/2/308/74f675a-1116668.pdf
 STP24DP05 
 http://www.st.com/en/power-management/stp24dp05.html
+
+
+TODO: file gcc bug report:
+src/DataCanvas.cpp:605:55:   required from here
+src/DataCanvas.cpp:487:73: internal compiler error: in emit_mem_initializers, at cp/init.c:1098
+ auto_ptr(DataType* that): auto_ptr<DataType, void>(that), data(*that) {}; //mak
+                                                                     ^
+Please submit a full bug report,
+with preprocessed source if appropriate.
+See <file:///usr/share/doc/gcc-5/README.Bugs> for instructions.
+Makefile:35: recipe for target 'all' failed
+make: *** [all] Error 1
+
