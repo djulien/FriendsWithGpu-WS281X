@@ -31,6 +31,7 @@ http://www.st.com/en/power-management/stp24dp05.html
 
 
 TODO: file gcc bug report:
+1.
 src/DataCanvas.cpp:605:55:   required from here
 src/DataCanvas.cpp:487:73: internal compiler error: in emit_mem_initializers, at cp/init.c:1098
  auto_ptr(DataType* that): auto_ptr<DataType, void>(that), data(*that) {}; //mak
@@ -41,3 +42,18 @@ See <file:///usr/share/doc/gcc-5/README.Bugs> for instructions.
 Makefile:35: recipe for target 'all' failed
 make: *** [all] Error 1
 
+
+2.
+    void stats()
+    {
+//        uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
+//        uint64_t unknown_time = elapsed - caller_time - pivot_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
+        uint64_t idle_time = isRPi()? bg.present_time: fg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
+        double elaps = elapsed(started), fps = numfr / elaps;
+//#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
+//#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
+//GCC BROKEN #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
+//comma missing between usages of avg_ms gives misleading msg about macro
+        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr, numerr, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time) avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
+        myprintf(22, BLUE_LT "raw: elapsed %lld, freq %lld, fg(caller %lld, pivot %lld, lock %lld, update %lld, unlock %lld), bg(copy %lld, present %lld), elapsed %lld, freq %lld" ENDCOLOR, now() - started, SDL_TickFreq(), fg.caller_time, fg.pivot_time, fg.lock_time, fg.update_time, fg.unlock_time, bg.copy_time, bg.present_time);
+    }
