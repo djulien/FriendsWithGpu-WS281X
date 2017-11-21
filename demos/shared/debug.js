@@ -47,7 +47,8 @@ function debug(args)
     if ((args.length < 1) || (typeof args[0] != "string")) args.unshift("%j"); //placeholder for fmt
 
     var my_parent = caller(-1 - debug.nested); debug.nested = 0; //reset it for next time
-    var want_detail = enabled[my_parent.replace(/^@|:.*$/, "")] || enabled['*'] || -1;
+    var want_detail = enabled[my_parent.replace(/^@|:.*$/g, "")] || enabled['*'] || -1;
+//console.log("enabled: %j, parent %s", Object.keys(enabled), my_parent.replace(/^@|:.*$/g, ""));
 //console.log("DEBUG '%s': want %d vs current %d, discard? %d, options %j", my_parent, want_detail, detail, detail >= want_detail, enabled);
     if (detail >= want_detail) return; //too much detail; user doesn't want it
     var fmt = args[0];
@@ -59,7 +60,7 @@ function debug(args)
 //    fmt = fmt.replace(ColorCodes, function(str) { svcolor.push(str); return ''; }); //strip color codes
 //    if (!svcolor.length) svcolor.push('');
     var ofs = (match && !match.index)? match[0].length: 0; //don't split leading color code
-    args[0] = fmt.substr(0, ofs) + `[${my_parent.slice(1)}@${milli(elapsed())}] ` + fmt.substr(ofs);
+    args[0] = fmt.substr(0, ofs) + `[${my_parent.slice(1)} @${milli(elapsed())}] ` + fmt.substr(ofs);
 
     return console.error.apply(console, args); //send to stderr in case stdout is piped
 }
