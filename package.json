@@ -51,8 +51,10 @@
     "callsite": "^1.0.0",
     "colors": "https://github.com/djulien/colors.js",
     "debug": "^2.2.0",
+    "lame": "^1.2.4",
     "nan": "^2.6.1",
-    "node-gyp": "^3.6.0"
+    "node-gyp": "^3.6.0",
+    "speaker": "^0.4.0"
   },
   "BROKEN-devDependencies": {
     "node-sdl2": "^2.1.2",

@@ -191,8 +191,8 @@ inline void fputline(FILE* stm, const char* buf)
 
 
 //debug/error messages:
-#define WANT_LEVEL  99 //[0..9] for high-level, [10..19] for main logic, [20..29] for mid logic, [30..39] for lower level alloc/dealloc
-#define myprintf(level, ...)  ((WANT_LEVEL >= (level))? printf(__VA_ARGS__): noop())
+#define WANT_LEVEL  30 //100 //[0..9] for high-level, [10..19] for main logic, [20..29] for mid logic, [30..39] for lower level alloc/dealloc
+#define myprintf(level, ...)  (((level) < WANT_LEVEL)? printf(__VA_ARGS__): noop())
 
 //examples:
 //#define eprintf(args…) fprintf (stderr, args)
@@ -495,7 +495,7 @@ inline int Release(/*const*/ SDL_Surface* that) { debug(that); SDL_FreeSurface(t
 inline int Release(/*const*/ SDL_sem* that) { debug(that); SDL_DestroySemaphore(that); return SDL_Success; }
 inline int Release(/*const*/ SDL_LockedSemaphore* that) { NOdebug(that); return SDL_SemPost(that->sem); } //one of a few that directly returns a success flag
 inline int Release(/*const*/ SDL_mutex* that) { debug(that); SDL_DestroyMutex(that); return SDL_Success; }
-inline int Release(/*const*/ SDL_LockedMutex* that) { debug(that); return SDL_UnlockMutex(that->mutex); } //one of a few that directly returns a success flag
+inline int Release(/*const*/ SDL_LockedMutex* that) { NOdebug(that); return SDL_UnlockMutex(that->mutex); } //one of a few that directly returns a success flag
 inline int Release(/*const*/ SDL_cond* that) { debug(that); SDL_DestroyCond(that); return SDL_Success; }
 //inline int Release(SDL_PendingCond* that) { Release(that->mutex); Release(that->cond); return SDL_Success; }
 inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_WaitThread(that, &exitval); return exitval; } //this is one of the few dealloc funcs with a ret code, so might as well check it
@@ -542,7 +542,7 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
     /*static SDL_LockedMutex*/ locked = {0};
     if (!mutex) return (SDL_LockedMutex*)exc(RED_LT "No SDL_mutex to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
     if (!OK(SDL_LockMutex(mutex))) return (SDL_LockedMutex*)exc(RED_LT "SDL_LockMutex 0x%x failed" ENDCOLOR_MYLINE, mutex, where); //throw SDL_Exception("SDL_LockMutex");
-    if (where) myprintf(22, YELLOW_LT "SDL_LockMutex 0x%x ok (from %d)" ENDCOLOR, toint(mutex), where);
+    if (where) myprintf(32, YELLOW_LT "SDL_LockMutex 0x%x ok (from %d)" ENDCOLOR, toint(mutex), where);
     locked.mutex = mutex;
     return &locked;
 }
@@ -553,7 +553,7 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
     /*static SDL_LockedSemaphore*/ locked = {0};
     if (!sem) return (SDL_LockedSemaphore*)exc(RED_LT "No SDL_sem to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
     if (!OK(SDL_SemWait(sem))) return (SDL_LockedSemaphore*)exc(RED_LT "SDL_SemWait 0x%x failed" ENDCOLOR_MYLINE, sem, where); //throw SDL_Exception("SDL_LockMutex");
-    if (where) myprintf(22, YELLOW_LT "SDL_LockSemaphore 0x%x ok (from %d)" ENDCOLOR, toint(sem), where);
+    if (where) myprintf(32, YELLOW_LT "SDL_LockSemaphore 0x%x ok (from %d)" ENDCOLOR, toint(sem), where);
     locked.sem = sem;
     return &locked;
 }
@@ -565,7 +565,7 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
     if (!txr) return (SDL_LockedTexture*)exc(RED_LT "No SDL_Texture to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
     if (!OK(SDL_QueryTexture(txr, &locked.fmt, &locked.acc, &locked.surf.w, &locked.surf.h))) return (SDL_LockedTexture*)exc(RED_LT "SDL_QueryTexture 0x%x failed" ENDCOLOR_MYLINE, txr, where); //throw SDL_Exception("SDL_LockMutex");
     if (!OK(SDL_LockTexture(txr, NORECT, &locked.surf.pixels, &locked.surf.pitch))) return (SDL_LockedTexture*)exc(RED_LT "SDL_LockTexture 0x%x failed" ENDCOLOR_MYLINE, txr, where); //throw SDL_Exception("SDL_LockMutex");
-    if (where) myprintf(22, YELLOW_LT "SDL_LockTexture 0x%x ok (from %d)" ENDCOLOR, toint(txr), where);
+    if (where) myprintf(32, YELLOW_LT "SDL_LockTexture 0x%x ok (from %d)" ENDCOLOR, toint(txr), where);
 //additional validation:
     if (!locked.surf.w || (chk_w && (locked.surf.w != chk_w)) || !locked.surf.h || (chk_h && (locked.surf.h != chk_h)))
         return (SDL_LockedTexture*)err(RED_LT "Unexpected texture size: %dx%d should be %dx%d" ENDCOLOR_MYLINE, locked.surf.w, locked.surf.h, chk_w, chk_h, where), (SDL_LockedTexture*)NULL; //NUM_UNIV, UNIV_LEN);
@@ -757,12 +757,15 @@ public:
     {
         auto_ptr<SDL_LockedMutex> lock_HERE(mutex.cast); //SDL_LOCK(mutex));
         myprintf(33, "here-rcv 0x%x 0x%x, pending %d" ENDCOLOR, toint(mutex.cast), toint(cond.cast), this->pending.size());
-        while (!this->pending.size())
-            if (!cond || !OK(SDL_CondWait(cond, mutex))) exc(RED_LT "Wait for signal 0x%x:(0x%x,0x%x) failed" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast)); //throw SDL_Exception("SDL_CondWait");
+        while (!this->pending.size()) //NOTE: need loop in order to handle "spurious wakeups"
+        {
+            if (/*!cond ||*/ !OK(SDL_CondWait(cond, mutex))) exc(RED_LT "Wait for signal 0x%x:(0x%x,0x%x) failed" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast)); //throw SDL_Exception("SDL_CondWait");
+            if (!this->pending.size()) err(YELLOW_LT "Ignoring spurious wakeup" ENDCOLOR); //paranoid
+        }
         void* data = pending.back(); //signal already happened
 //        myprintf(33, "here-rcv got 0x%x" ENDCOLOR, toint(data));
         pending.pop_back();
-        myprintf(22, BLUE_LT "rcved[%d] 0x%x from signal 0x%x" ENDCOLOR, this->pending.size(), toint(data), toint(this));
+        myprintf(30, BLUE_LT "rcved[%d] 0x%x from signal 0x%x" ENDCOLOR, this->pending.size(), toint(data), toint(this));
         return data;
     }
     void wake(void* msg = NULL)
@@ -770,9 +773,9 @@ public:
         auto_ptr<SDL_LockedMutex> lock_HERE(mutex.cast); //SDL_LOCK(mutex));
         myprintf(33, "here-send 0x%x 0x%x, pending %d, msg 0x%x" ENDCOLOR, toint(mutex.cast), toint(cond.cast), this->pending.size(), toint(msg));
         this->pending.push_back(msg); //remember signal happened in case receiver is not listening yet
-        if (!cond || !OK(SDL_CondSignal(cond))) exc(RED_LT "Send signal 0x%x failed" ENDCOLOR, toint(this)); //throw SDL_Exception("SDL_CondSignal");
+        if (/*!cond ||*/ !OK(SDL_CondSignal(cond))) exc(RED_LT "Send signal 0x%x failed" ENDCOLOR, toint(this)); //throw SDL_Exception("SDL_CondSignal");
 //        myprintf(33, "here-sent 0x%x" ENDCOLOR, toint(msg));
-        myprintf(22, BLUE_LT "sent[%d] 0x%x to signal 0x%x" ENDCOLOR, this->pending.size(), toint(msg), toint(this));
+        myprintf(30, BLUE_LT "sent[%d] 0x%x to signal 0x%x" ENDCOLOR, this->pending.size(), toint(msg), toint(this));
     }
 };
 auto_ptr<SDL_mutex> Signal::mutex;
@@ -787,7 +790,9 @@ protected:
 //    void* data;
 //    int exitval;
 //    static Signal ack;
-    Signal in, out; //direction is relative to thread
+    Signal in, out; //bi-directional sync; name indicates direction relative to thread
+private:
+//info for deferred init:
     const char* svname;
     bool svasync, started;
 public:
@@ -839,16 +844,15 @@ public:
 */
 private:
 //kludge: defer construction until first msg sent in; avoids problem with pure virtual function
-    void init()
+    void init_delayed()
     {
         if (this->started) return; //this->cast) return; //thread already started
         myprintf(22, "here-launch: thread 0x%x, async %d" ENDCOLOR, toint(this->cast), svasync);
-//CAUTION: don't call start thread() until Signals are inited and vtable is populated!
+//CAUTION: don't call start_thread() until Signals are inited and vtable is populated!
         auto_ptr<SDL_Thread>::operator=(SDL_CreateThread(start_thread, svname, this));
-        if (!this->cast) exc(RED_LT "Can't create thead '%s'" ENDCOLOR, svname);
+        if (!this->cast) return_void(exc(RED_LT "Can't create thead '%s'" ENDCOLOR, svname));
         this->started = true; //don't start it again
-//TODO: use atomic here?
-        std::lock_guard<std::mutex> lock(protect);
+//        std::lock_guard<std::mutex> lock(protect);
         all.push_back(SDL_GetThreadID(this->cast)); //make it easier to distinguish bkg from main thread; NOTE: only suitable for long-lived threads; list is not cleaned up after thread exits (lazy coder :)
         if (!svasync) return;
         SDL_DetachThread(this->keep()); //thread can exit at any time, so it's not safe to reference it any more
@@ -871,32 +875,26 @@ public:
 ////        return this->exitval;
 //    }
 //public-facing:
-//NOTE: first msg in/out by main thread will start up bkg thread
-    void* message(void* msg = NULL) { wake(msg); return wait(); }
-    void wake(void* msg = NULL) { init(); in.wake(msg); }
-    void* wait() { init(); return out.wait(); }
+//NOTE: first msg in/out by main thread will start up bkg thread (delayed init)
+    void* message(void* msg = NULL) { wake(msg); return wait(); } //send+receive
+    void wake(void* msg = NULL) { init_delayed(); in.wake(msg); } //send
+    void* wait() { init_delayed(); return out.wait(); } //receive
 public:
     SDL_threadID ID() { return this->cast? SDL_GetThreadID(this->cast): -1; }
-    static std::mutex protect;
-    static std::vector<SDL_threadID> all;
+//    static std::mutex protect; //TODO: not needed? bkg thread only created once at start
+    static std::vector<SDL_threadID> all; //all.size() can be used for thread count
 //kludge: SDL_GetThreadName doesn't work on NULL (current thread); need to distinguish based on thead ID instead :(
     static int isBkgThread()
     {
-//TODO: use atomic here?
-        std::lock_guard<std::mutex> lock(protect);
-//        serialize.lock();
+//        std::lock_guard<std::mutex> lock(protect);
         auto pos = std::find(all.begin(), all.end(), SDL_GetThreadID(THIS_THREAD));
-        return all.end() - pos; //0 => not found; //(pos != all.end());
-//        serialize.unlock();
-//        return retval;
+        return all.end() - pos; //0 => not found (main thread), > 0 => index in list (can be used as abreviated thread name/#)
     }
 
 };
 std::vector<SDL_threadID> Thread::all;
-std::mutex Thread::protect;
+//std::mutex Thread::protect;
 //Signal Thread::ack;
-//SDL_mutex* Thread::mutex = NULL;
-//int Thread::count = 0;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -920,7 +918,7 @@ WH MaxFit();
 uint32_t limit(uint32_t color);
 uint32_t hsv2rgb(float h, float s, float v);
 uint32_t ARGB2ABGR(uint32_t color);
-const char* commas(int);
+const char* commas(int64_t);
 bool exists(const char* path);
 
 
@@ -935,7 +933,7 @@ bool exists(const char* path);
 bool isRPi()
 {
     static enum {No = false, Yes = true, Maybe} isrpi = Maybe;
-//TODO: use atomic here
+//TODO: use atomic here (test+set)
     static std::mutex protect;
     std::lock_guard<std::mutex> lock(protect); //not really needed (low freq api), but just in case
 
@@ -1004,6 +1002,7 @@ private:
     auto_ptr<SDL_Renderer> renderer;
 //set by bkg + fg threads:
     auto_ptr<SDL_mutex> busy;
+//    std::atomic<int> txr_busy;
     auto_ptr<SDL_Texture> canvas;
 //shared data:
 //    static auto_ptr<SDL_lib> sdl;
@@ -1011,8 +1010,8 @@ private:
 //performance stats:
     uint64_t started; //doesn't need to be atomic; won't be modified after fg thread wakes
     std::atomic<uint32_t> numfr, numerr; //could be updated by another thread
-    struct { uint64_t previous; std::atomic<uint64_t> caller_time, pivot_time, lock_time, update_time, unlock_time; } fg;
-    struct { uint64_t previous; std::atomic<uint64_t> copy_time, present_time; } bg;
+    struct { uint64_t previous; std::atomic<uint64_t> user_time, caller_time, pivot_time; } fg; //, lock_time, update_time, unlock_time; } fg;
+    struct { uint64_t previous; std::atomic<uint64_t> caller_time, pivot_time, lock_time, update_time, unlock_time, copy_time, present_time; } bg;
 public:
     bool WantPivot; //dev/debug vs. live mode
     int num_univ, univ_len; //called-defined
@@ -1050,13 +1049,14 @@ public:
         if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_LT "Too many universes: %d (max %d)" ENDCOLOR, num_univ, WS281X_BITS));
         if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_LT "Universe too big: %d (max %d)" ENDCOLOR, univ_len, wndh));
 
-//create memory buf to hold new pixel data:
+//create memory buf to hold pixel data:
 //NOTE: surface + texture must always be 3 * WS281X_BITS - 1 pixels wide
 //data signal is generated at 3x bit rate, last bit overlaps H blank
 //surface + texture height determine max # WS281X nodes per universe
 //SDL will stretch texture to fill window (V-grouping); OpenGL not needed for this
 //use same fmt + depth as window; TODO: is this more efficient?
 //        pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, 8+8+8+8, SDL_PIXELFORMAT_ARGB8888);
+//TODO: is SDL_AllocFormat helpful here?
         pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, SDL_BITSPERPIXEL(fmt), fmt);
         if (!pxbuf) return_void(exc(RED_LT "Can't alloc pixel buf" ENDCOLOR));
         if ((pxbuf.cast->w != TXR_WIDTH) || (pxbuf.cast->h != univ_len)) return_void(exc(RED_LT "Pixel buf wrong size: got %d x %d, wanted %d x %d" ENDCOLOR, pxbuf.cast->w, pxbuf.cast->h, TXR_WIDTH, univ_len));
@@ -1068,18 +1068,19 @@ public:
 
         if (!(busy = SDL_CreateMutex())) return_void(exc(RED_LT "Can't create signal mutex" ENDCOLOR)); //throw SDL_Exception("SDL_CreateMutex");
 
-        dirty = done = false;
-//        this->title = title;
+        done = false;
+        dirty = true; //force initial screen update + notification of canvas available (no paint doesn't block)
+//        txr_busy = 0;
         this->num_univ = num_univ;
         this->univ_len = univ_len;
         this->WantPivot = want_pivot;
-        this->Types.resize(num_univ, WS281X);
-        fg.caller_time = fg.pivot_time = fg.update_time = fg.unlock_time = 0;
+        this->Types.resize(num_univ, WS281X); //NOTE: caller needs to call paint() after changing this
+        fg.user_time = fg.caller_time = fg.pivot_time = 0; //fg.update_time = fg.unlock_time = 0;
         myprintf(22, "DataCanvas wake thread" ENDCOLOR);
-        this->wake((void*)0x1234); //run main() asynchronously
+        this->wake((void*)0x1234); //run main() asynchronously in bkg thread
         myprintf(22, "DataCanvas wait for bkg" ENDCOLOR);
         this->wait(); //wait for bkg thread to init
-        myprintf(22, "DataCanvas ret to caller" ENDCOLOR);
+        myprintf(22, "DataCanvas bkg thread ready, ret to caller" ENDCOLOR);
     }
     ~DataCanvas()
     {
@@ -1100,8 +1101,8 @@ private:
 //        SDL_Window* window = reinterpret_cast<SDL_Window*>(data); //window was created in main thread where events are handled
         myprintf(8, MAGENTA_LT "bkg thread started: data 0x%x" ENDCOLOR, toint(data));
 
-	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        if (!renderer) return (void*)err(RED_LT "Create renderer failed" ENDCOLOR);
+	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); //NOTE: PRESENTVSYNC syncs with V refresh rate (typically 60 Hz)
+        if (!renderer) return err(RED_LT "Create renderer failed" ENDCOLOR);
         debug_info(renderer);
 
 #if 0
@@ -1126,15 +1127,45 @@ private:
         myprintf(8, MAGENTA_LT "bkg startup took %2.1f msec" ENDCOLOR, elapsed(started));
 
 //        Paint(NULL); //start with all pixels dark
-        bg.copy_time = bg.present_time = numfr = numerr = 0;
+        bg.caller_time = bg.pivot_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = 0;
+
         started = fg.previous = bg.previous = now();
-        PresentTime = 0;
+        PresentTime = 0; //start of official playback
 //        myprintf(33, "bkg ack main" ENDCOLOR);
         out.wake(pxbuf); //tell main thread i'm ready
-        out.wake(pxbuf); //tell main thread canvas is available
+//        out.wake(pxbuf); //tell main thread canvas is available (advanced notice so first paint doesn't block)
 
         for (;;) //render loop; runs continuously at screen rate (30 - 60 Hz)
         {
+//NOTE: OpenGL is described as not thread safe
+//apparently even texture upload must be in same thread; else get "intel_do_flush_locked_failed: invalid argument" crashes
+#if 1 //gpu upload in bg thread
+            void* pixels = in.wait();
+            if (!pixels) break; //eof
+            delta = now() - bg.previous; bg.caller_time += delta; bg.previous += delta;
+
+            pivot((uint32_t*)pixels);
+            delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
+            out.wake((void*)true); //allow fg thread to refill buf while render finishes in bkg
+
+            { //scope for locked texture
+                auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
+                delta = now() - bg.previous; bg.lock_time += delta; bg.previous += delta;
+//NOTE: pixel data must be in correct (texture) format
+//NOTE: SDL_UpdateTexture is reportedly slow; use Lock/Unlock and copy pixel data directly for better performance
+                memcpy(lock.data.surf.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
+                delta = now() - bg.previous; bg.update_time += delta; bg.previous += delta;
+            }
+            delta = now() - bg.previous; bg.unlock_time += delta; bg.previous += delta;
+
+        	if (!OK(SDL_RenderCopy(renderer, canvas, NORECT, NORECT))) //&renderQuad, angle, center, flip ))
+            {
+                err(RED_LT "Unable to render to screen" ENDCOLOR);
+                ++numerr;
+            }
+            delta = now() - bg.previous; bg.copy_time += delta; bg.previous += delta;
+
+#else //gpu upload in fg thread
 //??            out.wake(pxbuf); //ask main thread for (more) work
 //            void* msg;
 //            if (!(msg = in.wait())) break; //ask main thread for (more) work
@@ -1154,26 +1185,30 @@ private:
 //TODO: only do this if canvas changed?
 //for now, do it unconditionally (canvas probably changes most of the time anyway)
 //this makes timing consistent
-        if (dirty) //fg thread updated canvas; upload to GPU; NOTE: only updates when need to
-        { //scope for locked mutex
+            if (dirty) //fg thread updated canvas; upload to GPU; NOTE: only updates when need to
+            { //scope for locked mutex
 //TODO: is it better to render on-demand (less workload), or unconditionally (for uniform timing)?
-            auto_ptr<SDL_LockedMutex> lock_HERE(busy.cast); //SDL_LOCK(busy));
-        	if (!OK(SDL_RenderCopy(renderer, canvas, NORECT, NORECT))) //&renderQuad, angle, center, flip ))
-            {
-                err(RED_LT "Unable to render to screen" ENDCOLOR);
-                ++numerr;
+//NOTE: if dirty, canvas not busy; don't need mutex here?
+                auto_ptr<SDL_LockedMutex> lock_HERE(busy.cast); //SDL_LOCK(busy));
+//                if (txr_busy++) err(RED_LT "txr busy, shouldn't be" ENDCOLOR);
+            	if (!OK(SDL_RenderCopy(renderer, canvas, NORECT, NORECT))) //&renderQuad, angle, center, flip ))
+                {
+                    err(RED_LT "Unable to render to screen" ENDCOLOR);
+                    ++numerr;
+                }
+                dirty = false;
+//                --txr_busy;
+                out.wake(canvas); //tell fg thread canvas is available again for updates
             }
-            dirty = false;
-            out.wake(); //tell fg thread canvas is available again for updates
-        }
             delta = now() - bg.previous; bg.copy_time += delta; bg.previous += delta;
+#endif
 
 //            myprintf(8, MAGENTA_LT "renderer thread: render+wait" ENDCOLOR);
             SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
             delta = now() - bg.previous; bg.present_time += delta; bg.previous += delta;
-            PresentTime = elapsed(started);
+            PresentTime = elapsed(started); //update presentation timestamp (in case main thread wants to know)
 //myprintf(22, BLUE_LT "fr[%d] deltas: %lld, %lld, %lld, %lld, %lld" ENDCOLOR, numfr, delta1, delta2, delta3, delta4, delta5);
-            if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec
+            if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec @60 FPS
         }
 //        myprintf(33, "bkg done" ENDCOLOR);
         myprintf(8, MAGENTA_LT "bkg renderer thread: exit after %2.1f msec" ENDCOLOR, elapsed(started));
@@ -1187,34 +1222,52 @@ public:
 //this allows Node.js event loop to remain responsive
 //NOTE: caller owns pixel buf; leave it in caller's memory so it can be updated (need to copy here for pivot anyway)
 //NOTE: pixel array assumed to be the correct size here (already checked by Javascript wrapper before calling)
-    bool Paint(uint32_t* pixels, uint32_t fill = BLACK)
+    bool Paint(uint32_t* pixels) //, void* cb, void* data) //uint32_t fill = BLACK)
+//    bool Paint(uint32_t* pixels, const std::function<void (void*)>& cb = 0, void* data = 0) //uint32_t fill = BLACK)
+//TODO: https://stackoverflow.com/questions/2938571/how-to-declare-a-function-that-accepts-a-lambda
+//    template <typename CBType, typename ArgType>
+//    bool Paint(uint32_t* pixels, CBType cb = 0, ArgType data = 0) //uint32_t fill = BLACK)
     {
 //        myprintf(22, "DataCanvas paint" ENDCOLOR);
         uint64_t delta;
         delta = now() - fg.previous; fg.caller_time += delta; fg.previous += delta;
 //        myprintf(6, BLUE_LT "Paint(pixels 0x%x), %d x %d = %s len (assumed), 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, this->num_univ, this->univ_len, commas(this->num_univ * this->univ_len), pixels? pixels[0]: fill, pixels? pixels[1]: fill, pixels? pixels[2]: fill);
 
+//NOTE: OpenGL is described as not thread safe
+//apparently even texture upload must be in same thread; else get "intel_do_flush_locked_failed: invalid argument" crashes
+#if 1 //gpu upload in bg thread
+//        struct { uint32_t* pixels; const std::function<void (void*)>& cb; void* data; } info = {pixels, cb, data};
+        this->wake(pixels);
+        bool ok = this->wait(); //delay until bg thread has grabbed my data, so I can reuse my buf
+        delta = now() - fg.previous; fg.pivot_time += delta; fg.previous += delta;
+//        if (cb) cb(data);
+        return ok;
+#else //gpu upload in fg thread
 //        myprintf(22, "DataCanvas pivot" ENDCOLOR);
         pivot(pixels, fill);
         delta = now() - fg.previous; fg.pivot_time += delta; fg.previous += delta;
 //TODO? void* ok = this->wait(); //check if bkg thread init'ed okay
 
-        /*if (numfr)*/ wait(); //NOTE: don't want to block main thread, but need to wait until renderer releases canvas
+        /*if (numfr)*/ this->wait(); //NOTE: don't want to block main thread (bad for libuv), but need to wait until renderer releases canvas
 //NOTE: texture must be owned by render thread (according to various sources):
 //this copies pixel data to GPU memory?
-//TODO: move this to bkg thread
+//TODO: move this to bkg thread?
 #if 1
 //NOTE: below assumes that Texture lock works across threads, and that Renderer uses it internally also
         { //scope for locked mutex
+#define lock  lock2 //kludge: avoid duplicate var name
             auto_ptr<SDL_LockedMutex> lock_HERE(busy.cast); //(SDL_LOCK(busy));
-        { //scope for locked texture
+#undef lock
+//            if (txr_busy++) err(RED_LT "txr busy, shouldn't be" ENDCOLOR);
+//        { //scope for locked texture
             auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
             delta = now() - fg.previous; fg.lock_time += delta; fg.previous += delta;
 //NOTE: pixel data must be in correct (texture) format
 //NOTE: SDL_UpdateTexture is reportedly slow; use Lock/Unlock and copy pixel data directly for better performance
             memcpy(lock.data.surf.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
             delta = now() - fg.previous; fg.update_time += delta; fg.previous += delta;
-        }
+//        }
+//            --txr_busy;
         }
 #else //slower; doesn't work with streaming texture?
         delta = now() - fg.previous; fg.lock_time += delta; fg.previous += delta;
@@ -1224,6 +1277,7 @@ public:
 #endif
         delta = now() - fg.previous; fg.unlock_time += delta; fg.previous += delta;
         this->dirty = true; //tell bkg thread canvas changed + wake me when it's safe to change canvas again
+#endif
 
 //TODO? void* ok = this->wait(); //check if bkg thread init'ed okay
 //        myprintf(22, "DataCanvas ret from paint" ENDCOLOR);
@@ -1234,16 +1288,20 @@ public:
 //    inline double avg_ms(uint64_t val) { return (double)(1000 * val / SDL_TickFreq()) / (double)numfr; } //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
     void stats()
     {
+//TODO: skip if numfr already reported
 //        uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
 //        uint64_t unknown_time = elapsed - caller_time - pivot_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
-        uint64_t idle_time = isRPi()? bg.present_time: fg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
+        uint64_t idle_time = isRPi()? bg.present_time: bg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
         double elaps = elapsed(started), fps = numfr / elaps;
 //#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
         uint32_t numfr_cpy = numfr, numerr_cpy = numerr; //kludge: avoid "deleted function" error on atomic
-        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
-        myprintf(22, BLUE_LT "raw: elapsed %lld, freq %lld, fg(caller %lld, pivot %lld, lock %lld, update %lld, unlock %lld), bg(copy %lld, present %lld)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.pivot_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
+//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.pivot_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: avg fg(user %2.3f + caller %2.3f + pivot %2.3f), avg bg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f + copy %2.3f + present %2.3f), bg %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.user_time), avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(bg.caller_time), avg_ms(bg.pivot_time), avg_ms(bg.lock_time), avg_ms(bg.update_time), avg_ms(bg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / (now() - started));
+        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(user %s, caller %s, pivot %s), bg(caller %s, pivot %s, lock %s, update %s, unlock %s, copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.user_time), commas(fg.caller_time), commas(fg.pivot_time), commas(bg.caller_time), commas(bg.pivot_time), commas(bg.lock_time), commas(bg.update_time), commas(bg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+//        myprintf(22, "raw-raw: elapsed %ld, freq %ld" ENDCOLOR, now() - started, SDL_TickFreq());
     }
 /*
     bool Release()
@@ -1550,7 +1608,7 @@ void DataCanvas_js::Init(v8::Local<v8::Object> exports)
     Nan::SetPrototypeMethod(ctor, "paint", DataCanvas_js::paint);
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", DataCanvas_js::utype);
     Nan::SetPrototypeMethod(ctor, "pivot_tofix", DataCanvas_js::pivot_tofix); //TODO: fix this
-    Nan::SetPrototypeMethod(ctor, "release", DataCanvas_js::release);
+//    Nan::SetPrototypeMethod(ctor, "release", DataCanvas_js::release);
 //    Nan::SetAccessor(proto,JS_STR("width"), WidthGetter);
 //    Nan::SetAccessor(ctor, JS_STR(iso, "pivotprop"), DataCanvas_js::getprop_pivot, DataCanvas_js::setprop_pivot);
 //ambiguous:    Nan::SetAccessor(ctor, JS_STR(iso, "pivot"), DataCanvas_js::get_pivot, DataCanvas_js::set_pivot);
@@ -1706,6 +1764,7 @@ void DataCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
 }
 
 
+/*
 void DataCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(DataCanvas_js::release) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
@@ -1715,6 +1774,7 @@ void DataCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
     if (!canvas->inner.Release()) return_void(errjs(iso, "DataCanvas.release: failed"));
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
+*/
 
 
 void DataCanvas_js::Quit(void* ignored)
@@ -1777,8 +1837,14 @@ bool eventh(int = INT_MAX); //fwd ref
 
 uint32_t PALETTE[] = {RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE};
 
+#if 0 //small load
 #define NUM_UNIV  20
-#define UNIV_LEN  20
+#define UNIV_LEN  24
+#else //full load
+#define NUM_UNIV  24
+#define UNIV_LEN  Screen().h
+#endif
+
 
 int main(int argc, const char* argv[])
 {
@@ -1788,27 +1854,34 @@ int main(int argc, const char* argv[])
 {
     DataCanvas canvas(0, NUM_UNIV, UNIV_LEN, false);
 //    myprintf(33, "canvas opened" ENDCOLOR);
-    uint32_t pixels[NUM_UNIV * UNIV_LEN] = {0};
+//    uint32_t pixels[NUM_UNIV * UNIV_LEN] = {0};
+    std::vector<uint32_t> pixels(NUM_UNIV * UNIV_LEN); //kludge: vector allows non-const size
 #if 0 //gradient fade
     static int hue = 0;
     uint32_t color = hsv2rgb((double)(hue++ % 360) / 360, 1, 1); //gradient fade on hue
     surf.FillRect(RECT_ALL, color);
 #endif
 #if 1 //one-by-one, palette colors
-    myprintf(1, GREEN_LT "loop for 8 sec (480 frames) ..." ENDCOLOR);
-    for (int xy = 0; xy < 8*60; ++xy) //xy < 10 * 10; ++xy)
+    int duration = 30; //sec
+    myprintf(1, GREEN_LT "loop for %d sec (%d frames) ..." ENDCOLOR, duration, duration * 60);
+    for (int xy = 0; xy < duration * 60; ++xy) //xy < 10 * 10; ++xy)
     {
         int x = (xy / UNIV_LEN) % NUM_UNIV, y = xy % UNIV_LEN; //cycle thru [0..9,0..9]
 //        myprintf(33, "evth" ENDCOLOR);
         if (eventh(1)) break; //user quit
-        uint32_t color = PALETTE[(x + y + xy / SIZE(pixels)) % SIZE(PALETTE)]; //vary each cycle
+        uint32_t color = PALETTE[(x + y + xy / pixels.size()) % SIZE(PALETTE)]; //vary each cycle
 //        myprintf(1, BLUE_LT "px[%d, %d] = 0x%x" ENDCOLOR, x, y, color);
-        pixels[xy % SIZE(pixels)] = color;
+        pixels[xy % pixels.size()] = color;
         double PresentTime_cpy = canvas.PresentTime; //kludge: avoid "deleted function" error on atomic
         myprintf(33, BLUE_LT "paint[%d, %d] @%2.1f msec" ENDCOLOR, x, y, PresentTime_cpy); //canvas.PresentTime);
-        canvas.Paint(pixels); //blocks until canvas released by bkg thread
-//        SDL_Delay(1000 / 60);
+//not needed: use lamba function as call-back (try to monitor paint latency):
+//        canvas.Paint(pixels, [](void* started) { canvas.fg.usertime += SDL_GetTicks() - (uint64_t)started; }, (void*)now()); //blocks until canvas released by bkg thread
+//        uint64_t latency = SDL_GetTicks();
+        canvas.Paint(pixels.data()); //blocks until pixel buf released by bkg thread
+//        canvas.fg.usertime += SDL_GetTicks() - latency;
+        SDL_Delay(10); //15+10); //1000 / 60);
     }
+    SDL_Delay(17-10); //kludge: allow last frame out before closing
 #endif
     myprintf(33, "done" ENDCOLOR);
 } //force DataCanvas out of scope before delay
@@ -1844,7 +1917,7 @@ bool eventh(int max /*= INT_MAX*/)
 				myprintf(14, CYAN_LT "got key press 0x%x" ENDCOLOR, evt.key.keysym.sym);
 				if (evt.key.keysym.sym == SDLK_ESCAPE) return true; //quit = true; //return; //key codes defined in /usr/include/SDL2/SDL_keycode.h
 			}
-            if (evt.type == SDL.cast->evtid) //my custom event: printf from bkg thread
+            if (SDL.cast->evtid && (evt.type == SDL.cast->evtid)) //custom event: printf from bkg thread
             {
                 const char* buf = reinterpret_cast<const char*>(evt.user.data1);
                 fputs(buf, stderr);
@@ -2412,22 +2485,27 @@ void* errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...)
     FILE* stm = ((dest == stdpopup) || (dest == stdexc))? stderr: dest;
 //TODO: DRY printf; rework to -> file -> optional targets (console, screen, exc)?
     /*if (stm == stderr)*/ fprintf(stdlog(), "%.*s%s%.*s%s!%d%s\n", (int)srcline_ofs, fmtbuf, details.c_str(), (int)(lastcolor_ofs - srcline_ofs), fmtbuf + srcline_ofs, tooshort.str().c_str(), /*shortname*/ Thread::isBkgThread(), fmtbuf + lastcolor_ofs);
-    if ((stm == stderr) && Thread::isBkgThread() && SDL.cast->evtid) //fwd printf to fg thread
+    if (Thread::isBkgThread()) //&& (stm == stderr)) //output will be lost; send it elsewhere
     {
         int buflen = needlen + details.length() + tooshort.tellp() + /*strlen(shortname)*/ 2 + 2+1;
         char* fwdbuf = new char[buflen];
         snprintf(fwdbuf, buflen, "%.*s%s%.*s%s!%d%s\n", (int)srcline_ofs, fmtbuf, details.c_str(), (int)(lastcolor_ofs - srcline_ofs), fmtbuf + srcline_ofs, tooshort.str().c_str(), /*shortname*/ Thread::isBkgThread(), fmtbuf + lastcolor_ofs);
 #ifdef BUILDING_NODE_EXTENSION //set by node-gyp
- #error TODO
+ #pragma message("TODO: node console.log")
 #else //stand-alone (XWindows)
-        SDL_Event evt = {0};
-        evt.type = SDL.cast->evtid;
-//        event.user.code = my_event_code;
-        evt.user.data1 = fwdbuf; //recipient must dealloc
-//        evt.user.data2 = 0;
-        if (OK(SDL_PushEvent(&evt))) return NULL;
+        if (SDL.cast->evtid) //fwd to fg thread
+        {
+            SDL_Event evt = {0};
+            evt.type = SDL.cast->evtid;
+//            event.user.code = my_event_code;
+            evt.user.data1 = fwdbuf; //recipient must dealloc
+//            evt.user.data2 = 0;
+            if (OK(SDL_PushEvent(&evt))) { fprintf(stdlog(), "sent to evt que ok" ENDCOLOR); return NULL; }
+            fprintf(stdlog(), "failed to send to evt que: %s" ENDCOLOR, SDL_GetError());
+        }
 #endif
-        dest = stdexc;
+//        dest = stdexc;
+        return NULL; //nowhere to send; just discard
     }
     else
     {
@@ -2461,16 +2539,16 @@ void* errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...)
 
 //insert commas into a numeric string (for readability):
 //CAUTION: uses static data to preserve data after return; semaphore arbitrates a pool of 12 ret values
-const char* commas(int val)
+const char* commas(int64_t val)
 {
-    static std::atomic<int> ff;
-    static char buf[12][24]; //allow 12 simultaneous calls (10 needed by stats())
     const int LIMIT = 4; //max #commas to insert
+    static std::atomic<int> ff;
+    static char buf[12][16 + LIMIT]; //allow 12 simultaneous calls (10+ needed by stats())
     static auto_ptr<SDL_sem> acquire(SDL_CreateSemaphore(SIZE(buf)));
     auto_ptr<SDL_LockedSemaphore> lock_HERE(acquire.cast); //SDL_LOCK(acquire));
 
     char* bufp = buf[++ff % SIZE(buf)] + LIMIT; //alloc ret val from pool; don't overwrite other values within same printf, allow space for commas
-    for (int grplen = std::min(sprintf(bufp, "%d", val), LIMIT * 3) - 3; grplen > 0; grplen -= 3)
+    for (int grplen = std::min(sprintf(bufp, "%ld", val), LIMIT * 3) - 3; grplen > 0; grplen -= 3)
     {
         memmove(bufp - 1, bufp, grplen);
         (--bufp)[grplen] = ',';
