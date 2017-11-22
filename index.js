@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 //writable GpuCanvas stream
 
+/*
 TODO:
-newtest.js -> gpu-test-stream.js
+//newtest.js -> gpu-test-stream.js
 mp3player.js(lame + speaker) + GpuStream.js(index.js) + latency balancer -> gpu-player.js
 vix2loader.js + vix2models.js = vix2stream.js
 vix2stream.js + GpuPlayer.js = show
+*/
 
 "use strict"; //find bugs easier
 const os = require('os');
