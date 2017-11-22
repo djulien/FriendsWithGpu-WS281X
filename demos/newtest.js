@@ -4,7 +4,7 @@
 require('colors').enabled = true; //for console output colors
 Date.now_usec = require("performance-now"); //override with hi-res version (usec)
 const bindings = require('bindings');
-const {isRPi, Screen, DataCanvas} = fixup(bindings('data-canvas.node')); //require("../build/release/gpu-canvas");
+const {isRPi, Screen, DataCanvas} = fixup(bindings('gpu-canvas.node')); //require("../build/release/gpu-canvas");
 //console.log(typeof Screen);
 //console.dir(Screen);
 //console.log(JSON.stringify(Screen()));

@@ -4,6 +4,7 @@
 "use strict";
 require("colors");
 const glob = require("glob");
+const pathlib = require("path");
 //const {execSync} = require('child_process');
 
 
@@ -16,8 +17,14 @@ function deglob(pattern, maxm)
 //    if (pattern.indexOf("*") == -1) return pattern;
     var files = glob.sync(pattern);
     if (!(files || []).length) throw `deglob: No files match '${pattern}'.`.red_lt;
-    if (files.length > maxm) throw `deglob: ${files.length} files match '${pattern}'; only wanted ${maxm}.`.red_lt;
+    if (files.length > maxm) throw `deglob: only wanted ${maxm}, but found ${files.length} matching '${relpath(process.cwd(), pattern)}':\n`.red_lt + files.map(path => { return relpath(pattern, path); }).join("\n").yellow_lt;
     return files; //mult_okay? files: files[0];
+}
+
+
+function relpath(pattern, filepath)
+{
+    return pathlib.relative(pathlib.dirname(pattern), filepath);
 }
 
 

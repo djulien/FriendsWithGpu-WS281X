@@ -8,9 +8,9 @@
     'targets':
     [
         {
-            'target_name': "data-canvas",
+            'target_name': "gpu-canvas",
 #            'type': 'executable',
-            'sources': [ "src/DataCanvas.cpp"],
+            'sources': [ "src/GpuCanvas.cpp"],
 #CAUTION: cflags requires node.gyp ver >= 3.6.2
 #NOTE: node-gyp only reads *one* "cflags_cc+" here, otherwise node-gyp ignores it
             'cflags_cc': ["-w", "-Wall", "-pedantic", "-Wvariadic-macros", "-g", "-std=c++11"], #-std=c++0x

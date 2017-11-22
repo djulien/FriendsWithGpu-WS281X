@@ -2,6 +2,12 @@
 //mp3 playback:
 'use strict';
 
+//alsa info:
+https://www.alsa-project.org/alsa-doc/alsa-lib/index.html
+//https://stackoverflow.com/questions/2180909/how-to-use-alsas-snd-pcm-writei
+//NOTE: to minimize latency, your application should write to the driver no faster than the driver is writing data to the sound card, or you'll end up piling up more data and accumulating more and more latency.
+//node-speaker/deps/mpg123/src/output/alsa.c
+
 require('colors'); //var colors = require('colors/safe'); //https://www.npmjs.com/package/colors; http://stackoverflow.com/questions/9781218/how-to-change-node-jss-console-font-color
 const fs = require('fs');
 const lame = require('lame');
@@ -116,12 +122,14 @@ function cb(msg, details)
         var missing = chunksize - details.wrlen; //last buf was not full; pad it to make calculations simpler
         if (isNaN(cb.missing += missing)) cb.missing = missing; //store cumulative
 
-        details.wrpersec = milli(details.numwr / elapsed());
+        details.wps = milli(details.numwr / elapsed()); ///#writes per sec
         details.numsamp = (details.wrtotal + cb.missing) / sampsize;
         details.numfr = details.numsamp / spkr.samplesPerFrame;
         if (details.numwr == details.numfr) delete details.numwr; //remove redundant info
-        details.timestamp = milli(details.numsamp / spkr.sampleRate); //#sec (nearest msec)
-        debug(`progress ${JSON.stringify(details)}`.pink_lt);
+        details.datatime = milli(details.numsamp / spkr.sampleRate); ///#sec (nearest msec)
+        details.delta = milli(details.datatime - elapsed()); //latency (nearest msec)
+        "wrtotal,wrlen,buflen,numsamp,datatime".split(",").forEach(name => { delete details[name]; }); //remove unneeded data
+        debug(`progress ${JSON.stringify(details).replace(/"/g, "").replace(/,/g, ", ")}`.pink_lt);
         return;
     }
     debug(`elapsed ${milli(elapsed())}, msg ${msg}`.pink_lt);
