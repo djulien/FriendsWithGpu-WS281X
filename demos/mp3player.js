@@ -72,7 +72,7 @@ console.log("playback %s, duration %s".yellow_lt, filename, duration);
 //    var dcdr, spkr;
     fs.createReadStream(filename) //process.argv[2]) //specify mp3 file on command line
         .pipe(new lame.Decoder())
-        .on('format', function(format)
+        .once('format', function(format)
         {          
             debug("mp3 '%s', format %s".blue_lt, filename, JSON.stringify(format)); //.sampleRate, format.bitDepth);
 //            if (want_play) 

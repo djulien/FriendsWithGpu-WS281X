@@ -1,27 +1,31 @@
 #!/usr/bin/env node
 //generate GPU test data stream
-//output format = ndjson (for easier debug readability and piping/streaming compatibility)
+//output format = approximately ndjson (for easier debug readability and piping/streaming compatibility)
 
 require("colors").enabled = true; //https://github.com/Marak/colors.js/issues/127
-const fs = require("fs"); //"fs-extra");
-const ndjson = require("ndjson");
+//const fs = require("fs"); //"fs-extra");
+//const ndjson = require("ndjson");
 const {Readable} = require('stream');
-const {Screen} = require("/"); require('gpu-canvas.node')); //require("../build/release/gpu-canvas");
-/*const sprintf =*/ require('sprintf.js'); //.sprintf;
+const {Screen} = require("gpu-stream");
+// /*const sprintf =*/ require('sprintf.js'); //.sprintf;
 //const {step, pause} = require("blocking-style");
 
 //const vix2loader = require("./vix2loader");
 //const bufdiff = require("yalp/utils/buf-diff");
 //const {calledfrom} = require("yalp/utils/caller");
 
-const FPS = 60;
-const NUM_UNIV = 24;
-const UNIV_LEN = Screen.height; //20-18;
-const DURATION = NUM_UNIV * UNIV_LEN; //enough for one cycle (sec)
-const LATENCY = 1.4; //estimated startup latency (sec)
-const VERSION = 1.0; //file fmt
-const COLOR_FMT = "ARGB"; //ARGB is easier (for me) to read (for debug), but RPi wants BGRA so an extra conversion step is needed
-const DEBUG_INFO = true;
+//default settings (caller can override most):
+const DEFAULTS =
+{
+    FPS: 60,
+    NUM_UNIV: 24,
+    UNIV_LEN: Screen.height,
+    get DURATION() { return Math.ceil(this.NUM_UNIV * this.UNIV_LEN / this.FPS); }, //enough for one cycle (sec)
+    LATENCY: 1.4, //estimated startup latency (sec)
+    VERSION: 1.0, //file fmt
+    COLOR_FMT: "ARGB", //ARGB is easier (for me) to read (for debug), but RPi wants BGRA so an extra conversion step is needed
+    DEBUG_INFO: true,
+};
 //const COMPRESSION_STATS = true;
 
 
@@ -47,7 +51,7 @@ module.exports =
 function GpuTestStream(opts)
 {
 //step 1x to create stream for caller:
-    return step(streamer(opts)); //executes async
+    return step(streamer(opts)); //execute asynchronously
 }
 
 
@@ -57,14 +61,14 @@ if (!module.parent)
 setImmediate(function()
 {
     console.error("running CLI test".green_lt);
-    var jsonstr = GpuTestStream();
+    var gpustm = GpuTestStream();
 //console.error("json str:", JSON.stringify_tidy(jsonstr));
 //    yalp.SendData(); //NOTE: need to call pause() before read()
-    jsonstr
+    gpustm
         .pipe(process.stdout)
         .on("error", function(err)
         {
-            console.error(`ERROR on read#${jsonstr.numrd}: ${err}`.red_lt); // - 0x60);
+            console.error(`ERROR on read#${gpustm.numrd}: ${err}`.red_lt); // - 0x60);
             process.exit();
         });
     console.error("CLI test continues asynchronously".green_lt);
@@ -73,14 +77,15 @@ setImmediate(function()
 
 function step(gen)
 {
-    if (step.done) throw "Generator function is already done.".red_lt;
+    if (step.done) throw "Generator function already completed.".red_lt;
 	if (typeof gen == "function") gen = gen(); //invoke generator if not already
 //        return setImmediate(function() { step(gen()); }); //avoid hoist errors
-    if (gen) step.svgen = gen; //save generator for subsequent steps
+    if (gen) step.gen = gen; //save generator for subsequent steps
 //console.log("step:", typeof gen, JSON.stringify_tidy(gen));
-	var {value, done} = step.svgen.next(step.retval); //send previous value to generator
+	var {value, done} = step.gen.next(step.retval); //send previous value to generator
 //    {step.retval, step.done} = step.svgen.next(step.retval); //send previous value to generator
 //    Object.assign(step, step.svgen.next(step.retval)); //send previous value to generator
+    if (typeof value == "function") value = value();
     step.done = done; //prevent overrun
     return step.retval = value; //return value to caller and to next yield
 }
@@ -96,7 +101,21 @@ function step(gen)
 //NOTE: this is a generator function
 function* streamer(opts)
 {
+    Object.assign(this, DEFAULTS, opts || {});
+//    if (!opts) opts = {};
+//    const fps = defaultas(opts.fps, FPS);
+//    const speed = defaultas(opts.speed, 1 / FPS);
+//    const latency = defaultas(opts.latency, LATENCY);
+//    const duration = defaultas(opts.duration, DURATION);
+//    const num_univ = defaultas(opts.num_univ, NUM_UNIV);
+//    const univ_len = defaultas(opts.univ_len, UNIV_LEN);
+
     const started = now_sec();
+    const pixels = new Uint32Array(this.NUM_UNIV * this.UNIV_LEN); //this.pixel_buf); //NOTE: platform byte order
+    pixels.fill(BLACK); //start all dark
+
+//instantiate Readable stream:
+//don't need a full class definition, so just customize a regular Readable object
     const rs = Readable(); //{ objectMode: true , highWaterMark: 16384});
     rs._read = function(size)
     {
@@ -120,9 +139,6 @@ function* streamer(opts)
 //    Object.keys(Models).forEach(name => { delete Models[name]; });
 //    Models.All = {start: 1, end: seq.numch, name: "All"}; //dummy model using all channels
 //    if ((opts || {}).want_palette) palettes(seq); //needs second pass; expensive, so do it before first yield
-
-    const pixels = new Uint32Array(NUM_UNIV * UNIV_LEN); //this.pixel_buf); //NOTE: platform byte order
-    pixels.fill(BLACK);
     yield rs; //return stream object to caller and pause until stream consumer wants data
 
 //    for (var i = 0; i < 5; ++i)
@@ -133,34 +149,35 @@ function* streamer(opts)
 //write header info:
     yield rs.pushJSON(
     {
-        time: milli(-LATENCY), //predate startup to compensate for latency
-        fps: FPS,
-        num_univ: NUM_UNIV,
-        univ_len: UNIV_LEN,
+        time: milli(-this.LATENCY), //predate startup to compensate for latency
+        fps: this.FPS,
+        num_univ: this.NUM_UNIV,
+        univ_len: this.UNIV_LEN,
         ver: `${VERSION}`, //file format
-        cfmt: COLOR_FMT, //color format
+        cfmt: this.COLOR_FMT, //color format
         timestamp: new Date().toShortString(true), //allows cache validation
     });
 
 //write frame data (UNcompressed):
-    console.error("loop for %d sec (%d frames) ...".green_lt, DURATION, DURATION * FPS);
-    for (var xy = 0; xy < DURATION * FPS; ++xy) //11sec @60 FPS
+    console.error("loop for %d sec (%d frames) ...".green_lt, this.DURATION, this.DURATION * this.FPS);
+    for (var xy = 0; xy < this.DURATION * this.FPS; ++xy) //11sec @60 FPS
     {
-        var x = Math.floor(xy / UNIV_LEN) % NUM_UNIV, y = xy % UNIV_LEN; ///cycle thru cols and rows
+        var x = Math.floor(xy / this.UNIV_LEN) % this.NUM_UNIV, y = xy % this.UNIV_LEN; ///cycle thru cols and rows
         const color = PALETTE[(x + y + Math.floor(xy / pixels.length)) % PALETTE.length]; //vary each cycle
 //        fibo(25); //simulate some CPU work
+        if (this.SPEED) yield wait(this.SPEED); //throttle (caller wants explicit control over back pressure)
         pixels[xy % pixels.length] = color; //turn on one pixel at a time
 
         var buf = hex32(pixels);
 //        yield rs.pushJSON(`{sttime:${timestamp(fr * seq.FixedFrameInterval / 1000)}, fr: ${fr}, buf: ${buf}}`); //delta${rawbuf}}`);
-        yield rs.pushJSON(`{time: ${milli(xy / FPS)}, fr: ${xy}, buf: ${buf}}`); //use string to preserve buf fmting; //delta${rawbuf}}`);
+        yield rs.pushJSON(`{time: ${milli(xy / this.FPS)}, fr: ${xy}, buf: ${buf}}`); //use string to preserve buf fmting; //delta${rawbuf}}`);
     }
 
 //write trailer info (pad last frame, include stats):
 //    var total = (compress.by_block || 0) + (compress.by_color || 0); //+ (compress.by_ofs || 0);
     yield rs.pushJSON(
     {
-        time: DURATION, ///pad out last (fractional) interval
+        time: this.DURATION, ///pad out last (fractional) interval
         eof: true,
 //stats (mainly for debug):
         reads: commas(rs.numrd),
@@ -183,10 +200,10 @@ function* streamer(opts)
 
 
 //burn some CPU cycles:
-function fibo(n)
-{
-    return (n < 3)? n: fibo(n - 1) + fibo(n - 2);
-}
+//function fibo(n)
+//{
+//    return (n < 3)? n: fibo(n - 1) + fibo(n - 2);
+//}
 
 
 //function chkthis(where)
@@ -218,7 +235,15 @@ function fibo(n)
 //if (!Object.values)
 //    Object.values = function(obj) { return Object.keys(obj).map(key => { return obj[key]; }); };
 
+//delay next step of generator:
+function wait(msec)
+{
+    return setTimeout.bind(null, step, msec); //NOTE: need to return a function so step() will evaluate it outside of generator
+}
+
+
 //improve readability (for debug):
+//puts spaces after commas and colons (for human readability), removes quotes from keys
 //NOTE: requires undo on receiving end
 JSON.stringify_tidy = function(thing)
 {
@@ -280,6 +305,12 @@ function commas(val)
 //number.toLocaleString('en-US', {minimumFractionDigits: 2})
     return (val < 1000)? val: val.toLocaleString();
 }
+
+
+//function defaultas(val, defval)
+//{
+//    return (typeof val != "undefined")? val: defval; //"val || defval" doesn't work for val == 0
+//}
 
 
 //function percent(val)

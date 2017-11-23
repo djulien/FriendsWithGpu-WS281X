@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 ////
-/// DataCanvas
+/// GpuCanvas
 //
 
 //This is a Node.js add-on to display a rectangular grid of pixels (a texture) on screen using SDL2 and hardware acceleration (via GPU).
@@ -295,7 +295,7 @@ int stdlog::count = 0;
 //hard-coded ARGB format:
 #pragma message("Compiled for ARGB color format (hard-coded)")
 #if SDL_BYTEORDER == SDL_BIG_ENDIAN
- #pragma message("Big endian")
+// #pragma message("Big endian")
 // #define Rmask  0xFF000000
 // #define Gmask  0x00FF0000
 // #define Bmask  0x0000FF00
@@ -314,7 +314,7 @@ int stdlog::count = 0;
  #define B(color)  ((color) & 0xFF)
  #define toARGB(a, r, g, b)  ((clamp(toint(a), 0, 255) << 24) | (clamp(toint(r), 0, 255) << 16) | (clamp(toint(g), 0, 255) << 8) | clamp(toint(b), 0, 255))
 #elif SDL_BYTEORDER == SDL_LITTLE_ENDIAN
- #pragma message("Little endian")
+// #pragma message("Little endian")
 // #define Amask  0xFF000000
 // #define Bmask  0x00FF0000
 // #define Gmask  0x0000FF00
@@ -990,7 +990,7 @@ WH Screen()
 
 //window create and redraw:
 //all GPU work done in bkg thread (asynchronously)
-class DataCanvas: public Thread
+class GpuCanvas: public Thread
 {
 private:
 //    auto_ptr<SDL_lib> sdl; //NOTE: this must occur before thread? most sources say do this once only; TODO: use ref counter?
@@ -1020,12 +1020,12 @@ public:
     std::vector<UniverseTypes> Types; //universe types
 public:
 //ctor/dtor:
-    DataCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("DataCanvas", true)
+    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true)
     {
-//        myprintf(33, "DataCanvas ctor" ENDCOLOR);
+//        myprintf(33, "GpuCanvas ctor" ENDCOLOR);
         if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
 //        if (!count++) Init();
-        if (!title) title = "DataCanvas";
+        if (!title) title = "GpuCanvas";
         myprintf(3, BLUE_LT "Init(title '%s', #univ %d, univ len %d, pivot? %d)" ENDCOLOR, title, num_univ, univ_len, want_pivot);
 
 //NOTE: scaling *must* be set to nearest pixel sampling (0) because texture is stretched horizontally to fill screen
@@ -1076,19 +1076,19 @@ public:
         this->WantPivot = want_pivot;
         this->Types.resize(num_univ, WS281X); //NOTE: caller needs to call paint() after changing this
         fg.user_time = fg.caller_time = fg.pivot_time = 0; //fg.update_time = fg.unlock_time = 0;
-        myprintf(22, "DataCanvas wake thread" ENDCOLOR);
+        myprintf(22, "GpuCanvas wake thread" ENDCOLOR);
         this->wake((void*)0x1234); //run main() asynchronously in bkg thread
-        myprintf(22, "DataCanvas wait for bkg" ENDCOLOR);
+        myprintf(22, "GpuCanvas wait for bkg" ENDCOLOR);
         this->wait(); //wait for bkg thread to init
-        myprintf(22, "DataCanvas bkg thread ready, ret to caller" ENDCOLOR);
+        myprintf(22, "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
     }
-    ~DataCanvas()
+    ~GpuCanvas()
     {
-        myprintf(22, "DataCanvas dtor" ENDCOLOR);
+        myprintf(22, "GpuCanvas dtor" ENDCOLOR);
         stats();
         this->done = true;
         this->wake(); //eof; tell bkg thread to quit (if it's waiting)
-        myprintf(22, YELLOW_LT "DataCanvas dtor" ENDCOLOR);
+        myprintf(22, YELLOW_LT "GpuCanvas dtor" ENDCOLOR);
     }
 private:
 //bkg thread:
@@ -1228,7 +1228,7 @@ public:
 //    template <typename CBType, typename ArgType>
 //    bool Paint(uint32_t* pixels, CBType cb = 0, ArgType data = 0) //uint32_t fill = BLACK)
     {
-//        myprintf(22, "DataCanvas paint" ENDCOLOR);
+//        myprintf(22, "GpuCanvas paint" ENDCOLOR);
         uint64_t delta;
         delta = now() - fg.previous; fg.caller_time += delta; fg.previous += delta;
 //        myprintf(6, BLUE_LT "Paint(pixels 0x%x), %d x %d = %s len (assumed), 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, this->num_univ, this->univ_len, commas(this->num_univ * this->univ_len), pixels? pixels[0]: fill, pixels? pixels[1]: fill, pixels? pixels[2]: fill);
@@ -1243,7 +1243,7 @@ public:
 //        if (cb) cb(data);
         return ok;
 #else //gpu upload in fg thread
-//        myprintf(22, "DataCanvas pivot" ENDCOLOR);
+//        myprintf(22, "GpuCanvas pivot" ENDCOLOR);
         pivot(pixels, fill);
         delta = now() - fg.previous; fg.pivot_time += delta; fg.previous += delta;
 //TODO? void* ok = this->wait(); //check if bkg thread init'ed okay
@@ -1280,7 +1280,7 @@ public:
 #endif
 
 //TODO? void* ok = this->wait(); //check if bkg thread init'ed okay
-//        myprintf(22, "DataCanvas ret from paint" ENDCOLOR);
+//        myprintf(22, "GpuCanvas ret from paint" ENDCOLOR);
         return true;
     }
 public:
@@ -1431,8 +1431,8 @@ public:
     }
 #endif
 };
-//auto_ptr<SDL_lib> DataCanvas::sdl;
-//int DataCanvas::count = 0;
+//auto_ptr<SDL_lib> GpuCanvas::sdl;
+//int GpuCanvas::count = 0;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1467,7 +1467,7 @@ public:
 
 
 #ifdef BUILDING_NODE_EXTENSION //set by node-gyp
- #pragma message "compiled as Node.js addon"
+// #pragma message "compiled as Node.js addon"
 // #include <node.h>
  #include <nan.h> //includes v8 also
 // #include <v8.h>
@@ -1502,6 +1502,10 @@ void errjs(v8::Isolate* iso, const char* errfmt, ...)
 }
 
 
+#if 0 //TODO: getter
+void Screen_js(v8::Local<v8::String>& name, const Nan::PropertyCallbackInfo<v8::Value>& info)
+{
+#else
 //void isRPi_js(const Nan::FunctionCallbackInfo<v8::Value>& args)
 //void isRPi_js(const v8::FunctionCallbackInfo<v8::Value>& args)
 NAN_METHOD(isRPi_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
@@ -1513,6 +1517,7 @@ NAN_METHOD(isRPi_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 //    myprintf(3, "isRPi? %d" ENDCOLOR, isRPi());
     info.GetReturnValue().Set(JS_BOOL(iso, isRPi()));
 }
+#endif
 
 
 #if 0 //TODO: getter
@@ -1550,21 +1555,21 @@ NAN_METHOD(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 
 //?? https://nodejs.org/docs/latest/api/addons.html#addons_wrapping_c_objects
 //https://github.com/nodejs/nan/blob/master/doc/methods.md
-class DataCanvas_js: public Nan::ObjectWrap
+class GpuCanvas_js: public Nan::ObjectWrap
 {
 //private:
 public:
-    DataCanvas inner;
+    GpuCanvas inner;
 public:
 //    static void Init(v8::Handle<v8::Object> exports);
     static void Init(v8::Local<v8::Object> exports);
     static void Quit(void* ignored); //signature reqd for AtExit
-
+    static std::vector<GpuCanvas_js*> all; //keep track of currently existing instances
 //protected:
 private:
-    explicit DataCanvas_js(const char* title, int w, int h, bool pivot): inner(title, w, h, pivot) {};
-//    virtual ~DataCanvas_js();
-    ~DataCanvas_js() {};
+    explicit GpuCanvas_js(const char* title, int w, int h, bool pivot): inner(title, w, h, pivot) { all.push_back(this); };
+//    virtual ~GpuCanvas_js();
+    ~GpuCanvas_js() { all.erase(std::find(all.begin(), all.end(), this)); };
 
 //    static NAN_METHOD(New);
     static void New(const v8::FunctionCallbackInfo<v8::Value>& info); //TODO: convert to Nan?
@@ -1576,61 +1581,62 @@ private:
 //    static NAN_GETTER(get_pivot);
 //    static NAN_SETTER(set_pivot);
     static NAN_METHOD(pivot_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that
-    static NAN_METHOD(release);
+//    static NAN_METHOD(release);
 //    static void paint(const Nan::FunctionCallbackInfo<v8::Value>& info);
 //private:
     static Nan::Persistent<v8::Function> constructor; //v8:: //TODO: Nan macro?
 //    void *data;
 };
-Nan::Persistent<v8::Function> DataCanvas_js::constructor;
+Nan::Persistent<v8::Function> GpuCanvas_js::constructor;
+std::vector<GpuCanvas_js*> GpuCanvas_js::all;
 
 
 //export class to Javascript:
 //TODO: convert to Nan?
-//void DataCanvas_js::Init(v8::Handle<v8::Object> exports)
-void DataCanvas_js::Init(v8::Local<v8::Object> exports)
+//void GpuCanvas_js::Init(v8::Handle<v8::Object> exports)
+void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 {
     v8::Isolate* iso = exports->GetIsolate(); //~vm heap
 //??    Nan::HandleScope scope;
 
 //ctor:
-    v8::Local<v8::FunctionTemplate> ctor = /*Nan::New<*/v8::FunctionTemplate::New(iso, DataCanvas_js::New);
-//    v8::Local<v8::FunctionTemplate> ctor = Nan::New<v8::FunctionTemplate>(DataCanvas_js::New);
+    v8::Local<v8::FunctionTemplate> ctor = /*Nan::New<*/v8::FunctionTemplate::New(iso, GpuCanvas_js::New);
+//    v8::Local<v8::FunctionTemplate> ctor = Nan::New<v8::FunctionTemplate>(GpuCanvas_js::New);
     ctor->InstanceTemplate()->SetInternalFieldCount(1);
-    ctor->SetClassName(JS_STR(iso, "DataCanvas"));
-//    ctor->SetClassName(Nan::New("DataCanvas").ToLocalChecked());
+    ctor->SetClassName(JS_STR(iso, "GpuCanvas"));
+//    ctor->SetClassName(Nan::New("GpuCanvas").ToLocalChecked());
 
 //prototype:
 //    Nan::SetPrototypeMethod(ctor, "paint", save);// NODE_SET_PROTOTYPE_METHOD(ctor, "save", save);
 //    v8::Local<v8::ObjectTemplate> proto = ctor->PrototypeTemplate();
 //    Nan::SetPrototypeMethod(proto, "paint", paint);
-//    NODE_SET_PROTOTYPE_METHOD(ctor, "paint", DataCanvas_js::paint);
-    Nan::SetPrototypeMethod(ctor, "paint", DataCanvas_js::paint);
-//TODO    Nan::SetPrototypeMethod(ctor, "utype", DataCanvas_js::utype);
-    Nan::SetPrototypeMethod(ctor, "pivot_tofix", DataCanvas_js::pivot_tofix); //TODO: fix this
-//    Nan::SetPrototypeMethod(ctor, "release", DataCanvas_js::release);
+//    NODE_SET_PROTOTYPE_METHOD(ctor, "paint", GpuCanvas_js::paint);
+    Nan::SetPrototypeMethod(ctor, "paint", GpuCanvas_js::paint);
+//TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
+    Nan::SetPrototypeMethod(ctor, "pivot_tofix", GpuCanvas_js::pivot_tofix); //TODO: fix this
+//    Nan::SetPrototypeMethod(ctor, "release", GpuCanvas_js::release);
 //    Nan::SetAccessor(proto,JS_STR("width"), WidthGetter);
-//    Nan::SetAccessor(ctor, JS_STR(iso, "pivotprop"), DataCanvas_js::getprop_pivot, DataCanvas_js::setprop_pivot);
-//ambiguous:    Nan::SetAccessor(ctor, JS_STR(iso, "pivot"), DataCanvas_js::get_pivot, DataCanvas_js::set_pivot);
-//    ctor->SetAccessor(JS_STR(iso, "pivot"), DataCanvas_js::get_pivot, DataCanvas_js::set_pivot);
+//    Nan::SetAccessor(ctor, JS_STR(iso, "pivotprop"), GpuCanvas_js::getprop_pivot, GpuCanvas_js::setprop_pivot);
+//ambiguous:    Nan::SetAccessor(ctor, JS_STR(iso, "pivot"), GpuCanvas_js::get_pivot, GpuCanvas_js::set_pivot);
+//    ctor->SetAccessor(JS_STR(iso, "pivot"), GpuCanvas_js::get_pivot, GpuCanvas_js::set_pivot);
 //    Nan::SetAccessor(proto,JS_STR("height"), HeightGetter);
 //    Nan::SetAccessor(proto,JS_STR("pitch"), PitchGetter);
 //    Nan::SetAccessor(proto,JS_STR("src"), SrcGetter, SrcSetter);
     constructor.Reset(/*iso,*/ ctor->GetFunction()); //?? v8::Isolate::GetCurrent(), ctor->GetFunction());
-//??    Nan::Set(exports, JS_STR("DataCanvas"), ctor->GetFunction());
-    exports->Set(JS_STR(iso, "DataCanvas"), ctor->GetFunction());
-//    exports->Set(Nan::New("DataCanvas").ToLocalChecked(), ctor->GetFunction());
+//??    Nan::Set(exports, JS_STR("GpuCanvas"), ctor->GetFunction());
+    exports->Set(JS_STR(iso, "GpuCanvas"), ctor->GetFunction());
+//    exports->Set(Nan::New("GpuCanvas").ToLocalChecked(), ctor->GetFunction());
 
 //  FreeImage_Initialise(true);
-//NO    DataCanvas::Init(); //will be done by inner
-    node::AtExit(DataCanvas_js::Quit);
+//NO    GpuCanvas::Init(); //will be done by inner
+    node::AtExit(GpuCanvas_js::Quit);
 }
 
 
 //instantiate new instance for Javascript:
 //TODO: convert to Nan?
-void DataCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(DataCanvas_js::New) //defines "info"; implicit HandleScope (~ v8 stack frame)
+void GpuCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::New) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
 #if 0
@@ -1640,15 +1646,15 @@ void DataCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
 #endif
     if (info.IsConstructCall()) //Invoked as constructor: `new MyObject(...)`
     {
-//    	if (info.Length() != 3) return_void(errjs(iso, "DataCanvas.New: expected 3 params, got: %d", info.Length()));
+//    	if (info.Length() != 3) return_void(errjs(iso, "GpuCanvas.New: expected 3 params, got: %d", info.Length()));
         v8::String::Utf8Value title(!info[0]->IsUndefined()? info[0]->ToString(): JS_STR(iso, ""));
 //        double value = args[0]->IsUndefined() ? 0 : args[0]->NumberValue();
 	    int w = info[1]->Uint32Value(); //args[0]->IsUndefined()
         int h = info[2]->Uint32Value(); //args[0]->IsUndefined()
         bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
-        DataCanvas_js* canvas = new DataCanvas_js(*title? *title: NULL, w, h, pivot);
+        GpuCanvas_js* canvas = new GpuCanvas_js(*title? *title: NULL, w, h, pivot);
         canvas->Wrap(info.This());
-//??        Nan::SetAccessor(*canvas, JS_STR(iso, "pivot"), DataCanvas_js::get_pivot, DataCanvas_js::set_pivot);
+//??        Nan::SetAccessor(*canvas, JS_STR(iso, "pivot"), GpuCanvas_js::get_pivot, GpuCanvas_js::set_pivot);
         info.GetReturnValue().Set(info.This());
     }
     else //Invoked as plain function `MyObject(...)`, turn into construct call.
@@ -1664,46 +1670,46 @@ void DataCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
 
 
 #if 0
-NAN_PROPERTY_GETTER(DataCanvas_js::get_pivot)
-//void DataCanvas_js::get_pivot(v8::Local<v8::String> property, Nan::NAN_PROPERTY_GETTER_ARGS_TYPE info)
+NAN_PROPERTY_GETTER(GpuCanvas_js::get_pivot)
+//void GpuCanvas_js::get_pivot(v8::Local<v8::String> property, Nan::NAN_PROPERTY_GETTER_ARGS_TYPE info)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
 myprintf(1, "pivot was = %d" ENDCOLOR, canvas->inner.WantPivot);
     info.GetReturnValue().Set(JS_INT(iso, canvas->inner.WantPivot));
 }
 
-NAN_PROPERTY_SETTER(DataCanvas_js::set_pivot)
-//void DataCanvas_js::set_pivot(v8::Local<v8::String> property, v8::Local<v8::Value> value, Nan::NAN_PROPERTY_SETTER_ARGS_TYPE info)
+NAN_PROPERTY_SETTER(GpuCanvas_js::set_pivot)
+//void GpuCanvas_js::set_pivot(v8::Local<v8::String> property, v8::Local<v8::Value> value, Nan::NAN_PROPERTY_SETTER_ARGS_TYPE info)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
     canvas->inner.WantPivot = value->BooleanValue();
 myprintf(1, "pivot is now = %d" ENDCOLOR, canvas->inner.WantPivot);
-//return_void(errjs(iso, "DataCanvas.paint: failed"));
+//return_void(errjs(iso, "GpuCanvas.paint: failed"));
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
 #endif
 
 #if 0
-NAN_GETTER(DataCanvas_js::get_pivot)
-//void DataCanvas_js::get_pivot(v8::Local<v8::String> property, Nan::NAN_PROPERTY_GETTER_ARGS_TYPE info)
+NAN_GETTER(GpuCanvas_js::get_pivot)
+//void GpuCanvas_js::get_pivot(v8::Local<v8::String> property, Nan::NAN_PROPERTY_GETTER_ARGS_TYPE info)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
 myprintf(1, "pivot was = %d" ENDCOLOR, canvas->inner.WantPivot);
     info.GetReturnValue().Set(JS_INT(iso, canvas->inner.WantPivot));
 }
 
 
-NAN_SETTER(DataCanvas_js::set_pivot)
-//void DataCanvas_js::set_pivot(v8::Local<v8::String> property, v8::Local<v8::Value> value, Nan::NAN_PROPERTY_SETTER_ARGS_TYPE info)
+NAN_SETTER(GpuCanvas_js::set_pivot)
+//void GpuCanvas_js::set_pivot(v8::Local<v8::String> property, v8::Local<v8::Value> value, Nan::NAN_PROPERTY_SETTER_ARGS_TYPE info)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
     canvas->inner.WantPivot = value->BooleanValue();
 myprintf(1, "pivot is now = %d" ENDCOLOR, canvas->inner.WantPivot);
-//return_void(errjs(iso, "DataCanvas.paint: failed"));
+//return_void(errjs(iso, "GpuCanvas.paint: failed"));
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
 #endif
@@ -1711,11 +1717,11 @@ myprintf(1, "pivot is now = %d" ENDCOLOR, canvas->inner.WantPivot);
 
 #if 1
 //get/set pivot flag:
-void DataCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(DataCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
 
     info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
     if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue();
@@ -1726,13 +1732,13 @@ void DataCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info
 
 
 //xfr/xfm Javascript array to GPU:
-void DataCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(DataCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 stack frame)
+void GpuCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    if (info.Length() != 1) return_void(errjs(iso, "DataCanvas.paint: expected 1 param, got %d", info.Length()));
-	if (!info.Length() || !info[0]->IsUint32Array()) return_void(errjs(iso, "DataCanvas.paint: missing uint32 array param"));
-    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
+    if (info.Length() != 1) return_void(errjs(iso, "GpuCanvas.paint: expected 1 param, got %d", info.Length()));
+	if (!info.Length() || !info[0]->IsUint32Array()) return_void(errjs(iso, "GpuCanvas.paint: missing uint32 array param"));
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
 //void* p = handle->GetAlignedPointerFromInternalField(0); 
 
 //https://stackoverflow.com/questions/28585387/node-c-addon-how-do-i-access-a-typed-array-float32array-when-its-beenn-pa
@@ -1755,32 +1761,33 @@ void DataCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //    Nan::TypedArrayContents<uint32_t> pixels(info[0].As<v8::Uint32Array>());
 //https://github.com/casualjavascript/blog/issues/12
     v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
-    if (aryp->Length() != canvas->inner.num_univ * canvas->inner.univ_len) return_void(errjs(iso, "DataCanvas.paint: array param bad length: is %d, should be %d", aryp->Length(), canvas->inner.num_univ * canvas->inner.univ_len));
+    if (aryp->Length() != canvas->inner.num_univ * canvas->inner.univ_len) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->Length(), canvas->inner.num_univ * canvas->inner.univ_len));
     void *data = aryp->Buffer()->GetContents().Data();
     uint32_t* pixels = static_cast<uint32_t*>(data);
 //myprintf(33, "js pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels[0], pixels[1], pixels[2]);
-    if (!canvas->inner.Paint(pixels)) return_void(errjs(iso, "DataCanvas.paint: failed"));
+    if (!canvas->inner.Paint(pixels)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
 
 
 /*
-void DataCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(DataCanvas_js::release) //defines "info"; implicit HandleScope (~ v8 stack frame)
+void GpuCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::release) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    if (info.Length()) return_void(errjs(iso, "DataCanvas.release: expected 0 args, got %d", info.Length()));
-    DataCanvas_js* canvas = Nan::ObjectWrap::Unwrap<DataCanvas_js>(info.Holder()); //info.This());
-    if (!canvas->inner.Release()) return_void(errjs(iso, "DataCanvas.release: failed"));
+    if (info.Length()) return_void(errjs(iso, "GpuCanvas.release: expected 0 args, got %d", info.Length()));
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
+    if (!canvas->inner.Release()) return_void(errjs(iso, "GpuCanvas.release: failed"));
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
 */
 
 
-void DataCanvas_js::Quit(void* ignored)
+void GpuCanvas_js::Quit(void* ignored)
 {
-//    DataCanvas::Quit();
-    myprintf(22, RED_LT "any cleanup TODO here?" ENDCOLOR);
+//    GpuCanvas::Quit();
+    myprintf(22, RED_LT "js cleanup: %d instances to destroy" ENDCOLOR, all.size());
+//TODO    while (all.size()) { delete all.back(); } //all.pop_back(); }
 }
 
 
@@ -1797,15 +1804,15 @@ NAN_MODULE_INIT(exports_js) //defines target
     v8::Isolate* iso = target->GetIsolate(); //~vm heap
 //    NODE_SET_METHOD(exports, "isRPi", isRPi_js);
 //    NODE_SET_METHOD(exports, "Screen", Screen_js); //TODO: property instead of method
-    Nan::Export(target, "isRPi", isRPi_js);
+    Nan::Export(target, "isRPi_tofix", isRPi_js);
     Nan::Export(target, "Screen_tofix", Screen_js);
 //    target->SetAccessor(JS_STR(iso, "Screen"), Screen_js);
-    DataCanvas_js::Init(target);
+    GpuCanvas_js::Init(target);
 //  Nan::SetAccessor(proto, Nan::New("fillColor").ToLocalChecked(), GetFillColor);
 //    NAN_GETTER(Screen_js);
 //    Nan::SetAccessor(exports, Nan::New("Screen").ToLocalChecked(), Screen_js);
 //    NAN_PROPERTY_GETTER(getter_js);
-//    NODE_SET_METHOD(exports, "DataCanvas", DataCanvas_js);
+//    NODE_SET_METHOD(exports, "GpuCanvas", GpuCanvas_js);
 //https://github.com/Automattic/node-canvas/blob/b470ce81aabe2a78d7cdd53143de2bee46b966a7/src/CanvasRenderingContext2d.cc#L764
 //    NODE_SET_METHOD(module, "exports", CreateObject);
 
@@ -1831,7 +1838,7 @@ NODE_MODULE(data_canvas, NodeAddon::exports_js) //tells Node.js how to find my e
 //
 
 #ifndef BUILDING_NODE_EXTENSION //not being compiled by node-gyp
- #pragma message "compiled as stand-alone"
+// #pragma message "compiled as stand-alone"
 
 bool eventh(int = INT_MAX); //fwd ref
 
@@ -1852,7 +1859,7 @@ int main(int argc, const char* argv[])
 //??    SDL_SetMainReady();
 //    myprintf(33, "hello" ENDCOLOR);
 {
-    DataCanvas canvas(0, NUM_UNIV, UNIV_LEN, false);
+    GpuCanvas canvas(0, NUM_UNIV, UNIV_LEN, false);
 //    myprintf(33, "canvas opened" ENDCOLOR);
 //    uint32_t pixels[NUM_UNIV * UNIV_LEN] = {0};
     std::vector<uint32_t> pixels(NUM_UNIV * UNIV_LEN); //kludge: vector allows non-const size
@@ -1884,7 +1891,7 @@ int main(int argc, const char* argv[])
     SDL_Delay(17-10); //kludge: allow last frame out before closing
 #endif
     myprintf(33, "done" ENDCOLOR);
-} //force DataCanvas out of scope before delay
+} //force GpuCanvas out of scope before delay
 //    canvas.Paint(pixels);
     myprintf(1, GREEN_LT "done, wait 5 sec" ENDCOLOR);
     SDL_Delay(5000);
@@ -2082,7 +2089,7 @@ WH MaxFit()
 uint32_t limit(uint32_t color)
 {
 #ifdef LIMIT_BRIGHTNESS
- #pragma message "limiting R+G+B brightness to " TOSTR(LIMIT_BRIGHTNESS)
+// #pragma message "limiting R+G+B brightness to " TOSTR(LIMIT_BRIGHTNESS)
     unsigned int r = R(color), g = G(color), b = B(color);
     unsigned int sum = r + g + b; //max = 3 * 255 = 765
     if (sum > LIMIT_BRIGHTNESS) //reduce brightness, try to keep relative colors

@@ -5,7 +5,7 @@
   "author": "djulien",
   "license": "CC-BY-NC-SA-4.0",
   "homepage": "https://github.com/djulien/FriendsWithGpu-WS281X#readme",
-  "main": "index.js",
+  "main": "./index.js",
   "gypfile": true,
   "keywords": [
     "WS2811",
@@ -21,10 +21,11 @@
   ],
   "scripts": {
     "comment": "use 'npm run' to run these scripts",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "demos/newtest.js",
     "TODO-test": "node-gyp rebuild && mocha --reporter spec",
     "rebuildv": "node-gyp rebuild --verbose",
     "rebuild": "node-gyp rebuild",
+    "pretest": "ln -snf .. node_modules/gpu-stream",
     "start": "echo did you mean 'run rebuild'?"
   },
   "repository": {
@@ -52,12 +53,14 @@
     "callsite": "^1.0.0",
     "colors": "https://github.com/djulien/colors.js",
     "debug": "^2.2.0",
+    "json5": "^0.5.1",
     "lame": "^1.2.4",
     "nan": "^2.6.1",
     "ndjson": "^1.5.0",
     "node-gyp": "^3.6.0",
     "speaker": "https://github.com/djulien/node-speaker",
-    "sprintf.js": "^0.1.4"
+    "sprintf.js": "^0.1.4",
+    "through2": "^2.0.3"
   },
   "BROKEN-devDependencies": {
     "node-sdl2": "^2.1.2",
