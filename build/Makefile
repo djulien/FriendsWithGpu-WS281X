@@ -303,8 +303,8 @@ $(obj).$(TOOLSET)/%.o: $(obj)/%.s FORCE_DO_CMD
 
 ifeq ($(strip $(foreach prefix,$(NO_LOAD),\
     $(findstring $(join ^,$(prefix)),\
-                 $(join ^,data-canvas.target.mk)))),)
-  include data-canvas.target.mk
+                 $(join ^,gpu-canvas.target.mk)))),)
+  include gpu-canvas.target.mk
 endif
 
 quiet_cmd_regen_makefile = ACTION Regenerating $@

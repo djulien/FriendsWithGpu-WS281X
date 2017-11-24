@@ -1,7 +1,7 @@
 {
   "name": "gpu-friends-ws281x",
-  "description": " Test/sample programs using RPi GPU to control WS281X pixels",
-  "version": "0.17.0",
+  "description": "GpuCanvas + test/sample programs using RPi GPU to control WS281X pixels",
+  "version": "0.17.11",
   "author": "djulien",
   "license": "CC-BY-NC-SA-4.0",
   "homepage": "https://github.com/djulien/FriendsWithGpu-WS281X#readme",
@@ -20,12 +20,11 @@
     "RPi"
   ],
   "scripts": {
-    "comment": "use 'npm run' to run these scripts",
-    "test": "demos/newtest.js",
+    "help": "use 'npm run' to run these scripts",
+    "test": "demos/pin-finder.js",
     "TODO-test": "node-gyp rebuild && mocha --reporter spec",
     "rebuildv": "node-gyp rebuild --verbose",
     "rebuild": "node-gyp rebuild",
-    "pretest": "ln -snf .. node_modules/gpu-stream",
     "start": "echo did you mean 'run rebuild'?"
   },
   "repository": {
@@ -46,35 +45,25 @@
     "node-webgl": "https://github.com/djulien/node-webgl",
     "screenres": "https://github.com/djulien/screenres",
     "TODO-readable-stream": "^2.0.5",
-    "speaker": "^0.4.0"
-  },
-  "dependencies": {
-    "blocking-style": "^1.0.0",
-    "callsite": "^1.0.0",
-    "colors": "https://github.com/djulien/colors.js",
-    "debug": "^2.2.0",
-    "json5": "^0.5.1",
-    "lame": "^1.2.4",
-    "nan": "^2.6.1",
-    "ndjson": "^1.5.0",
-    "node-gyp": "^3.6.0",
-    "speaker": "https://github.com/djulien/node-speaker",
-    "sprintf.js": "^0.1.4",
-    "through2": "^2.0.3"
-  },
-  "BROKEN-devDependencies": {
+    "speaker": "^0.4.0",
     "node-sdl2": "^2.1.2",
     "debug": "^2.2.0",
     "mocha": "^2.1.0"
   },
-  "devDependencies": {
+  "dependencies": {
     "bindings": "^1.3.0",
+    "debug": "^2.2.0",
+    "nan": "^2.6.1",
+    "node-gyp": "^3.6.0"
+  },
+  "devDependencies": {
+    "blocking-style": "^1.0.0",
     "byline": "^5.0.0",
     "caller-id": "^0.1.0",
     "callsite": "^1.0.0",
     "colors": "https://github.com/djulien/colors.js",
-    "debug": "^2.2.0",
     "glob": "^7.1.1",
-    "keypress": "^0.2.1"
+    "keypress": "^0.2.1",
+    "sprintf.js": "^0.1.4"
   }
 }
