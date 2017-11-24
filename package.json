@@ -23,6 +23,7 @@
     "help": "use 'npm run' to run these scripts",
     "test": "demos/pin-finder.js",
     "TODO-test": "node-gyp rebuild && mocha --reporter spec",
+    "preinstall": "sudo apt-get install libsdl2-dev",
     "rebuildv": "node-gyp rebuild --verbose",
     "rebuild": "node-gyp rebuild",
     "start": "echo did you mean 'run rebuild'?"
@@ -48,7 +49,8 @@
     "speaker": "^0.4.0",
     "node-sdl2": "^2.1.2",
     "debug": "^2.2.0",
-    "mocha": "^2.1.0"
+    "mocha": "^2.1.0",
+    "maybe-node-sdl2": "^2.0.0"
   },
   "dependencies": {
     "bindings": "^1.3.0",
