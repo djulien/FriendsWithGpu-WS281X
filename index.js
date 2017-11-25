@@ -4,6 +4,7 @@
 "use strict"; //find bugs easier
 var fs = require('fs');
 const glob = require('glob');
+const pathlib = require('path');
 require('colors').enabled = true; //for console output colors
 //const {inherits} = require('util');
 const bindings = require('bindings');
@@ -127,14 +128,28 @@ class GpuCanvas_shim extends GpuCanvas
     load(path)
     {
         const {PNG} = require('pngjs'); //nested so it won't be needed unless load() is called
-        var png = PNG.sync.read(fs.readFileSync(path));
+        var png = PNG.sync.read(fs.readFileSync(path), );
+        path = pathlib.relative(__dirname, path);
         if ((png.width != this.width) || (png.height != this.height))
-            console.error("image '%s' size %d x %d doesn't match canvas size %d x %d".yellow_lt, path, png.width, png.height, this.width, this.height);
+            console.error("image '%s' %d x %d doesn't match canvas %d x %d".yellow_lt, path, png.width, png.height, this.width, this.height);
             else console.error("image '%s' size %d x %d matches canvas".green_lt, path, png.width, png.height);
-        png.pixels = new Uint32Array(png.data);
-        for (var y = 0, yofs = 0; y < png.height; ++y, yofs += png.width)
+        png.pixels = new Uint32Array(png.data.buffer); //gives RGBA
+        png.data.readUInt32_shuffle = function(ofs)
+        {
+            return ((this.readUInt32BE(ofs) >>> 8) | (this[ofs + 3] << 24)) >>> 0; //RGBA -> ARGB
+        };
+//        var seen = {}; //DEBUG ONLY
+        for (var y = 0, yofs = 0; y < png.height; ++y, yofs += 4 * png.width)
             for (var x = 0, xofs = 0; x < png.width; ++x, xofs += this.height)
-                this.pixels[xofs + y] = png.pixels[yofs + x];
+{
+//                var color = png.pixels[yofs + x]; //gives ABGR
+                var color = png.data.readUInt32_shuffle(yofs + 4 * x); //gives ARGB
+                this.pixels[xofs + y] = color;
+//                if (seen[png.pixels[yofs/4 + x]]) continue;
+//                seen[png.pixels[yofs/4 + x]] = true;
+//console.log("img[%d,%d]: 0x%s -> 0x%s", x, y, HH(png.data[yofs + 4 * x]) + HH(png.data[yofs + 4 * x + 1]) + HH(png.data[yofs + 4 * x + 2]) + HH(png.data[yofs + 4 * x + 3]), color.toString(16));
+}
+        function HH(val) { return ("00" + val.toString(16)).slice(-2); } //2 hex digits
 //        return this; //fluent
     }
 
@@ -162,7 +177,7 @@ class GpuCanvas_shim extends GpuCanvas
         {
             var num = this.render_count - this.save.count;
             var den = (Date.now() - this.save.sttime) / 1000; //sec
-//debug("render.stats", num, den, num / den);
+//console.log("render.stats", num, den, num / den);
             return num / den;
         }
     }
@@ -186,12 +201,19 @@ function pushable(props)
         Object.defineProperty(this, name,
         {
             get: function() { return prop.top; }.bind(this),
-            set: function(newval) { prop.top = newval; /*update.call(this, name)*/; }.bind(this),
+            set: function(newval) { prop.top = newval; update.call(this, name); }.bind(this),
         });
 //set up push/pop:
-        this.push[name] = function(newval) { prop.push(newval); /*update.call(this, name)*/; }.bind(this);
-        this.pop[name] = function() { var retval = prop.pop(); /*update.call(this, name)*/; return retval; }.bind(this);
+        this.push[name] = function(newval) { prop.push(newval); update.call(this, name); }.bind(this);
+        this.pop[name] = function() { var retval = prop.pop(); update.call(this, name); return retval; }.bind(this);
 //        prop = null;
+    }
+
+    function update(name)
+    {
+        if (name == "WS281X_FMT") this.pivot = this[name];
+//console.log("update %s = %s %s", name, this[name], this.pivot);
+        this.paint(); //kludge: handle var changes upstream
     }
 }
 

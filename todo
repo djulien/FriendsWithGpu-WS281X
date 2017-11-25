@@ -1,9 +1,8 @@
 TEST FRESH INSTALL
 REMOVE EXTRA TEST/DEMO FILES
 TOFIX:
-- one-by-one: fmt toggle, first 2 rows missing, image load
 - C++ core dump in js dtor
-
+- npm install doesn't do node-gyp rebuild
 
 http://www.shaderific.com/glsl-functions/
 https://www.khronos.org/registry/OpenGL-Refpages/gl2.1/xhtml/glDrawPixels.xml

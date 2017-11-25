@@ -92,6 +92,7 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <stdarg.h> //varargs
+//#include <byteswap.h> //bswap_32(x)
 //#include <iostream> //std::cin
 //using std::cin;
 //#include <cstring> //std::string
@@ -100,7 +101,7 @@
 //#include <sstream> //std::ostringstream
 //using std::ostringstream;
 //#include <type_traits> //std::conditional, std::enable_if, std::is_same, std::disjunction, etc
-#include <stdexcept> //std::runtime_error
+//#include <stdexcept> //std::runtime_error
 //using std::runtime_error;
 //#include <memory> //shared_ptr<>
 #include <regex> //regex*, *match
@@ -131,6 +132,8 @@
 #define toint(expr)  (int)(long)(expr)
 
 #define CONST  //should be const but function signatures aren't defined that way
+
+typedef enum {No = false, Yes = true, Maybe} tristate;
 
 
 //kludge: need nested macros to stringize correctly:
@@ -334,6 +337,14 @@ int stdlog::count = 0;
 #define R_G_B_bytes(color)  R(color), G(color), B(color)
 #define R_G_B_A_bytes(color)  R(color), G(color), B(color), A(color)
 #define R_G_B_A_masks(color)  Rmask(color), Gmask(color), Bmask(color), Amask(color)
+
+//convert color ARGB <-> ABGR format:
+//OpenGL seems to prefer ABGR format, but RGB order is more readable (for me)
+//convert back with same function & 0xffffff
+//TODO: drop alpha setting?
+//??	if (!Amask(color) /*&& (color & 0xffffff)*/) color |= 0xff000000; //RGB present but no alpha; add full alpha to force color to show
+#define ARGB2ABGR(color)  (Amask(color) | (Rmask(color) >> 16) | Gmask(color) | (Bmask(color) << 16)) //swap R, B
+//#define SWAP32(uint32)  ((Amask(uint32) >> 24) | (Rmask(uint32) >> 8) | (Gmask(uint32) << 8) | (Bmask(uint32) << 24))
 
 
 //ANSI color codes (for console output):
@@ -847,7 +858,7 @@ private:
     void init_delayed()
     {
         if (this->started) return; //this->cast) return; //thread already started
-        myprintf(22, "here-launch: thread 0x%x, async %d" ENDCOLOR, toint(this->cast), svasync);
+        myprintf(22, CYAN_LT "launch thread 0x%x, async %d" ENDCOLOR, toint(this->cast), svasync);
 //CAUTION: don't call start_thread() until Signals are inited and vtable is populated!
         auto_ptr<SDL_Thread>::operator=(SDL_CreateThread(start_thread, svname, this));
         if (!this->cast) return_void(exc(RED_LT "Can't create thead '%s'" ENDCOLOR, svname));
@@ -909,22 +920,25 @@ auto_ptr<SDL_lib> SDL(SDL_INIT(SDL_INIT_VIDEO));
 typedef struct WH { uint16_t w, h; } WH; //pack width, height into single word for easy return from functions
 
 //fwd refs:
-void debug_info(CONST SDL_lib*);
-void debug_info(CONST SDL_Window*);
-void debug_info(CONST SDL_Renderer*);
-void debug_info(CONST SDL_Surface*);
+void debug_info(CONST SDL_lib*, int where);
+void debug_info(CONST SDL_Window*, int where);
+void debug_info(CONST SDL_Renderer*, int where);
+void debug_info(CONST SDL_Surface*, int where);
+//capture line# for easier debug:
+//NOTE: cpp avoids recursion so macro names can match actual function names here
+#define debug_info(...)  debug_info(__VA_ARGS__, __LINE__)
 WH Screen();
 WH MaxFit();
 uint32_t limit(uint32_t color);
 uint32_t hsv2rgb(float h, float s, float v);
-uint32_t ARGB2ABGR(uint32_t color);
+//uint32_t ARGB2ABGR(uint32_t color);
 const char* commas(int64_t);
 bool exists(const char* path);
 
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
-/// Main functions
+/// GpuCanvas class, screen functions
 //
 
 
@@ -932,10 +946,11 @@ bool exists(const char* path);
 //NOTE: results are cached (outcome won't change)
 bool isRPi()
 {
-    static enum {No = false, Yes = true, Maybe} isrpi = Maybe;
-//TODO: use atomic here (test+set)
-    static std::mutex protect;
-    std::lock_guard<std::mutex> lock(protect); //not really needed (low freq api), but just in case
+//NOTE: mutex not needed here
+//main thread will call first, so race conditions won't occur (benign anyway)
+    static std::atomic<tristate> isrpi(Maybe);
+//    static std::mutex protect;
+//    std::lock_guard<std::mutex> lock(protect); //not really needed (low freq api), but just in case
 
 //    myprintf(3, BLUE_LT "isRPi()" ENDCOLOR);
 //    serialize.lock(); //not really needed (low freq api), but just in case
@@ -951,7 +966,10 @@ bool isRPi()
 //screen width should be configured according to desired data rate (DATA_BITS per node)
 WH Screen()
 {
-    static WH wh = {0, 0};
+//NOTE: mutex not needed here, but std::atomic complains about deleted function
+//main thread will call first, so race conditions won't occur (benign anyway)
+//    static std::atomic<int> w = 0, h = {0};
+    static WH wh = {0};
     static std::mutex protect;
     std::lock_guard<std::mutex> lock(protect); //not really needed (low freq api), but just in case
 
@@ -975,6 +993,7 @@ WH Screen()
 //set reasonable values if can't get info:
     if (!wh.w || !wh.h)
     {
+        /*throw std::runtime_error*/ exc(RED_LT "Can't get screen size" ENDCOLOR);
         wh.w = 1536;
         wh.h = wh.w * 3 / 4; //4:3 aspect ratio
         myprintf(22, YELLOW_LT "Using dummy display mode %dx%d" ENDCOLOR, wh.w, wh.h);
@@ -1009,7 +1028,7 @@ private:
 //    static int count;
 //performance stats:
     uint64_t started; //doesn't need to be atomic; won't be modified after fg thread wakes
-    std::atomic<uint32_t> numfr, numerr; //could be updated by another thread
+    std::atomic<uint32_t> numfr, numerr, num_dirty; //could be updated by another thread
     struct { uint64_t previous; std::atomic<uint64_t> user_time, caller_time, pivot_time; } fg; //, lock_time, update_time, unlock_time; } fg;
     struct { uint64_t previous; std::atomic<uint64_t> caller_time, pivot_time, lock_time, update_time, unlock_time, copy_time, present_time; } bg;
 public:
@@ -1046,10 +1065,21 @@ public:
         uint32_t fmt = SDL_GetWindowPixelFormat(window); //desktop OpenGL: 24 RGB8888, RPi: 32 ARGB8888
         if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(exc(RED_LT "Can't get window format" ENDCOLOR));
         SDL_GL_GetDrawableSize(window, &wndw, &wndh);
+        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+//        SDL_GetWindowSize(window, &wndw, &wndh);
+//        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+//        SDL_GetWindowMaximumSize(window, &wndw, &wndh);
+//        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+//        int top, left, bottom, right;
+//        if (!OK(SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right))) return_void(exc(RED_LT "Can't get window border size" ENDCOLOR));
+//        myprintf(22, BLUE_LT "wnd border size: t %d, l %d, b %d, r %d" ENDCOLOR, top, left, bottom, right);
         debug_info(window);
 
         if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_LT "Bad number of universes: %d (should be 1..%d)" ENDCOLOR, num_univ, WS281X_BITS));
         if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_LT "Bad universe size: %d (should be 1..%d)" ENDCOLOR, univ_len, wndh));
+//NOTE: to avoid fractional pixels, screen/window width should be a multiple of 71, height should be a multiple of univ_len
+        if (wndw % (TXR_WIDTH - 1)) myprintf(1, YELLOW_LT "Window width %d is not a multiple of %d" ENDCOLOR, wndw, TXR_WIDTH - 1);
+        if (wndh % univ_len) myprintf(1, YELLOW_LT "Window height %d is not a multiple of %d" ENDCOLOR, wndh, univ_len);
 
 //create memory buf to hold pixel data:
 //NOTE: surface + texture must always be 3 * WS281X_BITS - 1 pixels wide
@@ -1078,11 +1108,11 @@ public:
         this->WantPivot = want_pivot;
         this->Types.resize(num_univ, WS281X); //NOTE: caller needs to call paint() after changing this
         fg.user_time = fg.caller_time = fg.pivot_time = 0; //fg.update_time = fg.unlock_time = 0;
-        myprintf(22, "GpuCanvas wake thread" ENDCOLOR);
+        myprintf(22, BLUE_LT "GpuCanvas wake thread" ENDCOLOR);
         this->wake((void*)0x1234); //run main() asynchronously in bkg thread
-        myprintf(22, "GpuCanvas wait for bkg" ENDCOLOR);
+        myprintf(22, BLUE_LT "GpuCanvas wait for bkg" ENDCOLOR);
         this->wait(); //wait for bkg thread to init
-        myprintf(22, "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
+        myprintf(22, BLUE_LT "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
     }
     ~GpuCanvas()
     {
@@ -1128,8 +1158,11 @@ private:
         if (!canvas) return (void*)err(RED_LT "Can't create canvas texture" ENDCOLOR);
         myprintf(8, MAGENTA_LT "bkg startup took %2.1f msec" ENDCOLOR, elapsed(started));
 
+        SDL_Rect Hclip = {0, 0, TXR_WIDTH - 1, this->univ_len}; //last col overlaps with H-sync; clip
+        myprintf(22, BLUE_LT "render copy (%d, %d, %d, %d) => target" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
+
 //        Paint(NULL); //start with all pixels dark
-        bg.caller_time = bg.pivot_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = 0;
+        bg.caller_time = bg.pivot_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = num_dirty = 0;
 
         started = fg.previous = bg.previous = now();
         PresentTime = 0; //start of official playback
@@ -1145,6 +1178,7 @@ private:
             void* pixels = in.wait();
             if (!pixels) break; //eof
             delta = now() - bg.previous; bg.caller_time += delta; bg.previous += delta;
+            ++num_dirty;
 
             pivot((uint32_t*)pixels);
             delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
@@ -1157,10 +1191,18 @@ private:
 //NOTE: SDL_UpdateTexture is reportedly slow; use Lock/Unlock and copy pixel data directly for better performance
                 memcpy(lock.data.surf.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
                 delta = now() - bg.previous; bg.update_time += delta; bg.previous += delta;
+#if 0
+    std::ostringstream buf; //char buf[1024]
+    buf << std::hex;
+    for (int x = 0; x < lock.data.surf.w; ++x)
+        for (int y = 0, yofs = 0; y < lock.data.surf.h; ++y, yofs += lock.data.surf.pitch / 4)
+            buf << "," << ("0x" + ((((uint32_t*)lock.data.surf.pixels)[yofs + x] > 9)? 0: 2)) << ((uint32_t*)lock.data.surf.pixels)[yofs + x];
+    myprintf(22, BLUE_LT "paint: %s" ENDCOLOR, buf.str().c_str() + 1);
+#endif
             }
             delta = now() - bg.previous; bg.unlock_time += delta; bg.previous += delta;
 
-        	if (!OK(SDL_RenderCopy(renderer, canvas, NORECT, NORECT))) //&renderQuad, angle, center, flip ))
+        	if (!OK(SDL_RenderCopy(renderer, canvas, &Hclip, NORECT))) //&renderQuad, angle, center, flip ))
             {
                 err(RED_LT "Unable to render to screen" ENDCOLOR);
                 ++numerr;
@@ -1191,14 +1233,14 @@ private:
             { //scope for locked mutex
 //TODO: is it better to render on-demand (less workload), or unconditionally (for uniform timing)?
 //NOTE: if dirty, canvas not busy; don't need mutex here?
-                SDL_Rect rect(0, 0, TXR_WIDTH - 1, this->univ_len); //last col overlaps with H-sync; clip
                 auto_ptr<SDL_LockedMutex> lock_HERE(busy.cast); //SDL_LOCK(busy));
 //                if (txr_busy++) err(RED_LT "txr busy, shouldn't be" ENDCOLOR);
-            	if (!OK(SDL_RenderCopy(renderer, canvas, &rect, NORECT))) //&renderQuad, angle, center, flip ))
+            	if (!OK(SDL_RenderCopy(renderer, canvas, &Hclip, NORECT))) //&renderQuad, angle, center, flip ))
                 {
                     err(RED_LT "Unable to render to screen" ENDCOLOR);
                     ++numerr;
                 }
+                ++num_dirty;
                 dirty = false;
 //                --txr_busy;
                 out.wake(canvas); //tell fg thread canvas is available again for updates
@@ -1225,12 +1267,24 @@ public:
 //this allows Node.js event loop to remain responsive
 //NOTE: caller owns pixel buf; leave it in caller's memory so it can be updated (need to copy here for pivot anyway)
 //NOTE: pixel array assumed to be the correct size here (already checked by Javascript wrapper before calling)
+//    inline int xyofs(int x, int y) { return x * this->univ_len + y; }
     bool Paint(uint32_t* pixels) //, void* cb, void* data) //uint32_t fill = BLACK)
 //    bool Paint(uint32_t* pixels, const std::function<void (void*)>& cb = 0, void* data = 0) //uint32_t fill = BLACK)
 //TODO: https://stackoverflow.com/questions/2938571/how-to-declare-a-function-that-accepts-a-lambda
 //    template <typename CBType, typename ArgType>
 //    bool Paint(uint32_t* pixels, CBType cb = 0, ArgType data = 0) //uint32_t fill = BLACK)
     {
+#if 0
+if (pixels)
+{
+    std::ostringstream buf; //char buf[1024]
+    buf << std::hex;
+    for (int x = 0; x < this->num_univ; ++x)
+        for (int y = 0; y < this->univ_len; ++y)
+            buf << "," << ("0x" + ((pixels[xyofs(x, y)] > 9)? 0: 2)) << pixels[xyofs(x, y)];
+    myprintf(22, BLUE_LT "paint: %s" ENDCOLOR, buf.str().c_str() + 1);
+}
+#endif
 //        myprintf(22, "GpuCanvas paint" ENDCOLOR);
         uint64_t delta;
         delta = now() - fg.previous; fg.caller_time += delta; fg.previous += delta;
@@ -1289,7 +1343,7 @@ public:
 public:
 //misc methods:
 //    inline double avg_ms(uint64_t val) { return (double)(1000 * val / SDL_TickFreq()) / (double)numfr; } //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
-    void stats()
+    bool stats()
     {
 //TODO: skip if numfr already reported
 //        uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
@@ -1299,12 +1353,20 @@ public:
 //#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
-        uint32_t numfr_cpy = numfr, numerr_cpy = numerr; //kludge: avoid "deleted function" error on atomic
+        uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty; //kludge: avoid "deleted function" error on atomic
 //        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
 //        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.pivot_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
-        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: avg fg(user %2.3f + caller %2.3f + pivot %2.3f), avg bg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f + copy %2.3f + present %2.3f), bg %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.user_time), avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(bg.caller_time), avg_ms(bg.pivot_time), avg_ms(bg.lock_time), avg_ms(bg.update_time), avg_ms(bg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / (now() - started));
-        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(user %s, caller %s, pivot %s), bg(caller %s, pivot %s, lock %s, update %s, unlock %s, copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.user_time), commas(fg.caller_time), commas(fg.pivot_time), commas(bg.caller_time), commas(bg.pivot_time), commas(bg.lock_time), commas(bg.update_time), commas(bg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+        myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: fg(user %2.3f + caller %2.3f + pivot %2.3f), bg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f + copy %2.3f + present %2.3f), bg %2.1f%% idle" ENDCOLOR, 
+            numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
+            avg_ms(fg.user_time), avg_ms(fg.caller_time), avg_ms(fg.pivot_time), 
+            avg_ms(bg.caller_time), avg_ms(bg.pivot_time), avg_ms(bg.lock_time), avg_ms(bg.update_time), avg_ms(bg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), 
+            (double)100 * idle_time / (now() - started));
+        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(user %s, caller %s, pivot %s), bg(caller %s, pivot %s, lock %s, update %s, unlock %s, copy %s, present %s)" ENDCOLOR, 
+            commas(now() - started), commas(SDL_TickFreq()), 
+            commas(fg.user_time), commas(fg.caller_time), commas(fg.pivot_time), 
+            commas(bg.caller_time), commas(bg.pivot_time), commas(bg.lock_time), commas(bg.update_time), commas(bg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
 //        myprintf(22, "raw-raw: elapsed %ld, freq %ld" ENDCOLOR, now() - started, SDL_TickFreq());
+        return true;
     }
 /*
     bool Release()
@@ -1358,6 +1420,7 @@ private:
         for (uint32_t x = 0, xmask = 0x800000; (int)x < this->num_univ; ++x, xmask >>= 1)
             if (this->Types[(int)x] == WS281X) leading_edges |= xmask; //turn on leading edge of data bit for WS281X
 //myprintf(22, BLUE_LT "start bits = 0x%x (based on univ type)" ENDCOLOR, leading_edges);
+        bool rbswap = isRPi();
         for (int y = 0, yofs = 0; y < this->univ_len; ++y, yofs += TXR_WIDTH) //outer
         {
             for (int x3 = 0; x3 < TXR_WIDTH; x3 += 3) //inner; locality of reference favors destination
@@ -1375,9 +1438,10 @@ private:
                 for (uint32_t x = 0, xofs = 0, xmask = 0x800000; x < (uint32_t)this->num_univ; ++x, xofs += this->univ_len, xmask >>= 1)
             	{
                     uint32_t color = pixels? pixels[xofs + y]: fill;
+                    if (rbswap) color = ARGB2ABGR(color); //bswap_32(x)
 //                    if (!A(color) || (!R(color) && !G(color) && !B(color))) continue; //no data to pivot
                     color = limit(color); //limit brightness/power
-//TODO                color = ARGB2ABGR(color);
+//                color = ARGB2ABGR(color);
                     for (int bit3 = 1; bit3 < TXR_WIDTH; bit3 += 3, color <<= 1)
                         if (color & 0x800000) pxbuf32[yofs + bit3] |= xmask; //set data bit
             	}
@@ -1386,7 +1450,11 @@ private:
 #endif
 //just copy pixels as-is (dev/debug only):
             for (int x = 0, x3 = 0, xofs = 0; x < this->num_univ; ++x, x3 += 3, xofs += this->univ_len)
-                pxbuf32[yofs + x3 + 0] = pxbuf32[yofs + x3 + 1] = pxbuf32[yofs + x3 + 2] = pixels? pixels[xofs + y]: fill;
+            {
+                uint32_t color = pixels? pixels[xofs + y]: fill;
+                if (rbswap) color = ARGB2ABGR(color);
+                pxbuf32[yofs + x3 + 0] = pxbuf32[yofs + x3 + 1] = pxbuf32[yofs + x3 + 2] = color;
+            }
         }
     }
 #if 0 //some sources say to only do it once
@@ -1581,6 +1649,7 @@ private:
 //    static NAN_GETTER(WidthGetter);
 //    static NAN_GETTER(PitchGetter);
     static NAN_METHOD(paint);
+    static NAN_METHOD(stats);
 //??    static NAN_PROPERTY_GETTER(get_pivot);
 //??    static NAN_PROPERTY_SETTER(set_pivot);
 //    static NAN_GETTER(get_pivot);
@@ -1619,6 +1688,7 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 //    Nan::SetPrototypeMethod(proto, "paint", paint);
 //    NODE_SET_PROTOTYPE_METHOD(ctor, "paint", GpuCanvas_js::paint);
     Nan::SetPrototypeMethod(ctor, "paint", paint);
+    Nan::SetPrototypeMethod(ctor, "stats", stats);
     Nan::SetPrototypeMethod(ctor, "width_tofix", width_tofix);
     Nan::SetPrototypeMethod(ctor, "height_tofix", height_tofix);
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
@@ -1809,6 +1879,17 @@ void GpuCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
 }
 
 
+//show performance stats:
+void GpuCanvas_js::stats(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
+    if (!canvas->inner.stats()) return_void(errjs(iso, "GpuCanvas.stats: failed"));
+    info.GetReturnValue().Set(0); //TODO: what value to return?
+}
+
+
 /*
 void GpuCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::release) //defines "info"; implicit HandleScope (~ v8 stack frame)
@@ -1993,10 +2074,12 @@ bool eventh(int max /*= INT_MAX*/)
 /// Graphics info debug
 //
 
+#undef debug_info
+
 //SDL lib info:
-void debug_info(SDL_lib* ignored)
+void debug_info(SDL_lib* ignored, int where)
 {
-    myprintf(1, CYAN_LT "Debug detail level = %d" ENDCOLOR, WANT_LEVEL);
+    myprintf(1, CYAN_LT "Debug detail level = %d (from %d)" ENDCOLOR, WANT_LEVEL, where);
 
     SDL_version ver;
     SDL_GetVersion(&ver);
@@ -2009,7 +2092,7 @@ void debug_info(SDL_lib* ignored)
 
 
 //SDL window info:
-void debug_info(SDL_Window* window)
+void debug_info(SDL_Window* window, int where)
 {
 #if 0
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
@@ -2040,7 +2123,7 @@ void debug_info(SDL_Window* window)
     if (flags & SDL_WINDOW_MOUSE_FOCUS) desc << ";MOUSE";
     if (flags & SDL_WINDOW_FOREIGN) desc << ";FOREIGN";
     if (!desc.tellp()) desc << ";";
-    myprintf(12, BLUE_LT "window %dx%d, fmt %i bpp %s %s" ENDCOLOR, wndw, wndh, SDL_BITSPERPIXEL(fmt), SDL_PixelFormatShortName(fmt), desc.str().c_str() + 1);
+    myprintf(12, BLUE_LT "window %dx%d, fmt %i bpp %s %s (from %d)" ENDCOLOR, wndw, wndh, SDL_BITSPERPIXEL(fmt), SDL_PixelFormatShortName(fmt), desc.str().c_str() + 1, where);
 
 #if 0
     myprintf(22, BLUE_LT "SDL_WINDOW_FULLSCREEN    [%c]" ENDCOLOR, (flags & SDL_WINDOW_FULLSCREEN) ? 'X' : ' ');
@@ -2066,9 +2149,9 @@ void debug_info(SDL_Window* window)
 
 
 //SDL_Renderer info:
-void debug_info(SDL_Renderer* renderer)
+void debug_info(SDL_Renderer* renderer, int where)
 {
-    myprintf(12, BLUE_LT "%d render driver(s):" ENDCOLOR, SDL_GetNumRenderDrivers());
+    myprintf(12, BLUE_LT "%d render driver(s): (from %d)" ENDCOLOR, SDL_GetNumRenderDrivers(), where);
     for (int i = 0; i <= SDL_GetNumRenderDrivers(); ++i)
     {
         SDL_RendererInfo info;
@@ -2091,7 +2174,7 @@ void debug_info(SDL_Renderer* renderer)
 
 
 //SDL_Surface info:
-void debug_info(SDL_Surface* surf)
+void debug_info(SDL_Surface* surf, int where)
 {
     int numfmt = 0;
     std::ostringstream fmts, count;
@@ -2100,7 +2183,9 @@ void debug_info(SDL_Surface* surf)
     if (!numfmt) { count << "no fmts"; fmts << ";"; }
     else if (numfmt != 1) count << numfmt << " fmts: ";
 //    if (want_fmts && (numfmt != want_fmts)) err(RED_LT "Unexpected #formats: %d (wanted %d)" ENDCOLOR, numfmt, want_fmts);
-    myprintf(18, BLUE_LT "Surface 0x%x: %d x %d, pitch %s, size %s, %s%s" ENDCOLOR, toint(surf), surf->w, surf->h, commas(surf->pitch), commas(surf->h * surf->pitch), count.str().c_str(), fmts.str().c_str() + 1);
+    if (!surf->pixels || (toint(surf->pixels) & 7)) err(RED_LT "Surface pixels not aligned on 8-byte boundary: 0x%x" ENDCOLOR, toint(surf->pixels));
+    if ((size_t)surf->pitch != sizeof(uint32_t) * surf->w) err(RED_LT "Unexpected pitch: %d should be %zu * %d = %zu" ENDCOLOR, surf->pitch, sizeof(uint32_t), surf->w, sizeof(uint32_t) * surf->w);
+    myprintf(18, BLUE_LT "Surface 0x%x: %d x %d, pitch %s, size %s, %s%s (from %d)" ENDCOLOR, toint(surf), surf->w, surf->h, commas(surf->pitch), commas(surf->h * surf->pitch), count.str().c_str(), fmts.str().c_str() + 1, where);
 }
 
 
@@ -2111,10 +2196,11 @@ void debug_info(SDL_Surface* surf)
 
 //get max window size that will fit on screen:
 //try to maintain 4:3 aspect ratio
+#define VPAD  (3 * 24) //kludge: allow room for top and bottom app bars + window bar
 WH MaxFit()
 {
     WH wh = Screen();
-    wh.h = std::min(wh.h, (uint16_t)(wh.w * 3 * 24 / 4 / 23.25));
+    wh.h = std::min((uint16_t)(wh.h - VPAD), (uint16_t)(wh.w * 3 * 24 / 4 / 23.25));
     wh.w = std::min(wh.w, (uint16_t)(wh.h * 4 / 3));
     return wh;
 }
@@ -2158,10 +2244,10 @@ uint32_t hsv2rgb(float h, float s, float v)
 
 
 //TODO?
-uint32_t ARGB2ABGR(uint32_t color)
-{
-    return color;
-}
+//uint32_t ARGB2ABGR(uint32_t color)
+//{
+//    return color;
+//}
 
 
 ///////////////////////////////////////////////////////////////////////////////
