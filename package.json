@@ -21,8 +21,8 @@
   ],
   "scripts": {
     "help": "use 'npm run' to run these scripts",
-    "preinstall": "sudo apt-get install libsdl2-dev",
-    "postinstall": "ln -snf .. node_modules/gpu-friends-ws281x",
+    "preinstall": "scripts/setup.sh pre",
+    "postinstall": "scripts/setup.sh post",
     "TODO-test": "node-gyp rebuild && mocha --reporter spec",
     "test": "demos/pin-finder.js",
     "rebuildv": "node-gyp rebuild --verbose",
