@@ -5,7 +5,9 @@
 #set -x
 
 HERE="$(dirname "$(readlink -fm "$0")")" #https://stackoverflow.com/questions/20196034/retrieve-parent-directory-of-script
-MY_TOP=`git rev-parse --show-toplevel`  #from https://unix.stackexchange.com/questions/6463/find-searching-in-parent-directories-instead-of-subdirectories
+#MY_TOP=`git rev-parse --show-toplevel`  #from https://unix.stackexchange.com/questions/6463/find-searching-in-parent-directories-instead-of-subdirectories
+#MY_TOP=$HERE/..
+NODE_ROOT=`npm root`
 #source  "$MY_TOP"/scripts/colors.sh
 source  "$HERE"/colors.sh
 
@@ -15,10 +17,11 @@ relpath()
 }
 
 DEPS="libsdl2-dev"
-TARGET="$MY_TOP/node_modules/gpu-friends-ws281x"
+TARGET="$NODE_ROOT/gpu-friends-ws281x"
 echo -e "${BLUE}here $HERE${NORMAL}"
-pwd
-echo `relpath $MY_TOP, $TARGET`
+#pwd
+echo "root $NODE_ROOT"
+#echo `relpath $MY_TOP, $TARGET`
 
 if [ "x$1" == "xpre" ]; then
   echo -e  "${CYAN}installing dependencies ...${NORMAL}"
@@ -29,7 +32,7 @@ elif [ "x$1" == "xpost" ]; then
     echo -e  "${GREEN}no symbolic link needed.${NORMAL}"
   else
     echo -e  "${CYAN}making symbolic link ...${NORMAL}"
-    ln -s  "$MY_TOP"  "`relpath $MY_TOP, $TARGET`"
+    ln -s  "$HERE/.."  "$TARGET"
 #    ln -snf "$HERE/.." "$TARGET"
     echo -e  "${GREEN}symbolic links created.${NORMAL}"
   fi
