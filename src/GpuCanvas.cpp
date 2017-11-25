@@ -986,7 +986,7 @@ WH Screen()
 //#define RENDER_THREAD
 
 #define WS281X_BITS  24 //each WS281X node has 24 data bits
-#define TXR_WIDTH  (3 * WS281X_BITS - 1) //data signal is generated at 3x bit rate, last bit overlaps H blank
+#define TXR_WIDTH  (3 * WS281X_BITS) //- 1) //data signal is generated at 3x bit rate, last bit overlaps H blank
 
 //window create and redraw:
 //all GPU work done in bkg thread (asynchronously)
@@ -1018,6 +1018,8 @@ public:
     std::atomic<double> PresentTime; //presentation timestamp (set by bkg rendering thread)
     enum UniverseTypes { WS281X = 0, BARE_SSR = 1, CHIPIPLEXED_SSR = 2}; //TODO: make extensible
     std::vector<UniverseTypes> Types; //universe types
+    int width() { return this->num_univ; }
+    int height() { return this->univ_len; }
 public:
 //ctor/dtor:
     GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true)
@@ -1046,8 +1048,8 @@ public:
         SDL_GL_GetDrawableSize(window, &wndw, &wndh);
         debug_info(window);
 
-        if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_LT "Too many universes: %d (max %d)" ENDCOLOR, num_univ, WS281X_BITS));
-        if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_LT "Universe too big: %d (max %d)" ENDCOLOR, univ_len, wndh));
+        if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_LT "Bad number of universes: %d (should be 1..%d)" ENDCOLOR, num_univ, WS281X_BITS));
+        if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_LT "Bad universe size: %d (should be 1..%d)" ENDCOLOR, univ_len, wndh));
 
 //create memory buf to hold pixel data:
 //NOTE: surface + texture must always be 3 * WS281X_BITS - 1 pixels wide
@@ -1084,7 +1086,7 @@ public:
     }
     ~GpuCanvas()
     {
-        myprintf(22, "GpuCanvas dtor" ENDCOLOR);
+        myprintf(22, BLUE_LT "GpuCanvas dtor" ENDCOLOR);
         stats();
         this->done = true;
         this->wake(); //eof; tell bkg thread to quit (if it's waiting)
@@ -1189,9 +1191,10 @@ private:
             { //scope for locked mutex
 //TODO: is it better to render on-demand (less workload), or unconditionally (for uniform timing)?
 //NOTE: if dirty, canvas not busy; don't need mutex here?
+                SDL_Rect rect(0, 0, TXR_WIDTH - 1, this->univ_len); //last col overlaps with H-sync; clip
                 auto_ptr<SDL_LockedMutex> lock_HERE(busy.cast); //SDL_LOCK(busy));
 //                if (txr_busy++) err(RED_LT "txr busy, shouldn't be" ENDCOLOR);
-            	if (!OK(SDL_RenderCopy(renderer, canvas, NORECT, NORECT))) //&renderQuad, angle, center, flip ))
+            	if (!OK(SDL_RenderCopy(renderer, canvas, &rect, NORECT))) //&renderQuad, angle, center, flip ))
                 {
                     err(RED_LT "Unable to render to screen" ENDCOLOR);
                     ++numerr;
@@ -1361,7 +1364,8 @@ private:
             {
                 pxbuf32[yofs + x3 + 0] = leading_edges; //WHITE;
                 pxbuf32[yofs + x3 + 1] = BLACK; //data bit body (will be overwritten with pivoted color bits)
-                if (x3) pxbuf32[yofs + x3 - 1] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
+//                if (x3) pxbuf32[yofs + x3 - 1] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
+                pxbuf32[yofs + x3 + 2] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
             }
 #if 1
 //fill with pivoted data bits:
@@ -1382,7 +1386,7 @@ private:
 #endif
 //just copy pixels as-is (dev/debug only):
             for (int x = 0, x3 = 0, xofs = 0; x < this->num_univ; ++x, x3 += 3, xofs += this->univ_len)
-                pxbuf32[yofs + x3 + 0] = pxbuf32[yofs + x3 + 1] = pixels? pixels[xofs + y]: fill;
+                pxbuf32[yofs + x3 + 0] = pxbuf32[yofs + x3 + 1] = pxbuf32[yofs + x3 + 2] = pixels? pixels[xofs + y]: fill;
         }
     }
 #if 0 //some sources say to only do it once
@@ -1551,7 +1555,8 @@ NAN_METHOD(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 
 
 //   String::Utf8Value fileName(args[0]->ToString());
-
+//const char* dbg(const char* str) { myprintf(22, "str %s" ENDCOLOR, str? str: "(none)"); return str; }
+//int dbg(int val) { myprintf(22, "int %s" ENDCOLOR, val); return val; }
 
 //?? https://nodejs.org/docs/latest/api/addons.html#addons_wrapping_c_objects
 //https://github.com/nodejs/nan/blob/master/doc/methods.md
@@ -1580,6 +1585,8 @@ private:
 //??    static NAN_PROPERTY_SETTER(set_pivot);
 //    static NAN_GETTER(get_pivot);
 //    static NAN_SETTER(set_pivot);
+    static NAN_METHOD(width_tofix); //TODO: change to accessor/getter; can't figure out how to do that
+    static NAN_METHOD(height_tofix); //TODO: change to accessor/getter; can't figure out how to do that
     static NAN_METHOD(pivot_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that
 //    static NAN_METHOD(release);
 //    static void paint(const Nan::FunctionCallbackInfo<v8::Value>& info);
@@ -1611,9 +1618,11 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 //    v8::Local<v8::ObjectTemplate> proto = ctor->PrototypeTemplate();
 //    Nan::SetPrototypeMethod(proto, "paint", paint);
 //    NODE_SET_PROTOTYPE_METHOD(ctor, "paint", GpuCanvas_js::paint);
-    Nan::SetPrototypeMethod(ctor, "paint", GpuCanvas_js::paint);
+    Nan::SetPrototypeMethod(ctor, "paint", paint);
+    Nan::SetPrototypeMethod(ctor, "width_tofix", width_tofix);
+    Nan::SetPrototypeMethod(ctor, "height_tofix", height_tofix);
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
-    Nan::SetPrototypeMethod(ctor, "pivot_tofix", GpuCanvas_js::pivot_tofix); //TODO: fix this
+    Nan::SetPrototypeMethod(ctor, "pivot_tofix", pivot_tofix); //TODO: fix this
 //    Nan::SetPrototypeMethod(ctor, "release", GpuCanvas_js::release);
 //    Nan::SetAccessor(proto,JS_STR("width"), WidthGetter);
 //    Nan::SetAccessor(ctor, JS_STR(iso, "pivotprop"), GpuCanvas_js::getprop_pivot, GpuCanvas_js::setprop_pivot);
@@ -1649,21 +1658,31 @@ void GpuCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
 //    	if (info.Length() != 3) return_void(errjs(iso, "GpuCanvas.New: expected 3 params, got: %d", info.Length()));
         v8::String::Utf8Value title(!info[0]->IsUndefined()? info[0]->ToString(): JS_STR(iso, ""));
 //        double value = args[0]->IsUndefined() ? 0 : args[0]->NumberValue();
-	    int w = info[1]->Uint32Value(); //args[0]->IsUndefined()
-        int h = info[2]->Uint32Value(); //args[0]->IsUndefined()
+//	    int w = info[1].As<v8::Int32Value>->Value(); //args[0]->IsUndefined()
+	    int w = info[1]->IntegerValue(); //ToInt32()->Value(); //args[0]->IsUndefined()
+//myprintf(22, "int? %d, num? %d" ENDCOLOR, info[1]->IsInt32(), info[1]->IsNumber());
+//myprintf(22, "int %lld" ENDCOLOR, info[1]->IntegerValue());
+//myprintf(22, "int32 %d" ENDCOLOR, info[1]->Int32Value());
+//myprintf(22, "num %f" ENDCOLOR, info[1]->NumberValue());
+        int h = info[2]->IntegerValue(); //ToInt32()->Value(); //args[0]->IsUndefined()
+//        bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
         bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
+//myprintf(22, "GpuCanvas_js('%s', %d, %d, %d)" ENDCOLOR, *title? *title: "(none)", w, h, pivot);
         GpuCanvas_js* canvas = new GpuCanvas_js(*title? *title: NULL, w, h, pivot);
         canvas->Wrap(info.This());
 //??        Nan::SetAccessor(*canvas, JS_STR(iso, "pivot"), GpuCanvas_js::get_pivot, GpuCanvas_js::set_pivot);
         info.GetReturnValue().Set(info.This());
     }
-    else //Invoked as plain function `MyObject(...)`, turn into construct call.
+    else //Invoked as plain function `MyObject(...)`, turn into constructor call.
     {
-        const int argc = 1;
-        v8::Local<v8::Value> argv[argc] = { info[0]};
+        const int argc = info.Length();
+//        v8::Local<v8::Value> argv[argc] = { info[0]};
+//myprintf(22, "ctor called as func with %d params" ENDCOLOR, argc);
+        std::vector<v8::Local<v8::Value>> argv; //TODO: can info be passed directly here?
+        for (int i = 0; i < argc; ++i) argv.push_back(info[i]);
         v8::Local<v8::Context> context = iso->GetCurrentContext();
         v8::Local<v8::Function> consobj = v8::Local<v8::Function>::New(iso, constructor);
-        v8::Local<v8::Object> result = consobj->NewInstance(context, argc, argv).ToLocalChecked();
+        v8::Local<v8::Object> result = consobj->NewInstance(context, argc, argv.data()).ToLocalChecked();
         info.GetReturnValue().Set(result);
     }
 }
@@ -1716,6 +1735,26 @@ myprintf(1, "pivot is now = %d" ENDCOLOR, canvas->inner.WantPivot);
 
 
 #if 1
+//get width:
+void GpuCanvas_js::width_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
+
+    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.width()));
+}
+
+//get height:
+void GpuCanvas_js::height_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
+
+    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.height()));
+}
+
 //get/set pivot flag:
 void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
@@ -1787,7 +1826,7 @@ void GpuCanvas_js::Quit(void* ignored)
 {
 //    GpuCanvas::Quit();
     myprintf(22, RED_LT "js cleanup: %d instances to destroy" ENDCOLOR, all.size());
-//TODO    while (all.size()) { delete all.back(); } //all.pop_back(); }
+    while (all.size()) { delete all.back(); } //dtor will remove self from list
 }
 
 

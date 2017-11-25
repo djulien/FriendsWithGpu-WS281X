@@ -1,5 +1,73 @@
+# What it does
+
+# How it works
+
+# How to install it
+
+# How to use it
+
+# More info
+
+# UNDER CONSTRUCTION
+# UNDER CONSTRUCTION
+# UNDER CONSTRUCTION
+
+NOTE: if "npm install" fails to install devDependencies, check your Node.js production flag or delete package-lock.json and try again.
+For more info see https://stackoverflow.com/questions/34700610/npm-install-wont-install-devdependencies
+
+git clone + npm install for dev install
+npm run rebuild to recompile
+
+npm run postinstall for demos
+
+INITIAL VERSION: not using OpenGL
+
+# RPi VGA Pin-out
+VGA signals can be redirected to up to 26 GPIO pins as follows:
+
+//"universe" mapping on RPi pins:
+// [0] = R7 = GPIO27 (GEN2)
+// [1] = R6 = GPIO26 (absent on GoWhoops board)
+// [2] = R5 = GPIO25 (GEN6)
+// [3] = R4 = GPIO24 (GEN5)
+// [4] = R3 = GPIO23 (GEN4)
+// [5] = R2 = GPIO22 (GEN3)
+// [6] = R1 = GPIO21
+// [7] = R0 = GPIO20
+// [8] = G7 = GPIO19 (PWM)
+// [9] = G6 = GPIO18 (GEN1)
+// [10] = G5 = GPIO17 (GEN0)
+// [11] = G4 = GPIO16
+// [12] = G3 = GPIO15 (RXD0)
+// [13] = G2 = GPIO14 (TXD0)
+// [14] = G1 = GPIO13 (PWM)
+// [15] = G0 = GPIO12 (PWM)
+// [16] = B7 = GPIO11 (SPI_CLK)
+// [17] = B6 = GPIO10 (SPI_MOSI)
+// [18] = B5 = GPIO09 (SPI_MISO)
+// [19] = B4 = GPIO08 (SPI_CE0_N)
+// [20] = B3 = GPIO07 (SPI_CE1_N)
+// [21] = B2 = GPIO06
+// [22] = B1 = GPIO05
+// [23] = B0 = GPIO04 (GPIO_GCLK)
+//---------------------------------
+//    H SYNC = GPIO03 (SCL1, I2C)
+//    V SYNC = GPIO02 (SDA1, I2C)
+//        DE = ID_SD (I2C ID EEPROM)
+//     PXCLK = ID_SC (I2C ID EEPROM)
+
+There are existing device tree overlays to redirect 16, 18, or 24 VGA signals to the RPi GPIO pins:
+//dpi24 or vga565/666 send video to GPIO pins
+    var dpi24 = glob.sync("/sys/firmware/devicetree/base/soc/gpio*/dpi24*") || [];
+    if (dpi24.length) return toGPIO.cached = 8+8+8;
+    var vga666 = glob.sync("/sys/firmware/devicetree/base/soc/gpio*/vga666*") || [];
+    if (vga666.length) return toGPIO.cached = 6+6+6;
+    var vga565 = glob.sync("/sys/firmware/devicetree/base/soc/gpio*/vga565*") || [];
+    if (vga565.length) return toGPIO.cached = 5+6+5;
+
 # FriendsWithGpu-WS281X
 Test/sample programs using RPi GPU to control WS281X pixels
+tree:
 
 # Dependencies:
 on RPi, libpng-dev <- libslang2-dev <- libcaca-dev <- libsdl1.2-dev

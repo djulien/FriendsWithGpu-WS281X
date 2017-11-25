@@ -8,26 +8,28 @@
 //ver 0.95 DJ  3/15/17  cleaned up, refactored/rewritten for FriendsWithGpu article
 //ver 1.0  DJ  3/20/17  finally got texture working on RPi
 //ver 1.0a DJ  3/25/17  add getchar to allow single-step + color changes
+//ver 1.0b DJ  11/22/17  add shim for non-OpenGL version of GpuCanvas
 
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output colors
-const {blocking, wait, getchar} = require('blocking-style');
-
 const {debug} = require('./shared/debug');
-const {Screen} = require('./shared/screen');
-const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
+const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
+const {blocking, wait, getchar} = require('blocking-style');
+//const {Screen} = require('./shared/screen');
+//const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
 
 //display settings:
 const FPS = 60; //how fast to run in auto mode (performance testing)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-const UNIV_LEN = 24; //Screen.height; //Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
-debug(`drawable ${Screen.width} x ${Screen.height}, scan ${Screen.scanw} x ${Screen.scanh}, texture ${NUM_UNIV} x ${UNIV_LEN}, isRPi? ${Screen.isRPi}, using gpio? ${Screen.gpio}`.cyan_lt);
+const UNIV_LEN = Screen.height; //Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
+//debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
 const OPTS =
 {
-//    SHOW_INTRO: 10, //how long to show intro (on screen only)
+    SHOW_INTRO: 10, //how long to show intro (on screen only)
 //    SHOW_SHSRC: true, //show shader source code
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
@@ -59,7 +61,7 @@ blocking(function*()
 
     if (OPTS.SHOW_INTRO && !Screen.gpio) //show title screen for 10 sec
     {
-        canvas.load("images/one-by-one24x24-5x5.png");
+        canvas.load(__dirname + "/images/one-by-one24x24-5x5.png");
         canvas.duration = OPTS.SHOW_INTRO; //set progress bar limit
         canvas.push.WS281X_FMT(false); //turn off formatting while showing bitmap (debug)
         for (canvas.elapsed = 0; canvas.elapsed < canvas.duration; ++canvas.elapsed) //update progress bar while waiting
@@ -96,13 +98,14 @@ blocking(function*()
                 var cmd = yield getchar(`Next pixel (${x}, ${y}), ${color} ${canvas.WS281X_FMT? "": "no-"}fmt?`.pink_lt);
                 if (cmd == "q") { console.error("quit".green_lt); return; }
                 if (cmd == "f") { canvas.WS281X_FMT = !canvas.WS281X_FMT; continue; } //toggle formatting
-                if (cmd == "a") { canvas.render.stats(true); started = now_sec() - canvas.elapsed / FPS; break; } ///back-dated to compensate for pixels that are already set
+                if (cmd == "a") { canvas.render_stats(true); started = now_sec() - canvas.elapsed / FPS; break; } ///back-dated to compensate for pixels that are already set
                 if (cmd in PALETTE) { color = cmd; continue; } //change color
                 break; //advance to next pixel
             }
             canvas.pixel(x, y, PALETTE[color]);
+            canvas.paint();
         }
-    if (started) debug("auto fps: target %d, actual %d, #render/sec %d".cyan_lt, FPS, Math.round(10 * canvas.elapsed / (now_sec() - started)) / 10, Math.round(10 * canvas.render.stats()) / 10);
+    if (started) debug("auto fps: target %d, actual %d, #render/sec %d".cyan_lt, FPS, Math.round(10 * canvas.elapsed / (now_sec() - started)) / 10, Math.round(10 * canvas.render_stats()) / 10);
     console.error("end, pause for 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too soon
 });

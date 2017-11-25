@@ -21,9 +21,10 @@
   ],
   "scripts": {
     "help": "use 'npm run' to run these scripts",
-    "test": "demos/pin-finder.js",
-    "TODO-test": "node-gyp rebuild && mocha --reporter spec",
     "preinstall": "sudo apt-get install libsdl2-dev",
+    "postinstall": "ln -snf .. node_modules/gpu-friends-ws281x",
+    "TODO-test": "node-gyp rebuild && mocha --reporter spec",
+    "test": "demos/pin-finder.js",
     "rebuildv": "node-gyp rebuild --verbose",
     "rebuild": "node-gyp rebuild",
     "start": "echo did you mean 'run rebuild'?"
@@ -50,6 +51,7 @@
     "node-sdl2": "^2.1.2",
     "debug": "^2.2.0",
     "mocha": "^2.1.0",
+    "pngjs-image": "^0.11.7",
     "maybe-node-sdl2": "^2.0.0"
   },
   "dependencies": {
@@ -66,6 +68,7 @@
     "colors": "https://github.com/djulien/colors.js",
     "glob": "^7.1.1",
     "keypress": "^0.2.1",
+    "pngjs": "^3.3.1",
     "sprintf.js": "^0.1.4"
   }
 }

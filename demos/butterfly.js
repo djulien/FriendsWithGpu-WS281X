@@ -8,15 +8,14 @@
 //ver 0.9  DJ  10/3/16  initial version
 //ver 0.95 DJ  3/15/17  cleaned up, refactored/rewritten for FriendsWithGpu article
 //ver 1.0  DJ  3/20/17  finally got texture working on RPi
+//ver 1.0b DJ  11/22/17  add shim for non-OpenGL version of GpuCanvas
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
-const path = require('path');
+const pathlib = require('path');
 const {blocking, wait} = require('blocking-style');
-
 const {debug} = require('./shared/debug');
-const {Screen} = require('./shared/screen');
-const {GpuCanvas} = require('./shared/GpuCanvas');
+const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
 //const {vec3, vec4, mat4} = require('node-webgl/test/glMatrix-0.9.5.min.js');
 
 //display settings:
@@ -25,7 +24,8 @@ const DURATION = 60; //how long to run (sec)
 const VGROUP = !Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
 const UNIV_LEN = Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
+debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
+//debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //show extra debug info:
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
@@ -37,7 +37,7 @@ const OPTS =
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
 //    WS281X_DEBUG: true, //show timing debug info
-    gpufx: path.resolve(__dirname, "butterfly.glsl"), //generate fx on GPU instead of CPU
+//    gpufx: pathlib.resolve(__dirname, "butterfly.glsl"), //generate fx on GPU instead of CPU
 };
 
 //ARGB primary colors:
@@ -88,6 +88,7 @@ blocking(function*()
 	        for (var x = 0; x < canvas.width; ++x)
 	            for (var y = 0; y < canvas.height; ++y)
 	                canvas.pixel(x, y, butterfly(x, y, ofs, BF_opts));
+        canvas.paint();
         yield wait((t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
         ++canvas.elapsed; //= now_sec() - started; //update progress bar
     }

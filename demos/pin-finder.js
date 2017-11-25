@@ -9,25 +9,25 @@
 //ver 0.95 DJ  3/15/17  cleaned up, refactored/rewritten for FriendsWithGpu article
 //ver 1.0  DJ  3/20/17  finally got texture re-write working on RPi
 //ver 1.0a DJ  9/24/17  minor clean up
+//ver 1.0b DJ  11/22/17  add shim for non-OpenGL version of GpuCanvas
 
 'use strict'; //find bugs easier
-require('colors'); //for console output
+require('colors').enabled = true; //for console output colors
 //const path = require('path');
-const {blocking, wait} = require('blocking-style');
-
 const {debug} = require('./shared/debug');
-const {Screen} = require('./shared/screen');
-const {GpuCanvas} = require('./shared/GpuCanvas');
+const {blocking, wait} = require('blocking-style');
+const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
 
 //display settings:
-const SPEED = 0.5; //animation speed (sec)
+const SPEED = 0.5; //animation step speed (sec)
 const DURATION = 60; //how long to run (sec)
-const UNIV_LEN = Screen.gpio? Screen.vert.disp: 30; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
-const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-debug("window %d x %d, video cfg %d x %d vis (%d x %d total), using gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, Screen.gpio);
+const UNIV_LEN = Screen.gpio? Screen.height: 30; //can't exceed #display lines; show larger pixels in dev mode
+const NUM_UNIV = 24; //can't exceed #VGA output pins (24) unless external mux used
+debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
+//debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //show extra debug info:
-//NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
+//NOTE: these only apply when GPIO pins are *not* presenting VGA signals (otherwise interferes with WS281X timing)
 const OPTS =
 {
 //    SHOW_SHSRC: true, //show shader source code
@@ -60,7 +60,6 @@ blocking(function*()
 
     debug("begin, run for %d sec".green_lt, DURATION);
     var started = now_sec();
-//    canvas.elapsed = 0; //reset progress bar
     canvas.duration = DURATION / SPEED; //set progress bar limit
     for (var t = 0; t <= DURATION / SPEED; ++t)
     {
@@ -73,7 +72,8 @@ blocking(function*()
                     var repeat = 9 - (x % 8);
                     canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
                 }
-        yield wait(100 + (t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
+        canvas.paint();
+        yield wait((t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
         ++canvas.elapsed; //= now_sec() - started; //update progress bar
     }
     debug("end, pause 10 sec".green_lt);
