@@ -16,7 +16,8 @@ relpath()
 
 DEPS="libsdl2-dev"
 TARGET="$MY_TOP/node_modules/gpu-friends-ws281x"
-echo "here $HERE"
+echo -e "${BLUE}here $HERE${NORMAL}"
+pwd
 echo `relpath $MY_TOP, $TARGET`
 
 if [ "x$1" == "xpre" ]; then
