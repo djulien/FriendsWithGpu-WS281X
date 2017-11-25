@@ -9,11 +9,11 @@ MY_TOP=`git rev-parse --show-toplevel`  #from https://unix.stackexchange.com/que
 #source  "$MY_TOP"/scripts/colors.sh
 source  "$HERE"/colors.sh
 
-if [ "x$1" == "pre" ]; then
+if [ "x$1" == "xpre" ]; then
   echo -e  "${CYAN}installing dependencies ...${NORMAL}"
   sudo  apt-get install  libsdl2-dev
   echo -e  "${GREEN}dependencies installed.${NORMAL}"
-elif [ "x$1" == "post" ]; then
+elif [ "x$1" == "xpost" ]; then
   if [ -d "$MY_TOP/node_modules/gpu-friends-ws281x" ]; then
     echo -e  "${GREEN}no symbolic link needed.${NORMAL}"
   else
