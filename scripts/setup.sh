@@ -32,7 +32,7 @@ elif [ "x$1" == "xpost" ]; then
     echo -e  "${GREEN}no symbolic link needed.${NORMAL}"
   else
     echo -e  "${CYAN}making symbolic link ...${NORMAL}"
-    ln -s  "$HERE/.."  "$TARGET"
+    echo ln -s  "$HERE/.."  "$TARGET"
 #    ln -snf "$HERE/.." "$TARGET"
     echo -e  "${GREEN}symbolic links created.${NORMAL}"
   fi
