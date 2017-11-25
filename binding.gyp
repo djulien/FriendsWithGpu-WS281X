@@ -19,6 +19,7 @@
 #            'libraries': ["-lGLESv2", "-lEGL", "-lm"],
 #            'OTHER_LDFLAGS': ['-stdlib=libc++'],
 #            'dependencies': [ 'deps/mpg123/mpg123.gyp:output' ],
+#            "dependencies": [ "<!(node -p \"require('node-addon-api').gyp\")" ],
             'libraries': [" <!(sdl2-config --libs)"],
         }
     ]

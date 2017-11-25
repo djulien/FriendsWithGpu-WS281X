@@ -22,6 +22,7 @@
   "scripts": {
     "help": "use 'npm run' to run these scripts",
     "preinstall": "scripts/setup.sh pre",
+    "install": "node-gyp rebuild",
     "postinstall": "scripts/setup.sh post",
     "TODO-test": "node-gyp rebuild && mocha --reporter spec",
     "test": "demos/pin-finder.js",
