@@ -155,15 +155,16 @@ class GpuCanvas_shim extends GpuCanvas
 
 //send pixel data on screen:
 //    const super_paint = this.paint.bind(this);
-    paint()
+    paint(alt_pixels)
     {
 //console.log("paint: w %d, h %d", this.width, this.height);
+        if (!alt_pixels) //don't mess up caller's data
         if (this.SHOW_PROGRESS && this.duration) //kludge: use last row of pixels to display progress bar
             for (var x = 0; x < this.width * (this.elapsed || 0) / this.duration; ++x)
                 this.pixels[(x + 1) * this.height -1] = WHITE;
 //        return Object.getPrototypeOf(this).
 //        super_paint(pixels); //CAUTION: blocks a few msec for bkg renderer
-        super.paint(this.pixels); //CAUTION: blocks a few msec for bkg renderer
+        super.paint(alt_pixels || this.pixels); //CAUTION: blocks a few msec for bkg renderer
         if (isNaN(++this.render_count)) this.render_count = 1;
 //        return this; //fluent
     } //.bind(this);

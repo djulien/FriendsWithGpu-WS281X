@@ -858,7 +858,7 @@ private:
     void init_delayed()
     {
         if (this->started) return; //this->cast) return; //thread already started
-        myprintf(22, CYAN_LT "launch thread 0x%x, async %d" ENDCOLOR, toint(this->cast), svasync);
+        myprintf(22, CYAN_LT "launch thread '%s', async %d" ENDCOLOR, svname, svasync);
 //CAUTION: don't call start_thread() until Signals are inited and vtable is populated!
         auto_ptr<SDL_Thread>::operator=(SDL_CreateThread(start_thread, svname, this));
         if (!this->cast) return_void(exc(RED_LT "Can't create thead '%s'" ENDCOLOR, svname));
