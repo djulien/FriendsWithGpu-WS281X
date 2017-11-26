@@ -1603,7 +1603,7 @@ NAN_METHOD(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
     if (info.Length()) return_void(errjs(iso, "Screen: expected 0 args, got %d", info.Length()));
 
-    WH wh = Screen();
+    WH wh = isRPi()? Screen(): MaxFit(); //kludge: give max size caller can use, not actual screen size
 //    struct { int w, h; } wh = {Screen().w, Screen().h};
 //    v8::Local<v8::Object> retval = Nan::New<v8::Object>();
     v8::Local<v8::Object> retval = v8::Object::New(iso);
