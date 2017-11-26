@@ -1047,7 +1047,7 @@ public:
         if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
 //        if (!count++) Init();
         if (!title) title = "GpuCanvas";
-        myprintf(3, BLUE_LT "Init(title '%s', #univ %d, univ len %d, pivot? %d)" ENDCOLOR, title, num_univ, univ_len, want_pivot);
+        myprintf(3, BLUE_LT "Init: title '%s', #univ %d, univ len %d, pivot? %d" ENDCOLOR, title, num_univ, univ_len, want_pivot);
 
 //NOTE: scaling *must* be set to nearest pixel sampling (0) because texture is stretched horizontally to fill screen
         if (SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0") != SDL_TRUE) //set texture filtering to linear; TODO: is this needed?

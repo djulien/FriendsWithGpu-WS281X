@@ -33,9 +33,9 @@ if [ "x$1" == "xpre" ]; then
     fi
   done
   if [ "$MISSING" == "0" ]; then
-    echo -e  "${GREEN}Dependencies already present.${NORMAL}"
+    echo -e  "${GREEN}Dependencies already installed.${NORMAL}"
   else
-    echo -e  "${CYAN}installing dependencies ...${NORMAL}"
+    echo -e  "${CYAN}Installing dependencies ...${NORMAL}"
     sudo  apt-get install  "$DEPS"
     if [ $? != 0 ]; then
       echo -e  "${RED}Can't install dependencies.${NORMAL}"
@@ -47,7 +47,7 @@ elif [ "x$1" == "xpost" ]; then
   if [ -d "$TARGET" ]; then
     echo -e  "${GREEN}Symbolic link not needed.${NORMAL}"
   else
-    echo -e  "${CYAN}making symbolic link ...${NORMAL}"
+    echo -e  "${CYAN}Creating symbolic link ...${NORMAL}"
     ln -s  "$HERE/.."  "$TARGET"
 #    ln -snf "$HERE/.." "$TARGET"
     if [ $? != 0 ]; then
