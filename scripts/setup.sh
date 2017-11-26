@@ -18,26 +18,46 @@ relpath()
 
 DEPS="libsdl2-dev"
 TARGET="$NODE_ROOT/gpu-friends-ws281x"
-echo -e "${BLUE}here $HERE${NORMAL}"
+#echo -e "${BLUE}here $HERE${NORMAL}"
 #pwd
-echo "root $NODE_ROOT"
+#echo "root $NODE_ROOT"
 #echo `relpath $MY_TOP, $TARGET`
 
 if [ "x$1" == "xpre" ]; then
-  echo -e  "${CYAN}installing dependencies ...${NORMAL}"
-  sudo  apt-get install  "$DEPS"
-  echo -e  "${GREEN}dependencies installed.${NORMAL}"
+  MISSING=0
+  for dep in "$DEPS"; do
+    echo "is dep $dep installed?"
+    installed=$(apt list $dep)
+    if [[ "$installed" != *"[installed]"* ]]; then
+      MISSING=1
+    fi
+  done
+  if [ "$MISSING" == "0" ]; then
+    echo -e  "${GREEN}Dependencies already present.${NORMAL}"
+  else
+    echo -e  "${CYAN}installing dependencies ...${NORMAL}"
+    sudo  apt-get install  "$DEPS"
+    if [ $? != 0 ]; then
+      echo -e  "${RED}Can't install dependencies.${NORMAL}"
+    else
+      echo -e  "${GREEN}Dependencies installed.${NORMAL}"
+    fi
+  fi
 elif [ "x$1" == "xpost" ]; then
   if [ -d "$TARGET" ]; then
-    echo -e  "${GREEN}no symbolic link needed.${NORMAL}"
+    echo -e  "${GREEN}Symbolic link not needed.${NORMAL}"
   else
     echo -e  "${CYAN}making symbolic link ...${NORMAL}"
     ln -s  "$HERE/.."  "$TARGET"
 #    ln -snf "$HERE/.." "$TARGET"
-    echo -e  "${GREEN}symbolic links created.${NORMAL}"
+    if [ $? != 0 ]; then
+      echo -e  "${RED}Can't create symbolic link.${NORMAL}"
+    else
+      echo -e  "${GREEN}Symbolic link created.${NORMAL}"
+    fi
   fi
 else
-  echo -e  "${RED}unknown option: '$1'${NORMAL}"
+  echo -e  "${RED}Unknown option: '$1'${NORMAL}"
 fi
 
 #eof#
