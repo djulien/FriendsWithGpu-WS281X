@@ -128,7 +128,7 @@ class GpuCanvas_shim extends GpuCanvas
     load(path)
     {
         const {PNG} = require('pngjs'); //nested so it won't be needed unless load() is called
-        var png = PNG.sync.read(fs.readFileSync(path), );
+        var png = PNG.sync.read(fs.readFileSync(path));
         path = pathlib.relative(__dirname, path);
         if ((png.width != this.width) || (png.height != this.height))
             console.error("image '%s' %d x %d doesn't match canvas %d x %d".yellow_lt, path, png.width, png.height, this.width, this.height);
