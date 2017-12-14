@@ -6,12 +6,13 @@ var fs = require('fs');
 const glob = require('glob');
 const pathlib = require('path');
 require('colors').enabled = true; //for console output colors
-//const {inherits} = require('util');
+const {inherits} = require('util');
 const bindings = require('bindings');
 //const {debug} = require('./shared/debug');
-const {Screen, GpuCanvas} = fixup(bindings('gpu-canvas'));
+const {Screen, GpuCanvas, UnivTypes} = fixup(bindings('gpu-canvas'));
 
 module.exports.Screen = Screen;
+module.exports.UnivTypes = UnivTypes;
 //attach config info as properties:
 //no need for callable functions (config won't change until reboot)
 module.exports.Screen.gpio = toGPIO();
@@ -69,6 +70,7 @@ const supported_OPTS =
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
+    UNIV_TYPE: UnivTypes.WS281X, //set default univ type
     WS281X_FMT: true, //force WS281X formatting on screen
 //    WS281X_DEBUG: true, //show timing debug info
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
@@ -81,30 +83,62 @@ const WHITE = 0xffffffff;
 
 //temp shim until OpenGL support is re-enabled:
 //use ctor function instead of class syntax to allow hidden vars, factory call, etc
-//function GpuCanvas_shim(title, width, height, opts)
+const GpuCanvas_shim =
 module.exports.GpuCanvas =
-class GpuCanvas_shim extends GpuCanvas
+//function GpuCanvas_shim(title, width, height, opts)
+//class GpuCanvas_shim extends GpuCanvas
+//proxy: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy
+new Proxy(function(){},
 {
-//    if (!(this instanceof GpuCanvas_shim)) return new GpuCanvas_shim(title, width, height, opts); //convert factory call to class
-    constructor(title, width, height, opts)
+    construct: function GpuCanvas_shim(target, args, newTarget) //title, width, height, opts)
     {
+//    if (!(this instanceof GpuCanvas_shim)) return new GpuCanvas_shim(title, width, height, opts); //convert factory call to class
+//    constructor(title, width, height, opts)
+//    {
+        var [title, width, height, opts] = args;
+//console.log("proxy ctor", title, width, height, opts);
         if (!opts) opts = (typeof opts == "boolean")? {WS281X_FMT: opts}: {};
-        Object.keys(opts).map(key => { if (opts[key] && !supported_OPTS[key]) throw `Opt '${key}' not supported until OpenGL re-enabled`.red_lt; });
+        Object.keys(opts).forEach(key => { if (opts[key] && !supported_OPTS[key]) throw `Opt '${key}' not supported until maybe 2018 (OpenGL re-enabled)`.red_lt; });
 //        if (opts.WS281X_FMT) delete opts.SHOW_PROGRESS; //don't show progress bar in live mode (interferes with LED output)
         if (opts.WS281X_FMT) opts = {WS281X_FMT: opts.WS281X_FMT}; //don't show other stuff in live mode (interferes with LED output)
 //        this.opts = opts; //save opts for access by other methods; TODO: hide from caller
 //console.log(title, width, height, opts);
-//    GpuCanvas.call(this, title, width, height, opts.WS281X_FMT); //initialize base class
-        super(title, width, height, !!opts.WS281X_FMT); //initialize base class
+//        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
+        var THIS = new GpuCanvas(title, width, height, !!opts.WS281X_FMT); //initialize base class
+//        super(title, width, height, !!opts.WS281X_FMT); //initialize base class
 //        etters(Object.getPrototypeOf(this)); //kludge: can't get it to work within fixup; do it here instead
-        pushable.call(this, Object.assign(supported_OPTS, opts || {}));
+        etters(THIS); //kludge: can't get it to work within fixup; do it here instead
+        pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
+        if (opts.UNIV_TYPE) for (var i = 0; i < THIS.width; ++i) THIS.UnivTypes_tofix(i, opts.UNIV_TYPE);
 
-        this.pixels = new Uint32Array(this.width * this.height); //create pixel buf for caller; NOTE: platform byte order
-        this.pixels.fill(BLACK); //start with all pixels dark
-        this.elapsed = 0;
-    }
+        THIS.pixels = new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
+        THIS.pixels.fill(BLACK); //start with all pixels dark
+        THIS.elapsed = 0;
+//console.log("here1");
+//        return THIS;
+//    }
+//};
+//inherits(GpuCanvas_shim, GpuCanvas);
+
+//get/set universe types:
+//TODO: use a special pixel() address instead?  (ie, y == 0x5554)
+//GpuCanvas_shim.prototype.pixel = function
+        THIS.UnivTypes = function
+    UnivTypes(x, newtype)
+    {
+//console.log("UnivType(%d, %d): %d".blue_lt, x, newType, this);
+        var clip = ((x < 0) || (x >= this.width)); //throw "Index of out range";
+        if (arguments.length > 1) //set type
+        {
+            if (!clip) THIS.UnivTypes_tofix(x, newtype);
+            return this; //fluent
+        }
+        return !clip? THIS.UnivTypes_tofix(x): 0;
+    } //.bind(this);
 
 //get/set individual pixel:
+//GpuCanvas_shim.prototype.pixel = function
+        THIS.pixel = function
     pixel(x, y, color)
     {
 //console.log("pixel(%d, %d): w %d, h %d".blue_lt, x, y, this.width, this.height);
@@ -118,6 +152,8 @@ class GpuCanvas_shim extends GpuCanvas
     } //.bind(this);
 
 //fill all pixels:
+//GpuCanvas_shim.prototype.fill = function
+        THIS.fill = function
     fill(color)
     {
         this.pixels.fill(color);
@@ -125,6 +161,8 @@ class GpuCanvas_shim extends GpuCanvas
     }
 
 //load image file into memory (PNG only):
+//GpuCanvas_shim.prototype.load = function
+        THIS.load = function
     load(path)
     {
         const {PNG} = require('pngjs'); //nested so it won't be needed unless load() is called
@@ -155,22 +193,27 @@ class GpuCanvas_shim extends GpuCanvas
 
 //send pixel data on screen:
 //    const super_paint = this.paint.bind(this);
+//GpuCanvas_shim.prototype.paint = function
+        THIS.paint = function
     paint(alt_pixels)
     {
-//console.log("paint: w %d, h %d", this.width, this.height);
+//console.log(`paint: w ${this.width}, h ${this.height}, show progress? ${this.SHOW_PROGRESS} ${opts.SHOW_PROGRESS}, elapsed ${this.elapsed || 0}, duration ${this.duration}, x-limit %d`, Math.round(this.width * (this.elapsed || 0) / this.duration));
         if (!alt_pixels) //don't mess up caller's data
         if (this.SHOW_PROGRESS && this.duration) //kludge: use last row of pixels to display progress bar
-            for (var x = 0; x < this.width * (this.elapsed || 0) / this.duration; ++x)
+            for (var x = 0; x < Math.round(this.width * (this.elapsed || 0) / this.duration); ++x)
                 this.pixels[(x + 1) * this.height -1] = WHITE;
 //        return Object.getPrototypeOf(this).
 //        super_paint(pixels); //CAUTION: blocks a few msec for bkg renderer
-        super.paint(alt_pixels || this.pixels); //CAUTION: blocks a few msec for bkg renderer
+//        super.paint(alt_pixels || this.pixels); //CAUTION: blocks a few msec for bkg renderer
+        GpuCanvas.prototype.paint.call(this, alt_pixels || this.pixels); //CAUTION: blocks a few msec for bkg renderer
         if (isNaN(++this.render_count)) this.render_count = 1;
 //        return this; //fluent
     } //.bind(this);
 
 
 //give render stats to caller for debug / performance analysis:
+//GpuCanvas_shim.prototype.render_stats = function
+        THIS.render_stats = function
     render_stats(start)
     {
         if (start) this.save = {count: this.render_count || 0, sttime: Date.now()};
@@ -182,8 +225,30 @@ class GpuCanvas_shim extends GpuCanvas
             return num / den;
         }
     }
-}
-//inherits(GpuCanvas_shim, GpuCanvas);
+//}
+        return THIS;
+    },
+/*
+    get: function(target, key)
+    {
+        switch (key) //TODO: method => getter
+        {
+            case "width": return target.width_tofix();
+            case "height": return target.height_tofix();
+            case "pivot": return target.pivot_tofix();
+            default: return target[key];
+        }
+    },
+    set: function(target, key, newvalue)
+    {
+        switch (key) //TODO: method => getter + setter
+        {
+            case "pivot": target.pivot_tofix(newvalue); return;
+            default: target[key] = newvalue; return;
+        }
+    },
+*/
+});
 
 
 //add push/pop method and getter/setter for each listed property:
@@ -194,7 +259,7 @@ function pushable(props)
     this.push = {};
     this.pop = {};
 //CAUTION: use let + const to force name + prop to be unique each time; see http://stackoverflow.com/questions/750486/javascript-closure-inside-loops-simple-practical-example
-    for (let name in props)
+    for (let name in props) //NOTE: need "let" here to force correct scope
     {
         const prop = this._pushable[name] = [props[name]]; //create stack with initial value
 //set up getters, setters:
@@ -231,8 +296,9 @@ function fixup(imports)
 //    retval.isRPi = imports.isRPi_tofix(); //TODO: function => value
     retval.Screen = imports.Screen_tofix(); //TODO: function => object
     retval.GpuCanvas = imports.GpuCanvas; //just pass it thru for now
+    retval.UnivTypes = imports.UnivTypes_tofix(); //TODO: function => object
 //no worky here:
-    etters(retval.GpuCanvas.prototype); //NOTE: object not instantiated yet; can't use Object.prototypeOf()?
+//    etters(retval.GpuCanvas.prototype); //NOTE: object not instantiated yet; can't use Object.prototypeOf()?
     return retval;
 }
 

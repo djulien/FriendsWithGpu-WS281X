@@ -13,7 +13,7 @@
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output colors
 const {debug} = require('./shared/debug');
-const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
+const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
 const {blocking, wait, getchar} = require('blocking-style');
 //const {Screen} = require('./shared/screen');
 //const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
@@ -34,6 +34,7 @@ const OPTS =
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
+//    UNIV_TYPE: UnivTypes.CHPLEX_SSR, //set default univ type
 //    WS281X_FMT: true, //force WS281X formatting on screen
 //    WS281X_DEBUG: true, //show timing debug info; NOTE: debug display will slow RPi down from 60 FPS to 20 FPS
 };
@@ -58,6 +59,13 @@ const PALETTE = {r: RED, g: GREEN, b: BLUE, y: YELLOW, c: CYAN, m: MAGENTA, w: W
 blocking(function*()
 {
     var canvas = new GpuCanvas("One-by-one", NUM_UNIV, UNIV_LEN, OPTS);
+//console.log("canvas", Object.keys(canvas)); //, Object.keys(canvas.prototype));
+    canvas.UnivTypes(5, UnivTypes.WS281X);
+    canvas.UnivTypes(7, UnivTypes.BARE_SSR);
+    canvas.UnivTypes(9, UnivTypes.CHPLEX_SSR);
+var buf = [];
+    for (var i = 0; i < canvas.width; ++i) buf.push(canvas.UnivTypes(i));
+console.log("univ types: ", buf.join(","));
 
     if (OPTS.SHOW_INTRO && !Screen.gpio) //show title screen for 10 sec
     {
@@ -65,7 +73,11 @@ blocking(function*()
         canvas.duration = OPTS.SHOW_INTRO; //set progress bar limit
         canvas.push.WS281X_FMT(false); //turn off formatting while showing bitmap (debug)
         for (canvas.elapsed = 0; canvas.elapsed < canvas.duration; ++canvas.elapsed) //update progress bar while waiting
+        {
+if (!(canvas.elapsed % 4)) canvas.SHOW_PROGRESS = !canvas.SHOW_PROGRESS;
+            canvas.paint(); //this only needed to update progress bar
             yield wait(1);
+        }
         canvas.pop.WS281X_FMT(); //restore to default value
     }
 
