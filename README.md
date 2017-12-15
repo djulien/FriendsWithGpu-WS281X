@@ -1,10 +1,54 @@
+# UNDER CONSTRUCTION
+# UNDER CONSTRUCTION
+# UNDER CONSTRUCTION
+
+
+TODO:
+https://www.npmjs.com/package/tiny-worker
+https://wiki.libsdl.org/SDL_GetWindowBordersSize?highlight=%28%5CbCategoryAPI%5Cb%29%7C%28SDLFunctionTemplate%29
+https://github.com/projectM-visualizer/projectm
+https://www.perl.com/pub/2011/01/visualizing-music-with-sdl-and-perl.html
+https://www.cg.tuwien.ac.at/courses/Seminar/WS2010/processing.pdf
+
+
+
+[![Build Status](https://travis-ci.org/djulien/friends-gpu-ws281x.svg?branch=master)](https://travis-ci.org/djulien/friends-gpu-ws281x) 
+[![Build status](https://ci.appveyor.com/api/projects/status/tbd/branch/master?svg=true)](https://ci.appveyor.com/project/djulien/friends-gp4-ws281x/branch/master) 
+[![Coverage Status](https://coveralls.io/repos/djulien/friends-gpu-ws281x/badge.svg?branch=master&service=github)](https://coveralls.io/github/djulien/friends-gpu-ws281x?branch=master) 
+[![npm version](https://badge.fury.io/js/tbd.svg)](http://badge.fury.io/js/tbd)
+
+friends-gpu-ws281x
+========
+
+# Table of Contents
+* [What it does](#what-it-does)
+* [How it works](#how-it-works)
+* [How to install it](#how-to-install-it)
+* [How to use it](#how-to-use-it)
+* [More info](#more-info)
+
+What it does
+============
+
 # What it does
+
+How it works
+============
 
 # How it works
 
+How to install it
+=================
+
 # How to install it
 
+How to use it
+=============
+
 # How to use it
+
+More info
+=========
 
 # More info
 
