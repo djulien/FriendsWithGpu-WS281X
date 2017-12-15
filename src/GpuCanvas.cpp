@@ -1034,14 +1034,15 @@ private:
 public:
     bool WantPivot; //dev/debug vs. live mode
     int num_univ, univ_len; //called-defined
-    std::atomic<double> PresentTime; //presentation timestamp (set by bkg rendering thread)
-    enum UniverseTypes { WS281X = 0, BARE_SSR = 1, CHIPIPLEXED_SSR = 2}; //TODO: make extensible
-    std::vector<UniverseTypes> Types; //universe types
+//    std::atomic<double> PresentTime; //presentation timestamp (set by bkg rendering thread)
+    double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
+    enum UniverseTypes { NONE = 0, WS281X = 1, BARE_SSR = 2, CHPLEX_SSR = 3}; //WS281X is default, but make non-0 to see if explicitly set; TODO: make extensible
+    std::vector<UniverseTypes> UnivTypes; //universe types
     int width() { return this->num_univ; }
     int height() { return this->univ_len; }
 public:
 //ctor/dtor:
-    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true)
+    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(0)
     {
 //        myprintf(33, "GpuCanvas ctor" ENDCOLOR);
         if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
@@ -1106,12 +1107,19 @@ public:
         this->num_univ = num_univ;
         this->univ_len = univ_len;
         this->WantPivot = want_pivot;
-        this->Types.resize(num_univ, WS281X); //NOTE: caller needs to call paint() after changing this
+        this->UnivTypes.resize(num_univ, NONE); //NOTE: caller needs to call paint() after changing this
         fg.user_time = fg.caller_time = fg.pivot_time = 0; //fg.update_time = fg.unlock_time = 0;
         myprintf(22, BLUE_LT "GpuCanvas wake thread" ENDCOLOR);
+#if 0 //TODO
+        TOBKG();
+	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); //NOTE: PRESENTVSYNC syncs with V refresh rate (typically 60 Hz)
+        canvas = SDL_CreateTexture(renderer, pxbuf.cast->format->format, SDL_TEXTUREACCESS_STREAMING, pxbuf.cast->w, pxbuf.cast->h); //SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, wndw, wndh);
+        TOFG();
+#else
         this->wake((void*)0x1234); //run main() asynchronously in bkg thread
         myprintf(22, BLUE_LT "GpuCanvas wait for bkg" ENDCOLOR);
         this->wait(); //wait for bkg thread to init
+#endif
         myprintf(22, BLUE_LT "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
     }
     ~GpuCanvas()
@@ -1128,8 +1136,8 @@ private:
     {
 //        myprintf(33, "bkg thr main start" ENDCOLOR);
         uint64_t delta;
-        started = now();
-        PresentTime = -1; //prior to official start of playback
+//        started = now();
+//        PresentTime = -1; //prior to official start of playback
 //        SDL_Window* window = reinterpret_cast<SDL_Window*>(data); //window was created in main thread where events are handled
         myprintf(8, MAGENTA_LT "bkg thread started: data 0x%x" ENDCOLOR, toint(data));
 
@@ -1165,13 +1173,18 @@ private:
         bg.caller_time = bg.pivot_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = num_dirty = 0;
 
         started = fg.previous = bg.previous = now();
-        PresentTime = 0; //start of official playback
+//        PresentTime = 0; //start of official playback
 //        myprintf(33, "bkg ack main" ENDCOLOR);
         out.wake(pxbuf); //tell main thread i'm ready
 //        out.wake(pxbuf); //tell main thread canvas is available (advanced notice so first paint doesn't block)
 
         for (;;) //render loop; runs continuously at screen rate (30 - 60 Hz)
         {
+//TODO: change to:
+//          if (done) break;
+//          if (pxbuf_time <= latest_render_time) { lock+copy; RenderCopy(); }
+//          RenderPresent; ++numfr; stats(); //keeps loop running at fixed fps, gives timestamp
+
 //NOTE: OpenGL is described as not thread safe
 //apparently even texture upload must be in same thread; else get "intel_do_flush_locked_failed: invalid argument" crashes
 #if 1 //gpu upload in bg thread
@@ -1180,7 +1193,7 @@ private:
             delta = now() - bg.previous; bg.caller_time += delta; bg.previous += delta;
             ++num_dirty;
 
-            pivot((uint32_t*)pixels);
+            encode((uint32_t*)pixels);
             delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
             out.wake((void*)true); //allow fg thread to refill buf while render finishes in bkg
 
@@ -1251,7 +1264,7 @@ private:
 //            myprintf(8, MAGENTA_LT "renderer thread: render+wait" ENDCOLOR);
             SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
             delta = now() - bg.previous; bg.present_time += delta; bg.previous += delta;
-            PresentTime = elapsed(started); //update presentation timestamp (in case main thread wants to know)
+//            PresentTime = elapsed(started); //update presentation timestamp (in case main thread wants to know)
 //myprintf(22, BLUE_LT "fr[%d] deltas: %lld, %lld, %lld, %lld, %lld" ENDCOLOR, numfr, delta1, delta2, delta3, delta4, delta5);
             if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec @60 FPS
         }
@@ -1301,7 +1314,7 @@ if (pixels)
         return ok;
 #else //gpu upload in fg thread
 //        myprintf(22, "GpuCanvas pivot" ENDCOLOR);
-        pivot(pixels, fill);
+        encode(pixels, fill);
         delta = now() - fg.previous; fg.pivot_time += delta; fg.previous += delta;
 //TODO? void* ok = this->wait(); //check if bkg thread init'ed okay
 
@@ -1380,7 +1393,7 @@ public:
     }
 */
 private:
-//24-bit pivot:
+//encode (24-bit pivot):
 //CAUTION: expensive CPU loop here
 //NOTE: need pixel-by-pixel copy for several reasons:
 //- ARGB -> RGBA (desirable)
@@ -1390,7 +1403,7 @@ private:
 //        memset(pixels, 4 * this->w * this->h, 0);
 //TODO: perf compare inner/outer swap
 //TODO? locality of reference: keep nodes within a universe close to each other (favors caller)
-    void pivot(uint32_t* pixels, uint32_t fill = BLACK)
+    void encode(uint32_t* pixels, uint32_t fill = BLACK)
     {
         uint32_t* pxbuf32 = reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
 //myprintf(22, "paint pxbuf 0x%x pxbuf32 0x%x" ENDCOLOR, toint(this->pxbuf.cast->pixels), toint(pxbuf32));
@@ -1416,9 +1429,16 @@ private:
         }
 //            memcpy(&pxbuf32[yofs], rowbuf, TXR_WIDTH * sizeof(uint32_t)); //initialze start, data, stop bits
 #endif
+//univ types:
+//WS281X: send 1 WS281X node (24 bits) per display row, up to #display rows on screen
+//SSR: send 2 bytes per display row, multiples of 3 * 8 * 7 + 2 == 170 bytes (85 display rows)
+//OR send 3 bytes per display row, multiples of 57 display rows
+//*can't* send 4 bytes per display row; PIC can only rcv 3 bytes per WS281X
+//72 display pixels: H-sync = start bit or use inverters?
+
         uint32_t leading_edges = BLACK;
         for (uint32_t x = 0, xmask = 0x800000; (int)x < this->num_univ; ++x, xmask >>= 1)
-            if (this->Types[(int)x] == WS281X) leading_edges |= xmask; //turn on leading edge of data bit for WS281X
+            if (this->UnivTypes[(int)x] == WS281X) leading_edges |= xmask; //turn on leading edge of data bit for WS281X
 //myprintf(22, BLUE_LT "start bits = 0x%x (based on univ type)" ENDCOLOR, leading_edges);
         bool rbswap = isRPi();
         for (int y = 0, yofs = 0; y < this->univ_len; ++y, yofs += TXR_WIDTH) //outer
@@ -1442,8 +1462,19 @@ private:
 //                    if (!A(color) || (!R(color) && !G(color) && !B(color))) continue; //no data to pivot
                     color = limit(color); //limit brightness/power
 //                color = ARGB2ABGR(color);
-                    for (int bit3 = 1; bit3 < TXR_WIDTH; bit3 += 3, color <<= 1)
-                        if (color & 0x800000) pxbuf32[yofs + bit3] |= xmask; //set data bit
+                    switch (UnivTypes[x])
+                    {
+                        case WS281X:
+                            for (int bit3 = 1; bit3 < TXR_WIDTH; bit3 += 3, color <<= 1)
+                                if (color & 0x800000) pxbuf32[yofs + bit3] |= xmask; //set data bit
+                            break;
+                        case BARE_SSR:
+                            break;
+                        case CHPLEX_SSR:
+                            break;
+                        default:
+                            break;
+                    }
             	}
                 continue; //next row
             }
@@ -1622,6 +1653,27 @@ NAN_METHOD(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 #endif
 
 
+#if 0 //TODO: getter
+void UnivTypes_js(v8::Local<v8::String>& name, const Nan::PropertyCallbackInfo<v8::Value>& info)
+{
+#else
+//void UnivTypes_js(v8::Local<const v8::FunctionCallbackInfo<v8::Value>& info)
+NAN_METHOD(UnivTypes_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+
+    v8::Local<v8::Object> retval = v8::Object::New(iso);
+//TODO: make extensible:
+    retval->Set(JS_STR(iso, "WS281X"), JS_INT(iso, GpuCanvas::UniverseTypes::WS281X));
+    retval->Set(JS_STR(iso, "BARE_SSR"), JS_INT(iso, GpuCanvas::UniverseTypes::BARE_SSR));
+    retval->Set(JS_STR(iso, "CHPLEX_SSR"), JS_INT(iso, GpuCanvas::UniverseTypes::CHPLEX_SSR));
+//    Nan::Export(target, "UnivTypes", UnivTypes);
+//    CONST_thing("UnivTypes", UnivTypes);
+    info.GetReturnValue().Set(retval);
+}
+#endif
+
+
 //   String::Utf8Value fileName(args[0]->ToString());
 //const char* dbg(const char* str) { myprintf(22, "str %s" ENDCOLOR, str? str: "(none)"); return str; }
 //int dbg(int val) { myprintf(22, "int %s" ENDCOLOR, val); return val; }
@@ -1657,6 +1709,7 @@ private:
     static NAN_METHOD(width_tofix); //TODO: change to accessor/getter; can't figure out how to do that
     static NAN_METHOD(height_tofix); //TODO: change to accessor/getter; can't figure out how to do that
     static NAN_METHOD(pivot_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that
+    static NAN_METHOD(UnivTypes_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that
 //    static NAN_METHOD(release);
 //    static void paint(const Nan::FunctionCallbackInfo<v8::Value>& info);
 //private:
@@ -1693,6 +1746,7 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
     Nan::SetPrototypeMethod(ctor, "height_tofix", height_tofix);
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
     Nan::SetPrototypeMethod(ctor, "pivot_tofix", pivot_tofix); //TODO: fix this
+    Nan::SetPrototypeMethod(ctor, "UnivTypes_tofix", UnivTypes_tofix); //TODO: fix this
 //    Nan::SetPrototypeMethod(ctor, "release", GpuCanvas_js::release);
 //    Nan::SetAccessor(proto,JS_STR("width"), WidthGetter);
 //    Nan::SetAccessor(ctor, JS_STR(iso, "pivotprop"), GpuCanvas_js::getprop_pivot, GpuCanvas_js::setprop_pivot);
@@ -1837,6 +1891,22 @@ void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
 //else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
 }
+
+
+//get/set univ types:
+void GpuCanvas_js::UnivTypes_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
+    int inx = info[0]->IntegerValue();
+    if ((inx < 0) || (inx >= canvas->inner.width())) return_void(errjs(iso, "GpuCanvas.UnivTypes: invalid inx %d (expected 0..%d)", inx, canvas->inner.width()));
+
+    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.UnivTypes[inx])); //return old value
+    if (!info[1]->IsUndefined()) canvas->inner.UnivTypes[inx] = (GpuCanvas::UniverseTypes)info[1]->IntegerValue();
+//if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
+//else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
+}
 #endif
 
 
@@ -1912,8 +1982,8 @@ void GpuCanvas_js::Quit(void* ignored)
 
 
 //#define CONST_INT(name, value)  
-//  Nan::ForceSet(target, Nan::New(name).ToLocalChecked(), Nan::New(value),  
-//      static_cast<PropertyAttribute>(ReadOnly|DontDelete));
+#define CONST_thing(name, value)  \
+  Nan::ForceSet(target, Nan::New(name).ToLocalChecked(), Nan::New(value), static_cast<v8::PropertyAttribute>(v8::ReadOnly | v8::DontDelete))
 
 
 //tell Node.js about my entry points:
@@ -1926,6 +1996,7 @@ NAN_MODULE_INIT(exports_js) //defines target
 //    NODE_SET_METHOD(exports, "Screen", Screen_js); //TODO: property instead of method
     Nan::Export(target, "isRPi_tofix", isRPi_js);
     Nan::Export(target, "Screen_tofix", Screen_js);
+    Nan::Export(target, "UnivTypes_tofix", UnivTypes_js);
 //    target->SetAccessor(JS_STR(iso, "Screen"), Screen_js);
     GpuCanvas_js::Init(target);
 //  Nan::SetAccessor(proto, Nan::New("fillColor").ToLocalChecked(), GetFillColor);
@@ -1935,6 +2006,19 @@ NAN_MODULE_INIT(exports_js) //defines target
 //    NODE_SET_METHOD(exports, "GpuCanvas", GpuCanvas_js);
 //https://github.com/Automattic/node-canvas/blob/b470ce81aabe2a78d7cdd53143de2bee46b966a7/src/CanvasRenderingContext2d.cc#L764
 //    NODE_SET_METHOD(module, "exports", CreateObject);
+
+//    CONST_INT("WS281X", GpuCanvas::UniverseTypes::WS281X);
+//    CONST_INT("BARE_SSR", GpuCanvas::UniverseTypes::BARE_SSR);
+//    CONST_INT("CHPLEX_SSR", GpuCanvas::UniverseTypes::CHPLEX_SSR); //TODO: make extensible
+#if 0 //broken
+    v8::Local<v8::Object> UnivTypes = v8::Object::New(iso);
+//TODO: make extensible:
+    UnivTypes->Set(JS_STR(iso, "WS281X"), JS_INT(iso, GpuCanvas::UniverseTypes::WS281X));
+    UnivTypes->Set(JS_STR(iso, "BARE_SSR"), JS_INT(iso, GpuCanvas::UniverseTypes::BARE_SSR));
+    UnivTypes->Set(JS_STR(iso, "CHPLEX_SSR"), JS_INT(iso, GpuCanvas::UniverseTypes::CHPLEX_SSR));
+//    Nan::Export(target, "UnivTypes", UnivTypes);
+    CONST_thing("UnivTypes", UnivTypes);
+#endif
 
 //    CONST_INT("api_version", 1.0);
 //    CONST_INT("name", "data-canvas");
