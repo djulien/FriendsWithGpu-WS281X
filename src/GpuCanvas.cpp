@@ -211,6 +211,7 @@ inline void fputline(FILE* stm, const char* buf)
 #define err(...)  errprintf(stdpopup, SDL_GetError(), __VA_ARGS__) //TODO: add red
 //TODO #define err(fmt, ...)  errprintf(SDL_GetError(), fmt, __VA_ARGS__)
 //#define myerr(reason, ...)  errprintf(reason, __VA_ARGS__)
+#define no_myprintf(...)  //nop
 #define printf(...)  errprintf(stderr, NOERROR, __VA_ARGS__) //stderr to keep separate from data output
 //#define logprintf(...)  errprintf(stdlog(), NOERROR, __VA_ARGS__) //stderr to keep separate from data output
 void* errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...); //fwd ref
@@ -1016,7 +1017,7 @@ public:
 //    ptr->rowmap = 0x80 >> ROW(rcinx);
         for (int i = 0; i < NUM_SSR; ++i) ptr->colmaps[i] = 0; //TODO: better to do this 1x at start, or incrementally as needed?
         ptr->colmaps[ROW(rcinx)] = 0x80 >> COL(rcinx);
-myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
+no_myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
         ptr->numrows = 1;
         ++total_rows;
         ++count;
@@ -1032,10 +1033,10 @@ myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
 
     void insert(int newvalue)
     {
-        myprintf(18, BLUE_LT "INS[%d] %d [r %d,c %d]: " ENDCOLOR, count, newvalue, ROW(rcinx), COL(rcinx));
-        if (ISDIAG(rcinx)) { ++rcinx; myprintf(18, BLUE_LT "skip diagonal" ENDCOLOR); return; }
+        no_myprintf(18, BLUE_LT "INS[%d] %d [r %d,c %d]: " ENDCOLOR, count, newvalue, ROW(rcinx), COL(rcinx));
+        if (ISDIAG(rcinx)) { ++rcinx; no_myprintf(18, BLUE_LT "skip diagonal" ENDCOLOR); return; }
 //    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
-        if (!newvalue) { /*sorted[count - 1] = 0*/; ++rcinx; myprintf(18, BLUE_LT "skip null" ENDCOLOR); return; } //don't need to store this one
+        if (!newvalue) { /*sorted[count - 1] = 0*/; ++rcinx; no_myprintf(18, BLUE_LT "skip null" ENDCOLOR); return; } //don't need to store this one
         if (rcinx >= NUM_SSR * NUM_SSR) { myprintf(18, RED_LT "overflow" ENDCOLOR); return; }
 //    if (newvalue == 233) showkeys(newvalue);
         int start, end;
@@ -1050,7 +1051,7 @@ myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
             if (newvalue > ptr->delay) { end = mid; continue; } //search first half
             if (newvalue < ptr->delay) { start = mid + 1; continue; } //search second half
 //printf("new val[%d] %d?, row %d, col %d, vs row %d, cols %d 0x%x, ofs %d" ENDCOLOR, mid, newvalue, ROW(rcinx), COL(rcinx), ROW(ptr->rownum_numcols), COL(ptr->rownum_numcols), ptr->colmap, mid);
-printf("new val[%d] %d?, row %d, col %d, vs cols %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x, ofs %d" ENDCOLOR, mid, newvalue, ROW(rcinx), COL(rcinx), "*" + (ROW(rcinx) != 0), ptr->colmaps[0], "*" + (ROW(rcinx) != 1), ptr->colmaps[1], "*" + (ROW(rcinx) != 2), ptr->colmaps[2], "*" + (ROW(rcinx) != 3), ptr->colmaps[3], "*" + (ROW(rcinx) != 4), ptr->colmaps[4], "*" + (ROW(rcinx) != 5), ptr->colmaps[5], "*" + (ROW(rcinx) != 6), ptr->colmaps[6], "*" + (ROW(rcinx) != 7), ptr->colmaps[7], mid);
+//printf("new val[%d] %d?, row %d, col %d, vs cols %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x, ofs %d" ENDCOLOR, mid, newvalue, ROW(rcinx), COL(rcinx), "*" + (ROW(rcinx) != 0), ptr->colmaps[0], "*" + (ROW(rcinx) != 1), ptr->colmaps[1], "*" + (ROW(rcinx) != 2), ptr->colmaps[2], "*" + (ROW(rcinx) != 3), ptr->colmaps[3], "*" + (ROW(rcinx) != 4), ptr->colmaps[4], "*" + (ROW(rcinx) != 5), ptr->colmaps[5], "*" + (ROW(rcinx) != 6), ptr->colmaps[6], "*" + (ROW(rcinx) != 7), ptr->colmaps[7], mid);
 //        if (ROW_bits(rcinx) > ROW_bits(ptr->rownum_numcols)) { end = mid; continue; }
 //        if (ROW_bits(rcinx) < ROW_bits(ptr->rownum_numcols)) { start = mid + 1; continue; }
 //collision:
@@ -1069,7 +1070,7 @@ printf("new val[%d] %d?, row %d, col %d, vs cols %s0x%x %s0x%x %s0x%x %s0x%x %s0
             return;
         }
 //create a new entry, insert into correct position:
-printf(BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newvalue, start, count - start);
+no_myprintf(18, BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newvalue, start, count - start);
         for (int i = count; i > start; --i) sorted[i] = sorted[i - 1];
         sorted[start] = count;
         write(newvalue);
@@ -1097,7 +1098,7 @@ printf(BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newvalue, star
     void resolve_conflicts()
     {
 //    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
-        myprintf(18, BLUE_LT "resolve dups rc %d, # %d" ENDCOLOR, rcinx, count);
+        no_myprintf(18, BLUE_LT "resolve dups rc %d, # %d" ENDCOLOR, rcinx, count);
         disp_count = checksum = 0;
         uint8_t max = 255, min = total_rows;
         for (int i = 0; i < count; ++i)
@@ -1118,9 +1119,9 @@ printf(BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newvalue, star
 #endif
             min -= ptr->numrows; //update min for this group
             int adjust = (ptr->numrows - 1) / 2; //UPSHIFT(ptr);
-            if (ptr->delay + adjust > max) { adjust = max - ptr->delay; myprintf(18, YELLOW_LT "can only upshift delay[%d/%d] %d by <= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
-            else if (ptr->delay + adjust - ptr->numrows < min) { adjust = min - (ptr->delay - ptr->numrows); myprintf(18, YELLOW_LT "must upshift delay[%d/%d] %d by >= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
-            else if (adjust) myprintf(18, BLUE_LT "upshifted delay[%d/%d] %d by +%d" ENDCOLOR, i, count, ptr->delay, adjust);
+            if (ptr->delay + adjust > max) { adjust = max - ptr->delay; no_myprintf(18, YELLOW_LT "can only upshift delay[%d/%d] %d by <= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
+            else if (ptr->delay + adjust - ptr->numrows < min) { adjust = min - (ptr->delay - ptr->numrows); no_myprintf(18, YELLOW_LT "must upshift delay[%d/%d] %d by >= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
+            else if (adjust) no_myprintf(18, BLUE_LT "upshifted delay[%d/%d] %d by +%d" ENDCOLOR, i, count, ptr->delay, adjust);
             ptr->delay += adjust;
 //TODO: order rows according to #cols?
             bool firstrow = true;
@@ -1140,10 +1141,10 @@ printf(BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newvalue, star
         for (int i = disp_count; i < 3 * NUM_SSR * (NUM_SSR - 1); ++i)
             DispList[i]/*.delay = DispList[i].rowmap = DispList[i].colmap*/ = 0;
 #if 1
-        myprintf(18, "disp list %d ents:" ENDCOLOR, disp_count / 3);
+        no_myprintf(18, "disp list %d ents:" ENDCOLOR, disp_count / 3);
         int dim = 256;
         for (int i = 0; i < disp_count; i += 3)
-            myprintf(18, "disp[%d/%d]: delay %d (dim %d), rowmap 0x%x (row %d), colmap 0x%x" ENDCOLOR, i, disp_count, DispList[i]/*.delay*/, dim -= DispList[i]/*.delay*/, DispList[i + 1]/*.rowmap*/, Log2(DispList[i + 1]/*.rowmap*/), DispList[i + 2]/*.colmap*/);
+            no_myprintf(18, "disp[%d/%d]: delay %d (dim %d), rowmap 0x%x (row %d), colmap 0x%x" ENDCOLOR, i, disp_count, DispList[i]/*.delay*/, dim -= DispList[i]/*.delay*/, DispList[i + 1]/*.rowmap*/, Log2(DispList[i + 1]/*.rowmap*/), DispList[i + 2]/*.colmap*/);
     }
 //helpers:
 private:
@@ -1170,14 +1171,14 @@ public:
     void show_list(const char* desc)
     {
 //    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
-        myprintf(18, CYAN_LT "%s %d entries (%d total rows):" ENDCOLOR, desc, count, total_rows);
+        no_myprintf(18, CYAN_LT "%s %d entries (%d total rows):" ENDCOLOR, desc, count, total_rows);
         for (int i = 0; i < count; ++i)
         {
 //        if (ISDIAG(i)) continue; //skip diagonal ch*plex row/col address
 //        int ii = i - ROW(i) - HASDIAG(i); //skip diagonal ch*plex row/col address
             struct DimRowEntry* ptr = &DimRowList[sorted[i]];
 //        printf(PINK_LT "[%d/%d=%d]: delay %d, row# %d, #cols %d, cols 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ROW(ptr->rownum_numcols), COL(ptr->rownum_numcols), ptr->colmap);
-            myprintf(18, PINK_LT "[%d/%d=%d]: delay %d, #rows %d, cols 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ptr->numrows, ptr->colmaps[0], ptr->colmaps[1], ptr->colmaps[2], ptr->colmaps[3], ptr->colmaps[4], ptr->colmaps[5], ptr->colmaps[6], ptr->colmaps[7]);
+            no_myprintf(18, PINK_LT "[%d/%d=%d]: delay %d, #rows %d, cols 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ptr->numrows, ptr->colmaps[0], ptr->colmaps[1], ptr->colmaps[2], ptr->colmaps[3], ptr->colmaps[4], ptr->colmaps[5], ptr->colmaps[6], ptr->colmaps[7]);
 //        if (!ptr->delay) break; //eof
         }
     }
@@ -1753,7 +1754,7 @@ private:
                                 if (color_out & 0x800000) pxbuf32[yofs + bit3 + 1] |= xmask; //set data bit
 //                                pxbuf32[yofs + bit3 + 2] &= ~xmask; //trailing edge = low
                             }
-                            row_debug("ws281x", yofs, xmask, x);
+//                            row_debug("ws281x", yofs, xmask, x);
                             break;
                         case PLAIN_SSR:
                         case PLAIN_SSR | CHECKSUM:
@@ -1775,16 +1776,16 @@ private:
                             if (!ctlr_ofs) //get another display list
                             {
                                 this->encoders[x].cast->init_list();
-                                myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregate rows %d..%d" ENDCOLOR, x, y, ctlr_adrs * CHPLEX_CTLRLEN, (ctlr_adrs + 1) * CHPLEX_CTLRLEN - 1);
+                                no_myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregate rows %d..%d" ENDCOLOR, x, y, ctlr_adrs * CHPLEX_CTLRLEN, (ctlr_adrs + 1) * CHPLEX_CTLRLEN - 1);
                                 for (int yy = ctlr_adrs * CHPLEX_CTLRLEN; (yy < this->univ_len) && (yy < (ctlr_adrs + 1) * CHPLEX_CTLRLEN); ++yy)
                                 {
                                     color_out = pixels? pixels[xofs + yy]: fill;
                                     uint8_t brightness = std::max<int>(Rmask(color_out) >> 16, std::max<int>(Gmask(color_out) >> 8, Bmask(color_out))); //use strongest color element
-                                    myprintf(14, BLUE_LT "pixel[%d] 0x%x -> br %d" ENDCOLOR, xofs + yy, color_out, brightness);
+                                    no_myprintf(14, BLUE_LT "pixel[%d] 0x%x -> br %d" ENDCOLOR, xofs + yy, color_out, brightness);
                                     this->encoders[x].cast->insert(brightness);
                                 }
                                 this->encoders[x].cast->resolve_conflicts();
-                                myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregated into %d disp evts" ENDCOLOR, x, y, this->encoders[x].cast->disp_count);
+                                no_myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregated into %d disp evts" ENDCOLOR, x, y, this->encoders[x].cast->disp_count);
                             }
 //2 bytes serial data = 2 * (1 start + 8 data + 1 stop + 2 pad) = 24 data bits spread across 72 screen pixels = 3 pixels per serial data bit:
 //pkt contents: ssr_cfg, checksum, display list (brightness, row map, col map)
@@ -1793,7 +1794,7 @@ private:
                             uint8_t byte_even = !ctlr_ofs? (uint8_t)univ_types[x]: this->encoders[x].cast->DispList[2 * ctlr_ofs - 2];
                             uint8_t byte_odd = !ctlr_ofs? this->encoders[x].cast->checksum ^ (uint8_t)univ_types[x]: this->encoders[x].cast->DispList[2 * ctlr_ofs - 1]; //CAUTION: incl univ type in checksum
                             color_out = 0x800000 | (byte_even << (12+3)) | 0x800 | (byte_odd << 3); //NOTE: inverted start + stop bits; using 3 stop bits
-myprintf(14, BLUE_LT "even 0x%x, odd 0x%x -> color_out 0x%x" ENDCOLOR, byte_even, byte_odd, color_out);
+//myprintf(14, BLUE_LT "even 0x%x, odd 0x%x -> color_out 0x%x" ENDCOLOR, byte_even, byte_odd, color_out);
                             for (int bit3 = 0; bit3 < TXR_WIDTH; bit3 += 3, color_out <<= 1)
                                 if (color_out & 0x800000) //set data bit
                                 {
@@ -1801,7 +1802,7 @@ myprintf(14, BLUE_LT "even 0x%x, odd 0x%x -> color_out 0x%x" ENDCOLOR, byte_even
                                     pxbuf32[yofs + bit3 + 1] |= xmask;
                                     pxbuf32[yofs + bit3 + 2] |= xmask;
                                 }
-                            row_debug("chplex", yofs, xmask, x);
+//                            row_debug("chplex", yofs, xmask, x);
                             break;
                         }
                         default:
@@ -1809,7 +1810,7 @@ myprintf(14, BLUE_LT "even 0x%x, odd 0x%x -> color_out 0x%x" ENDCOLOR, byte_even
                             break;
                     }
             	}
-                row_debug("aggregate", yofs);
+//                row_debug("aggregate", yofs);
                 continue; //next row
             }
 #endif
@@ -1822,7 +1823,7 @@ myprintf(14, BLUE_LT "even 0x%x, odd 0x%x -> color_out 0x%x" ENDCOLOR, byte_even
                 pxbuf32[yofs + x3 + 0] = pxbuf32[yofs + x3 + 1] = pxbuf32[yofs + x3 + 2] = color;
             }
         }
-        if (this->WantPivot) dump("canvas", pixels, elapsed(start));
+//        if (this->WantPivot) dump("canvas", pixels, elapsed(start));
     }
     void col_debug()
     {
