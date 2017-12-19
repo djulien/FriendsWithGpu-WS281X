@@ -71,6 +71,7 @@
     "glob": "^7.1.1",
     "keypress": "^0.2.1",
     "pngjs": "^3.3.1",
-    "sprintf.js": "^0.1.4"
+    "sprintf.js": "^0.1.4",
+    "webworker-threads": "^0.7.13"
   }
 }

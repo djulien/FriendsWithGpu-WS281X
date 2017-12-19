@@ -19,10 +19,11 @@ const {blocking, wait} = require('blocking-style');
 const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
 
 //display settings:
-const SPEED = 0.5; //animation step speed (sec)
+//const SPEED = 0.5; //animation step speed (sec)
+const FPS = 2+3; //animation step speed
 const DURATION = 60; //how long to run (sec)
-const UNIV_LEN = Screen.gpio? Screen.height: 30; //can't exceed #display lines; show larger pixels in dev mode
 const NUM_UNIV = 24; //can't exceed #VGA output pins (24) unless external mux used
+const UNIV_LEN = Screen.gpio? Screen.height: 30; //can't exceed #display lines; show larger pixels in dev mode
 debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
@@ -33,7 +34,7 @@ const OPTS =
 //    SHOW_SHSRC: true, //show shader source code
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
-    SHOW_PROGRESS: true, //show progress bar at bottom of screen
+//    SHOW_PROGRESS: true, //show progress bar at bottom of screen
 //    WS281X_FMT: true, //force WS281X formatting on screen
 //    WS281X_DEBUG: true, //show timing debug info
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
@@ -58,10 +59,10 @@ blocking(function*()
 {
     var canvas = new GpuCanvas("Pin Finder", NUM_UNIV, UNIV_LEN, OPTS);
 
-    debug("begin, run for %d sec".green_lt, DURATION);
+    debug("begin, run for %d sec @%d fps".green_lt, DURATION, FPS);
     var started = now_sec();
-    canvas.duration = DURATION / SPEED; //set progress bar limit
-    for (var t = 0; t <= DURATION / SPEED; ++t)
+    canvas.duration = DURATION * FPS; //set progress bar limit
+    for (var t = 0; t <= DURATION * FPS; ++t)
     {
 //NOTE: pixel (0, 0) is upper left on screen
         if (!OPTS.gpufx) //generate fx on CPU instead of GPU
@@ -73,11 +74,12 @@ blocking(function*()
                     canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
                 }
         canvas.paint();
-        yield wait((t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
-        ++canvas.elapsed; //= now_sec() - started; //update progress bar
+        yield wait(started + (t + 1) / FPS - now_sec()); //avoid cumulative timing errors
+        ++canvas.elapsed; //update progress bar
     }
     debug("end, pause 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too fast
+    canvas.StatsAdjust = -10; //exclude pause in final stats
 });
 
 

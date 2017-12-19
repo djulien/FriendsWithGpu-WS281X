@@ -13,17 +13,19 @@
 'use strict'; //find bugs easier
 require('colors'); //for console output
 const pathlib = require('path');
-const {blocking, wait} = require('blocking-style');
+const {Worker} = require('webworker-threads');
+//const {blocking, wait} = require('blocking-style');
 const {debug} = require('./shared/debug');
 const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
 //const {vec3, vec4, mat4} = require('node-webgl/test/glMatrix-0.9.5.min.js');
+Screen.gpio = true; //TEMP: force full screen
 
 //display settings:
-const SPEED = 1/10; //1/30; //animation speed (sec); fps
-const DURATION = 60; //how long to run (sec)
-const VGROUP = !Screen.gpio? Screen.height / 24: 1; //node grouping; used to increase effective pixel size or reduce resolution for demo/debug
-const UNIV_LEN = Screen.height / VGROUP; //can't exceed #display lines; get rid of useless pixels when VGROUP != 1
+//const SPEED = 1/60; //1/10; //1/30; //animation speed (sec); fps
+const FPS = 60; //animation speed (performance testing)
+const DURATION = 2; //60; //how long to run (sec)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
+const UNIV_LEN = Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
 debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
@@ -72,30 +74,128 @@ const BF_opts =
 
 //main logic:
 //written with synchronous coding style to simplify timing logic
-blocking(function*()
+//blocking(function*()
+//const TRACE = true;
+step(function*()
 {
     var canvas = new GpuCanvas("Butterfly", NUM_UNIV, UNIV_LEN, OPTS);
+//    wker.postMessage("all");
+    var retval = yield bkg({ack: 1});
+    console.log("got from bkg:", retval);
+    console.log("got", yield bkg({eval: butterfly}));
+    bkg.canvas = canvas;
 
-    debug("begin, run for %d sec".green_lt, DURATION);
+//OPTS.gpufx = true; //TEMP: bypass
+    debug("begin, run for %d sec @%d fps".green_lt, DURATION, FPS);
     var started = now_sec();
-    canvas.duration = DURATION / SPEED; //progress bar limit
+    canvas.duration = DURATION * FPS; //progress bar limit
 //    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
-    for (var t = 0, ofs = 0; t <= DURATION / SPEED; ++t)
+    for (var t = 0, ofs = 0; t <= DURATION * FPS; ++t, ++canvas.elapsed)
     {
         ofs += BF_opts.reverse? -BF_opts.speed: BF_opts.speed;
 //pixel [0, 0] is upper left on screen
         if (!OPTS.gpufx) //generate fx on CPU instead of GPU
-	        for (var x = 0; x < canvas.width; ++x)
-	            for (var y = 0; y < canvas.height; ++y)
-	                canvas.pixel(x, y, butterfly(x, y, ofs, BF_opts));
+//	        for (var x = 0; x < canvas.width; ++x)
+//	            for (var y = 0; y < canvas.height; ++y)
+//	                canvas.pixel(x, y, butterfly(x, y, ofs, BF_opts));
+            yield bkg({render: ofs});
+//console.log("paint");
         canvas.paint();
-        yield wait((t + 1) * SPEED - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
-        ++canvas.elapsed; //= now_sec() - started; //update progress bar
+//        yield wait((t + 1) / FPS - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
+        yield wait(started + (t + 1) / FPS - now_sec()); ///use cumulative time to avoid drift
     }
+    bkg(); //wker.postMessage(null); //.close();
     debug("end, pause 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too fast
+    canvas.StatsAdjust = -10; //exclude pause in final stats
 });
 
+
+//send msg to bkg worker thread:
+function bkg(data)
+{
+    if (!bkg.wker) //create bkg worker thread
+    {
+        bkg.wker = new Worker(function()
+        {
+//            postMessage("before all");
+            this.onmessage = function(evt)
+            {try{
+//                if (evt.data === null) { self.close(); return; }
+                if ("eval" in evt.data) { eval(evt.data); postMessage("eval'ed"); return; }
+                if ("render" in evt.data) //((typeof evt.data == "object") && ("render" in evt.data))
+                {
+                    var ofs = evt.data.render, canvas = {width: 1, height: 1, pixel: function(){}}; //bkg.canvas;
+	                for (var x = 0; x < canvas.width; ++x)
+	                    for (var y = 0; y < canvas.height; ++y)
+	                        canvas.pixel(x, y, butterfly(x, y, ofs, BF_opts));
+                    postMessage("rendered");
+                    return;
+                }
+//console.log("bkg got", evt.data);
+                postMessage("bkg got:" + JSON.stringify(evt.data));
+            } catch (exc) { postMessage("exc: " + exc); return; }}
+        });
+        bkg.wker.onmessage = function(evt)
+        {
+console.log("wker replied: " + evt.data);
+            step.retval = evt.data; //give response back to caller's yield
+            step(); //wake up caller
+        };
+    }
+    if (!arguments.length) { bkg.wker.terminate(); delete bkg.wker; return; }
+console.log("send2bkg", JSON.stringify(data));
+    bkg.wker.postMessage(data);
+//        if (data !== null) return yield;
+}
+
+
+//generator function stepper:
+function step(gen)
+{
+//console.log("step");
+    if (step.done) throw "Generator function is already done.";
+	if (typeof gen == "function") gen = gen(); //invoke generator if not already
+//        return setImmediate(function() { step(gen()); }); //avoid hoist errors
+    if (gen) step.svgen = gen; //save generator for subsequent steps
+//console.log("step:", typeof gen, JSON.stringify_tidy(gen));
+	var {value, done} = step.svgen.next(step.retval); //send previous value to generator
+//    {step.retval, step.done} = step.svgen.next(step.retval); //send previous value to generator
+//    Object.assign(step, step.svgen.next(step.retval)); //send previous value to generator
+//console.log("step: got value %s %s, done? %d", typeof value, value, done);
+    step.done = done; //prevent overrun
+    if (typeof value == "function") value = value(); //execute caller code before returning
+    return step.retval = value; //return value to caller and to next yield
+}
+
+
+//delay next step:
+function wait(delay)
+{
+console.log("wait %d sec", milli(delay));
+    delay *= 1000; //sec -> msec
+    return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
+}
+
+
+//truncate after 3 dec places:
+function milli(val)
+{
+    return Math.floor(val * 1e3) / 1e3;
+}
+
+
+//current time in seconds:
+function now_sec()
+{
+    return Date.now() / 1000;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Butterfly effect (not used if generated on GPU)
+//
 
 //CPU effects generator:
 function butterfly(x, y, ofs, opts)
@@ -122,23 +222,9 @@ function sethue(x, y, ofs, opts)
 }
 
 
-function toargb(vec)
+function toargb(vec3)
 {
-    return 0xff000000 | (Math.floor(vec[0] * 0xff) << 16) | (Math.floor(vec[1] * 0xff) << 8) | Math.floor(vec[2] * 0xff);
-}
-
-
-//truncate after 3 dec places:
-function milli(val)
-{
-    return Math.floor(val * 1e3) / 1e3;
-}
-
-
-//current time in seconds:
-function now_sec()
-{
-    return Date.now() / 1000;
+    return 0xff000000 | (Math.floor(vec3[0] * 0xff) << 16) | (Math.floor(vec3[1] * 0xff) << 8) | Math.floor(vec3[2] * 0xff);
 }
 
 

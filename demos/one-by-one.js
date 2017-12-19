@@ -127,6 +127,7 @@ blocking(function*()
     canvas.stats(); //show perf stats before delay to avoid skewing stats
     console.error("end, pause for 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too soon
+    canvas.StatsAdjust = -10; //exclude pause in final stats
 });
 
 

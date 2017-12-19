@@ -1288,7 +1288,7 @@ public:
     std::string DumpFile;
 //    std::atomic<double> PresentTime; //presentation timestamp (set by bkg rendering thread)
     double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
-
+    int StatsAdjust; //allow caller to tweak stats
 //CAUTION: must match firmware
 //        unsigned unused: 5; //lsb
 //        unsigned RGswap: 1;
@@ -1315,7 +1315,7 @@ private:
     std::vector<auto_ptr<ChplexEncoder<NUM_SSR>>> encoders;
 public:
 //ctor/dtor:
-    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(0), dump_count(0)
+    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(0), StatsAdjust(0), dump_count(0)
     {
 //        myprintf(33, "GpuCanvas ctor" ENDCOLOR);
         if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
@@ -1440,7 +1440,7 @@ private:
         if (!canvas) return (void*)err(RED_LT "Can't create canvas texture" ENDCOLOR);
         myprintf(8, MAGENTA_LT "bkg startup took %2.1f msec" ENDCOLOR, elapsed(started));
 
-        SDL_Rect Hclip = {0, 0, TXR_WIDTH - 1, this->univ_len}; //last col overlaps with H-sync; clip
+        SDL_Rect Hclip = {0, 0, TXR_WIDTH - 1, this->univ_len}; //CRITICAL: clip last col (1/3 pixel) so it overlaps with H-sync
         myprintf(22, BLUE_LT "render copy (%d, %d, %d, %d) => target" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
 
 //        Paint(NULL); //start with all pixels dark
@@ -1452,6 +1452,7 @@ private:
         out.wake(pxbuf); //tell main thread i'm ready
 //        out.wake(pxbuf); //tell main thread canvas is available (advanced notice so first paint doesn't block)
 
+        uint32_t pixels_copy[this->num_univ * this->univ_len];
         for (;;) //render loop; runs continuously at screen rate (30 - 60 Hz)
         {
 //TODO: change to:
@@ -1467,9 +1468,11 @@ private:
             delta = now() - bg.previous; bg.caller_time += delta; bg.previous += delta;
             ++num_dirty;
 
-            encode((uint32_t*)pixels);
+//            encode((uint32_t*)pixels);
+            memcpy(pixels_copy, pixels, this->num_univ * this->univ_len * sizeof(uint32_t)); //copy caller's data without encode so caller can wake sooner
             delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
             out.wake((void*)true); //allow fg thread to refill buf while render finishes in bkg
+            encode(pixels_copy); //encode while caller does other things (encode is CPU-expensive)
 
             { //scope for locked texture
                 auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
@@ -1636,7 +1639,7 @@ public:
 //        uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
 //        uint64_t unknown_time = elapsed - caller_time - pivot_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
         uint64_t idle_time = isRPi()? bg.present_time: bg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
-        double elaps = elapsed(started), fps = numfr / elaps;
+        double elaps = elapsed(started) + StatsAdjust, fps = numfr / elaps;
 //#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
@@ -2143,6 +2146,8 @@ private:
 //    static NAN_METHOD(pivot_tofix);
     static NAN_GETTER(pivot_getter);
     static NAN_SETTER(pivot_setter);
+    static NAN_GETTER(StatsAdjust_getter);
+    static NAN_SETTER(StatsAdjust_setter);
     static NAN_GETTER(DumpFile_getter);
     static NAN_SETTER(DumpFile_setter);
     static NAN_METHOD(UnivType_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that with 2 parameters
@@ -2185,6 +2190,7 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
 //    Nan::SetPrototypeMethod(ctor, "pivot_tofix", pivot_tofix);
     Nan::SetAccessor(proto, JS_STR(iso, "pivot"), pivot_getter, pivot_setter);
+    Nan::SetAccessor(proto, JS_STR(iso, "StatsAdjust"), StatsAdjust_getter, StatsAdjust_setter);
     Nan::SetAccessor(proto, JS_STR(iso, "DumpFile"), DumpFile_getter, DumpFile_setter);
     Nan::SetPrototypeMethod(ctor, "UnivType_tofix", UnivType_tofix); //TODO: fix this
 //    Nan::SetPrototypeMethod(ctor, "release", GpuCanvas_js::release);
@@ -2344,6 +2350,29 @@ NAN_SETTER(GpuCanvas_js::pivot_setter) //defines "info" and "value"; implicit Ha
 }
 
 
+//get/set stats adjust:
+//void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(GpuCanvas_js::StatsAdjust_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
+
+    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.StatsAdjust)); //return old value
+//    if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue(); //set new value
+//if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
+//else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
+}
+NAN_SETTER(GpuCanvas_js::StatsAdjust_setter) //defines "info" and "value"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
+
+//    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
+    if (!value->IsUndefined()) canvas->inner.StatsAdjust = value->IntegerValue();
+}
+
+
 //get/set dump (debug) file:
 //void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
@@ -2452,7 +2481,7 @@ void GpuCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
 void GpuCanvas_js::Quit(void* ignored)
 {
 //    GpuCanvas::Quit();
-    myprintf(22, RED_LT "js cleanup: %d instances to destroy" ENDCOLOR, all.size());
+    myprintf(22, BLUE_LT "js cleanup: %d instances to destroy" ENDCOLOR, all.size());
     while (all.size()) { delete all.back(); } //dtor will remove self from list
 }
 
