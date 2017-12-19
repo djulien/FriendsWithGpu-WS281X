@@ -17,6 +17,8 @@
 #define TOSTR(x) TOSTR_INNER(x)
 #define TOSTR_INNER(x) #x
 
+#define CONCAT(lhs, rhs) CONCAT_INNER(lhs, rhs)
+#define CONCAT_INNER(lhs, rhs) lhs##rhs
 
 //ANSI color codes (for console output):
 //https://en.wikipedia.org/wiki/ANSI_escape_code

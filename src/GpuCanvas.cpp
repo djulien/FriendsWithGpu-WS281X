@@ -114,6 +114,7 @@
 #include <vector> //std::vector
 #include <mutex> //std::mutex, std::lock_guard
 #include <atomic> //std::atomic. std::memory_order
+#include <queue>
 
 //C++11 implements a lot of SDL functionality in a more C++-friendly way, so let's use it! :)
 #if __cplusplus < 201103L
@@ -134,6 +135,8 @@
 #define CONST  //should be const but function signatures aren't defined that way
 
 typedef enum {No = false, Yes = true, Maybe} tristate;
+
+#define uint24_t  uint32_t //kludge: use pre-defined type and just ignore first byte
 
 
 //kludge: need nested macros to stringize correctly:
@@ -355,6 +358,7 @@ int stdlog::count = 0;
 #define YELLOW_LT  ANSI_COLOR("1;33")
 #define BLUE_LT  ANSI_COLOR("1;34")
 #define MAGENTA_LT  ANSI_COLOR("1;35")
+#define PINK_LT  MAGENTA_LT
 #define CYAN_LT  ANSI_COLOR("1;36")
 #define GRAY_LT  ANSI_COLOR("0;37")
 //#define ENDCOLOR  ANSI_COLOR("0")
@@ -400,7 +404,7 @@ inline float _mix(float x, float y, float a) { return (1 - a) * x + a * y; }
 #define NORECT  NULL
 #define FIRST_MATCH  -1
 #define THIS_THREAD  NULL
-#define UNDEF_EVTID  0
+//#define UNDEF_EVTID  0
 
 
 //reduce verbosity:
@@ -451,7 +455,7 @@ inline const char* ThreadName(const SDL_Thread* thr = THIS_THREAD)
 //augmented data types:
 //allow inited libs or locked objects to be treated like other allocated SDL objects:
 //typedef struct { /*int dummy;*/ } SDL_lib;
-typedef struct { uint32_t evtid; } SDL_lib;
+typedef struct { /*uint32_t evtid*/; } SDL_lib;
 //typedef struct { int dummy; } IMG_lib;
 typedef struct { /*const*/ SDL_sem* sem; } SDL_LockedSemaphore;
 typedef struct { /*const*/ SDL_mutex* mutex; } SDL_LockedMutex;
@@ -518,7 +522,7 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
 
 /*inline*/ SDL_lib* SDL_INIT(uint32_t flags /*= SDL_INIT_VIDEO*/, int where) //= 0)
 {
-    static SDL_lib ok = {0}; //only needs init once, so static/shared data can be used here
+    static SDL_lib ok; //= {0}; //only needs init once, so static/shared data can be used here
 
     std::ostringstream subsys;
     if (flags & SDL_INIT_TIMER) subsys << ";TIMER";
@@ -533,11 +537,11 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
     else if (already) retval = OK(SDL_InitSubSystem(flags & ~already))? &ok: NULL;
     else retval = OK(SDL_Init(flags))? &ok: NULL;
     if (!retval) return (SDL_lib*)exc(RED_LT "SDL_Init %s (0x%x) failed" ENDCOLOR_MYLINE, subsys.str().c_str() + 1, flags, where); //throw SDL_Exception("SDL_Init");
-
+#if 0
     if (ok.evtid); //already inited //!= UNDEF_EVTID)
     else if (!OK(ok.evtid = SDL_RegisterEvents(2))) return (SDL_lib*)exc(RED_LT "SDL_RegisterEvents failed" ENDCOLOR_MYLINE, where);
     else ++ok.evtid; //kludge: ask for 2 evt ids so last one != 0; then we can check for 0 instead of "(uint32_t)-1"
-
+#endif
     if (already) myprintf(22, YELLOW_LT "SDL %s (0x%x) was already %sinitialized (0x%x) from %d" ENDCOLOR, subsys.str().c_str() + 1, flags, (already != flags)? "partly ": "", already, where);
     if (where) myprintf(22, YELLOW_LT "SDL_Init %s (0x%x) = 0x%x ok? %d (from %d)" ENDCOLOR, subsys.str().c_str() + 1, flags, toint(retval), !!retval, where);
     return retval;
@@ -885,11 +889,11 @@ public:
 //        return async? SDL_Success: wait(); //wait for child to reply
 ////        return this->exitval;
 //    }
-//public-facing:
+//public-facing (used by fg caller):
 //NOTE: first msg in/out by main thread will start up bkg thread (delayed init)
     void* message(void* msg = NULL) { wake(msg); return wait(); } //send+receive
     void wake(void* msg = NULL) { init_delayed(); in.wake(msg); } //send
-    void* wait() { init_delayed(); return out.wait(); } //receive
+    void* wait() { init_delayed(); deque(); return out.wait(); } //receive
 public:
     SDL_threadID ID() { return this->cast? SDL_GetThreadID(this->cast): -1; }
 //    static std::mutex protect; //TODO: not needed? bkg thread only created once at start
@@ -901,9 +905,32 @@ public:
         auto pos = std::find(all.begin(), all.end(), SDL_GetThreadID(THIS_THREAD));
         return all.end() - pos; //0 => not found (main thread), > 0 => index in list (can be used as abreviated thread name/#)
     }
-
+public:
+    static void enque(const char* msg)
+    {
+        std::lock_guard<std::mutex> lock(msg_mutex);
+        msg_que.push(msg);
+    }
+    void deque(void)
+    {
+        std::lock_guard<std::mutex> lock(msg_mutex);
+//        if (!msg_que.size()) return;
+        while (msg_que.size())
+        {
+            const char* buf = msg_que.front();
+            msg_que.pop();
+//            fprintf(stderr, "%s\n", buf);
+            fputs(buf, stderr);
+            delete[] buf;
+        }
+    }
+private:
+    static std::mutex msg_mutex;
+    static std::queue<const char*> msg_que;
 };
 std::vector<SDL_threadID> Thread::all;
+std::mutex Thread::msg_mutex;
+std::queue<const char*> Thread::msg_que;
 //std::mutex Thread::protect;
 //Signal Thread::ack;
 
@@ -934,6 +961,228 @@ uint32_t hsv2rgb(float h, float s, float v);
 //uint32_t ARGB2ABGR(uint32_t color);
 const char* commas(int64_t);
 bool exists(const char* path);
+
+
+////////////////////////////////////////////////////////////////////////////////
+////
+/// Charlieplexing/chipiplexing encoder
+//
+
+#define NUM_SSR  (1 << CHPLEX_RCSIZE)
+#define CHPLEX_RCSIZE  3
+#define CHPLEX_RCMASK  (NUM_SSR - 1)
+#define ROW(rc)  ((rc) >> CHPLEX_RCSIZE)
+#define ROW_bits(rc)  ((rc) & ~CHPLEX_RCMASK)
+#define COL(rc)  ((rc) & CHPLEX_RCMASK)
+#define ISDIAG(rc)  (COL(rc) == ROW(rc))
+#define HASDIAG(rc)  (COL(rc) > ROW(rc))
+
+#if NUM_SSR > 8
+ #error "[ERROR] Num SSR too big (max 8)"
+#endif
+
+template<int todoNUM_SSR>
+class ChplexEncoder
+{
+private:
+//sorted indices:
+//in order to reduce memory shuffling, only indices are sorted
+    uint8_t sorted[NUM_SSR * (NUM_SSR - 1)]; //56 bytes
+//statically allocated delay info:
+//never moves after allocation, but could be updated
+    struct DimRowEntry
+    {
+        uint8_t delay; //brightness
+//    uint8_t rownum_numcols; //#col upper, row# lower; holds up to 16 each [0..15]
+//    uint8_t colmap; //bitmap of columns for this row
+//   uint8_t rowmap; //bitmap of rows
+        uint8_t numrows;
+        uint8_t colmaps[NUM_SSR]; //bitmap of columns for each row
+    } DimRowList[NUM_SSR * (NUM_SSR - 1)]; //3*56 = 168 bytes    //10*56 = 560 bytes (616 bytes total used during sort, max 169 needed for final list)
+    uint8_t total_rows; //= 0;
+    uint8_t count; //= 0; //#dim slots allocated
+    uint8_t rcinx; //= 0; //raw (row, col) address; ch*plex diagonal address will be skipped
+public:
+    ChplexEncoder() { init_list(); }
+public:
+    void write(int val)
+    {
+//    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
+        if (count >= NUM_SSR * (NUM_SSR - 1)) { printf(RED_LT "overflow" ENDCOLOR); return; }
+        struct DimRowEntry* ptr = &DimRowList[count];
+//    ptr->rownum_numcols = ROW_bits(rcinx) | 1;
+//    ptr->colmap = 0x80 >> COL(rcinx);
+        ptr->delay = val;
+//    ptr->rowmap = 0x80 >> ROW(rcinx);
+        for (int i = 0; i < NUM_SSR; ++i) ptr->colmaps[i] = 0; //TODO: better to do this 1x at start, or incrementally as needed?
+        ptr->colmaps[ROW(rcinx)] = 0x80 >> COL(rcinx);
+myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
+        ptr->numrows = 1;
+        ++total_rows;
+        ++count;
+        ++rcinx;
+    }
+
+    void init_list()
+    {
+        total_rows = 0;
+        count = 0;
+        rcinx = 0;
+    }
+
+    void insert(int newvalue)
+    {
+        myprintf(18, BLUE_LT "INS[%d] %d [r %d,c %d]: " ENDCOLOR, count, newvalue, ROW(rcinx), COL(rcinx));
+        if (ISDIAG(rcinx)) { ++rcinx; myprintf(18, BLUE_LT "skip diagonal" ENDCOLOR); return; }
+//    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
+        if (!newvalue) { /*sorted[count - 1] = 0*/; ++rcinx; myprintf(18, BLUE_LT "skip null" ENDCOLOR); return; } //don't need to store this one
+        if (rcinx >= NUM_SSR * NUM_SSR) { myprintf(18, RED_LT "overflow" ENDCOLOR); return; }
+//    if (newvalue == 233) showkeys(newvalue);
+        int start, end;
+//check if entry already exists using binary search:
+        for (start = 0, end = count; start < end;)
+        {
+            int mid = (start + end) / 2;
+            struct DimRowEntry* ptr = &DimRowList[sorted[mid]];
+            int cmpto = ptr->delay;
+//        if (newvalue == 233) printf("cmp start %d, end %d, mid %d val %d\n", start, end, mid, ptr->delay);
+//NOTE: sort in descending order
+            if (newvalue > ptr->delay) { end = mid; continue; } //search first half
+            if (newvalue < ptr->delay) { start = mid + 1; continue; } //search second half
+//printf("new val[%d] %d?, row %d, col %d, vs row %d, cols %d 0x%x, ofs %d" ENDCOLOR, mid, newvalue, ROW(rcinx), COL(rcinx), ROW(ptr->rownum_numcols), COL(ptr->rownum_numcols), ptr->colmap, mid);
+printf("new val[%d] %d?, row %d, col %d, vs cols %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x %s0x%x, ofs %d" ENDCOLOR, mid, newvalue, ROW(rcinx), COL(rcinx), "*" + (ROW(rcinx) != 0), ptr->colmaps[0], "*" + (ROW(rcinx) != 1), ptr->colmaps[1], "*" + (ROW(rcinx) != 2), ptr->colmaps[2], "*" + (ROW(rcinx) != 3), ptr->colmaps[3], "*" + (ROW(rcinx) != 4), ptr->colmaps[4], "*" + (ROW(rcinx) != 5), ptr->colmaps[5], "*" + (ROW(rcinx) != 6), ptr->colmaps[6], "*" + (ROW(rcinx) != 7), ptr->colmaps[7], mid);
+//        if (ROW_bits(rcinx) > ROW_bits(ptr->rownum_numcols)) { end = mid; continue; }
+//        if (ROW_bits(rcinx) < ROW_bits(ptr->rownum_numcols)) { start = mid + 1; continue; }
+//collision:
+//        if (!(ptr->rowmap & (0x80 >> ROW(rcinx)))) ptr->colmaps[COL(rcinx)] = 0; //TODO: better to do this incrementally, or 1x when entry first created?
+            if (!ptr->colmaps[ROW(rcinx)]) { ++ptr->numrows; ++total_rows; }
+            ptr->colmaps[ROW(rcinx)] |= 0x80 >> COL(rcinx);
+//        ptr->rowmap |= 0x80 >> ROW(rcinx);
+//printf(YELLOW_LT "found: add col, new count: %d" ENDCOLOR, COL(ptr->rownum_numcols + 1));
+//        if (!COL(ptr->rownum_numcols + 1)) printf(RED_LT "#col wrap" ENDCOLOR);
+//        ++ptr->rownum_numcols;
+//        ptr->colmap |= 0x80 >> COL(rcinx);
+//fill in list tail:
+//        sorted[count] = count;
+//        write(0); //null (off) entry
+            ++rcinx;
+            return;
+        }
+//create a new entry, insert into correct position:
+printf(BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newvalue, start, count - start);
+        for (int i = count; i > start; --i) sorted[i] = sorted[i - 1];
+        sorted[start] = count;
+        write(newvalue);
+//    if (newvalue == 233) showkeys(newvalue);
+    }
+
+    void insert(uint8_t* list56)
+    {
+        init_list();
+        for (int i = 0; i < NUM_SSR * (NUM_SSR - 1); ++i) insert(list56[i]);
+//    for (int i = 0; i < 56; ++i) new_insert(list56[i]);
+//    for (int i = 0; i < delay_count; ++i) printf("delay[%d/%d]: %d, # %d\n", i, delay_count, dim_list[i].delay, dim_list[i].numrows);
+    }
+
+//    struct
+//    {
+//        uint8_t delay, rowmap, colmap;
+//    } DispList[NUM_SSR * (NUM_SSR - 1)]; //+ 1]; //3*56+1 == 169 bytes
+    uint8_t DispList[3 * NUM_SSR * (NUM_SSR - 1)];
+    uint8_t checksum;
+    int disp_count; //= 0;
+
+//resolve delay conflicts (multiple rows competing for same dimming slot):
+//assign dimming slots to each row
+    void resolve_conflicts()
+    {
+//    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
+        myprintf(18, BLUE_LT "resolve dups rc %d, # %d" ENDCOLOR, rcinx, count);
+        disp_count = checksum = 0;
+        uint8_t max = 255, min = total_rows;
+        for (int i = 0; i < count; ++i)
+        {
+//this entry uses dimming slots [delay + (numrows - 1) / 2 .. delay - numrows / 2]
+//#define UPSHIFT(ptr)  ((ptr->numrows - 1) / 2)
+//#define DOWNSHIFT(ptr)  (ptr->numrows / 2)
+//#define FIRST_SLOT(ptr)  (ptr->delay + UPSHIFT(ptr))
+//#define LAST_SLOT(ptr)  (ptr->delay - DOWNSHIFT(ptr))
+//        struct DimRowEntry* prev = i? &DimRowList[sorted[i - 1]]: 0;
+            struct DimRowEntry* ptr = &DimRowList[sorted[i]];
+//        struct DimRowEntry* next = (i < count - 1)? &DimRowList[sorted[i + 1]]: 0;
+#if 0
+        if (prev && (FIRST_SLOT(ptr) >= LAST_SLOT(prev)) //need to shift later
+            if (next && (FIRST_SLOT(next) >= LAST_SLOT(ptr)) //need
+            if (
+        if (ptr->delay + ptr->numrows / 2 > 255) ptr->delay += ptr->numrows / 2;
+#endif
+            min -= ptr->numrows; //update min for this group
+            int adjust = (ptr->numrows - 1) / 2; //UPSHIFT(ptr);
+            if (ptr->delay + adjust > max) { adjust = max - ptr->delay; myprintf(18, YELLOW_LT "can only upshift delay[%d/%d] %d by <= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
+            else if (ptr->delay + adjust - ptr->numrows < min) { adjust = min - (ptr->delay - ptr->numrows); myprintf(18, YELLOW_LT "must upshift delay[%d/%d] %d by >= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
+            else if (adjust) myprintf(18, BLUE_LT "upshifted delay[%d/%d] %d by +%d" ENDCOLOR, i, count, ptr->delay, adjust);
+            ptr->delay += adjust;
+//TODO: order rows according to #cols?
+            bool firstrow = true;
+            for (int r = 0; r < NUM_SSR; ++r)
+            {
+                if (!ptr->colmaps[r]) continue;
+                checksum ^= DispList[disp_count++]/*.delay*/ = firstrow? max - ptr->delay + 1: 1; //ptr->delay--;
+                checksum ^= DispList[disp_count++]/*.rowmap*/ = 0x80 >> r;
+                checksum ^= DispList[disp_count++]/*.colmap*/ = ptr->colmaps[r];
+                firstrow = false;
+//                ++disp_count;
+            }
+//        ptr->delay += ptr->numrows; //restore for debug display
+            max = ptr->delay - ptr->numrows; //update max for next group
+        }
+//        DispList[disp_count].delay = 0;
+        for (int i = disp_count; i < 3 * NUM_SSR * (NUM_SSR - 1); ++i)
+            DispList[i]/*.delay = DispList[i].rowmap = DispList[i].colmap*/ = 0;
+#if 1
+        myprintf(18, "disp list %d ents:" ENDCOLOR, disp_count / 3);
+        int dim = 256;
+        for (int i = 0; i < disp_count; i += 3)
+            myprintf(18, "disp[%d/%d]: delay %d (dim %d), rowmap 0x%x (row %d), colmap 0x%x" ENDCOLOR, i, disp_count, DispList[i]/*.delay*/, dim -= DispList[i]/*.delay*/, DispList[i + 1]/*.rowmap*/, Log2(DispList[i + 1]/*.rowmap*/), DispList[i + 2]/*.colmap*/);
+    }
+//helpers:
+private:
+    static int Log2(int val)
+    {
+        for (int i = 0; i < 8; ++i)
+            if (val >= 0x80 >> i) return 7 - i;
+        return -1;
+#endif
+    }
+
+//for dev/debug only:
+public:
+/*
+    void showkeys(int newvalue)
+    {
+        printf(BLUE_LT "keys now (%d): ", newvalue);
+        for (int i = 0; i < count; ++i)
+            printf("%s[%d] %d, ", (!i || (DimRowList[sorted[i - 1]].delay > DimRowList[sorted[i]].delay))? GREEN_LT: RED_LT, i, DimRowList[sorted[i]].delay);
+        printf(ENDCOLOR);
+    }
+*/
+
+    void show_list(const char* desc)
+    {
+//    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
+        myprintf(18, CYAN_LT "%s %d entries (%d total rows):" ENDCOLOR, desc, count, total_rows);
+        for (int i = 0; i < count; ++i)
+        {
+//        if (ISDIAG(i)) continue; //skip diagonal ch*plex row/col address
+//        int ii = i - ROW(i) - HASDIAG(i); //skip diagonal ch*plex row/col address
+            struct DimRowEntry* ptr = &DimRowList[sorted[i]];
+//        printf(PINK_LT "[%d/%d=%d]: delay %d, row# %d, #cols %d, cols 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ROW(ptr->rownum_numcols), COL(ptr->rownum_numcols), ptr->colmap);
+            myprintf(18, PINK_LT "[%d/%d=%d]: delay %d, #rows %d, cols 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ptr->numrows, ptr->colmaps[0], ptr->colmaps[1], ptr->colmaps[2], ptr->colmaps[3], ptr->colmaps[4], ptr->colmaps[5], ptr->colmaps[6], ptr->colmaps[7]);
+//        if (!ptr->delay) break; //eof
+        }
+    }
+};
+inline int Release(/*const*/ ChplexEncoder<NUM_SSR>* that) { delete that; return SDL_Success; }
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1004,7 +1253,7 @@ WH Screen()
 
 //#define RENDER_THREAD
 
-#define WS281X_BITS  24 //each WS281X node has 24 data bits
+#define WS281X_BITS  24 //each WS281X node has 24 data bits; send 24 bits to GPIO pins for each display row
 #define TXR_WIDTH  (3 * WS281X_BITS) //- 1) //data signal is generated at 3x bit rate, last bit overlaps H blank
 
 //window create and redraw:
@@ -1031,18 +1280,41 @@ private:
     std::atomic<uint32_t> numfr, numerr, num_dirty; //could be updated by another thread
     struct { uint64_t previous; std::atomic<uint64_t> user_time, caller_time, pivot_time; } fg; //, lock_time, update_time, unlock_time; } fg;
     struct { uint64_t previous; std::atomic<uint64_t> caller_time, pivot_time, lock_time, update_time, unlock_time, copy_time, present_time; } bg;
+//    bool reported;
+    int num_univ, univ_len; //caller-defined
 public:
-    bool WantPivot; //dev/debug vs. live mode
-    int num_univ, univ_len; //called-defined
+    bool WantPivot; //dev/debug vs. live mode; TODO: getter/setter
+    std::string DumpFile;
 //    std::atomic<double> PresentTime; //presentation timestamp (set by bkg rendering thread)
     double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
-    enum UniverseTypes { NONE = 0, WS281X = 1, BARE_SSR = 2, CHPLEX_SSR = 3}; //WS281X is default, but make non-0 to see if explicitly set; TODO: make extensible
-    std::vector<UniverseTypes> UnivTypes; //universe types
+
+//CAUTION: must match firmware
+//        unsigned unused: 5; //lsb
+//        unsigned RGswap: 1;
+//        unsigned IgnoreChksum: 1;
+//        unsigned ActiveHigh: 1; //msb
+#define UTYPEOF(univtype)  ((univtype) & TYPEBITS)
+    enum UniverseTypes { INVALID = -1, NONE = 0, WS281X = 1, PLAIN_SSR = 2, CHPLEX_SSR = 3, SPAREBIT = 0x10, TYPEBITS = 0xF, RGSWAP = 0x20, CHECKSUM = 0x40, POLARITY = 0x80, ACTIVE_HIGH = 0x80, ACTIVE_LOW = 0}; //WS281X is default, but make non-0 to see if explicitly set; TODO: make extensible
+    UniverseTypes UnivType(int inx, UniverseTypes newtype = INVALID)
+    {
+        if ((inx < 0) || (inx >= this->num_univ)) return INVALID;
+        UniverseTypes oldtype = this->univ_types[inx];
+        if ((newtype != INVALID) && (UTYPEOF(newtype) != UTYPEOF(oldtype)))
+        {
+//            myprintf(14, (UTYPEOF(newtype) != UTYPEOF(INVALID))? BLUE_LT "GpuCanvas: UnivType[%d] was %d + flags 0x%d -> is now %d + flags 0x%x" ENDCOLOR: BLUE_LT "GpuCanvas: UnivType[%d] is %d + flags 0x%d" ENDCOLOR, inx, oldtype & TYPEBITS, oldtype & ~TYPEBITS & 0xFF, newtype & TYPEBITS, newtype & ~TYPEBITS & 0xFF);
+            if (UTYPEOF(newtype) == UTYPEOF(CHPLEX_SSR)) encoders[inx] = new ChplexEncoder<NUM_SSR>; //alloc memory while caller is still in prep, prior to playback
+            this->univ_types[inx] = newtype;
+        }
+        return oldtype;
+    }
     int width() { return this->num_univ; }
     int height() { return this->univ_len; }
+private:
+    std::vector<UniverseTypes> univ_types; //universe types
+    std::vector<auto_ptr<ChplexEncoder<NUM_SSR>>> encoders;
 public:
 //ctor/dtor:
-    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(0)
+    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(0), dump_count(0)
     {
 //        myprintf(33, "GpuCanvas ctor" ENDCOLOR);
         if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
@@ -1107,7 +1379,8 @@ public:
         this->num_univ = num_univ;
         this->univ_len = univ_len;
         this->WantPivot = want_pivot;
-        this->UnivTypes.resize(num_univ, NONE); //NOTE: caller needs to call paint() after changing this
+        this->univ_types.resize(num_univ, NONE); //NOTE: caller needs to call paint() after changing this
+        this->encoders.resize(num_univ, NULL);
         fg.user_time = fg.caller_time = fg.pivot_time = 0; //fg.update_time = fg.unlock_time = 0;
         myprintf(22, BLUE_LT "GpuCanvas wake thread" ENDCOLOR);
 #if 0 //TODO
@@ -1406,6 +1679,7 @@ private:
     void encode(uint32_t* pixels, uint32_t fill = BLACK)
     {
         uint32_t* pxbuf32 = reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
+        uint64_t start = now();
 //myprintf(22, "paint pxbuf 0x%x pxbuf32 0x%x" ENDCOLOR, toint(this->pxbuf.cast->pixels), toint(pxbuf32));
 #if 0 //test
         for (int y = 0, yofs = 0; y < this->univ_len; ++y, yofs += TXR_WIDTH) //outer
@@ -1430,56 +1704,117 @@ private:
 //            memcpy(&pxbuf32[yofs], rowbuf, TXR_WIDTH * sizeof(uint32_t)); //initialze start, data, stop bits
 #endif
 //univ types:
-//WS281X: send 1 WS281X node (24 bits) per display row, up to #display rows on screen
-//SSR: send 2 bytes per display row, multiples of 3 * 8 * 7 + 2 == 170 bytes (85 display rows)
-//OR send 3 bytes per display row, multiples of 57 display rows
+//WS281X: send 1 WS281X node (24 bits) per display row, up to #display rows on screen per frame
+//SSR: send 2 bytes per display row, multiples of 3 * 8 * 7 + 2 == 170 bytes (85 display rows) per frame
+//OR? send 3 bytes per display row, multiples of 57 display rows
 //*can't* send 4 bytes per display row; PIC can only rcv 3 bytes per WS281X
 //72 display pixels: H-sync = start bit or use inverters?
-
-        uint32_t leading_edges = BLACK;
-        for (uint32_t x = 0, xmask = 0x800000; (int)x < this->num_univ; ++x, xmask >>= 1)
-            if (this->UnivTypes[(int)x] == WS281X) leading_edges |= xmask; //turn on leading edge of data bit for WS281X
+//        uint32_t leading_edges = BLACK;
+//        for (uint32_t x = 0, xmask = 0x800000; (int)x < this->num_univ; ++x, xmask >>= 1)
+//            if (UTYPEOF(this->UnivTypes[(int)x]) == WS281X) leading_edges |= xmask; //turn on leading edge of data bit for GPIO pins for WS281X only
 //myprintf(22, BLUE_LT "start bits = 0x%x (based on univ type)" ENDCOLOR, leading_edges);
-        bool rbswap = isRPi();
+//        bool rbswap = isRPi();
+        col_debug();
         for (int y = 0, yofs = 0; y < this->univ_len; ++y, yofs += TXR_WIDTH) //outer
         {
-            for (int x3 = 0; x3 < TXR_WIDTH; x3 += 3) //inner; locality of reference favors destination
-            {
-                pxbuf32[yofs + x3 + 0] = leading_edges; //WHITE;
-                pxbuf32[yofs + x3 + 1] = BLACK; //data bit body (will be overwritten with pivoted color bits)
-//                if (x3) pxbuf32[yofs + x3 - 1] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
-                pxbuf32[yofs + x3 + 2] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
-            }
+//initialize 3x signal for this row of 24 WS281X pixels:
+//            for (int x3 = 0; x3 < TXR_WIDTH; x3 += 3) //inner; locality of reference favors destination
+//            {
+//                pxbuf32[yofs + x3 + 0] = leading_edges; //WHITE;
+//                pxbuf32[yofs + x3 + 1] = BLACK; //data bit body (will be overwritten with pivoted color bits)
+////                if (x3) pxbuf32[yofs + x3 - 1] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
+//                pxbuf32[yofs + x3 + 2] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
+//            }
+            memset(&pxbuf32[yofs], 0, TXR_WIDTH * sizeof(uint32_t));
 #if 1
-//fill with pivoted data bits:
+//pivot pixel data onto 24 parallel GPIO pins:
+//  WS281X = 1, PLAIN_SSR = 2, CHPLEX_SSR = 3,TYPEBITS = 0xF,
+// RGSWAP = 0x20, CHECKSUM = 0x40, POLARITY = 0x80};
             if (this->WantPivot)
             {
 //NOTE: xmask loop assumes ARGB or ABGR fmt (A in upper byte)
                 for (uint32_t x = 0, xofs = 0, xmask = 0x800000; x < (uint32_t)this->num_univ; ++x, xofs += this->univ_len, xmask >>= 1)
             	{
-                    uint32_t color = pixels? pixels[xofs + y]: fill;
-                    if (rbswap) color = ARGB2ABGR(color); //bswap_32(x)
-//                    if (!A(color) || (!R(color) && !G(color) && !B(color))) continue; //no data to pivot
-                    color = limit(color); //limit brightness/power
-//                color = ARGB2ABGR(color);
-                    switch (UnivTypes[x])
+                    uint24_t color_out = pixels? pixels[xofs + y]: fill;
+//TODO: make this extensible, move out to Javascript?
+                    switch (univ_types[x])
                     {
+                        case WS281X | RGSWAP:
+                            color_out = ARGB2ABGR(color_out); //user-requested explicit R <-> G swap
+//fall thru
                         case WS281X:
-                            for (int bit3 = 1; bit3 < TXR_WIDTH; bit3 += 3, color <<= 1)
-                                if (color & 0x800000) pxbuf32[yofs + bit3] |= xmask; //set data bit
+//                            if (!A(color) || (!R(color) && !G(color) && !B(color))) continue; //no data to pivot
+                            color_out = limit(color_out); //limit brightness/power
+//no                            color = ARGB2ABGR(color); //R <-> G swap doesn't need to be automatic for RPi; user can swap GPIO pins
+//24 WS281X data bits spread across 72 screen pixels = 3 pixels per WS281X data bit:
+                            for (int bit3 = 0; bit3 < TXR_WIDTH; bit3 += 3, color_out <<= 1)
+                            {
+                                pxbuf32[yofs + bit3 + 0] |= xmask; //leading edge = high
+                                if (color_out & 0x800000) pxbuf32[yofs + bit3 + 1] |= xmask; //set data bit
+//                                pxbuf32[yofs + bit3 + 2] &= ~xmask; //trailing edge = low
+                            }
+                            row_debug("ws281x", yofs, xmask, x);
                             break;
-                        case BARE_SSR:
+                        case PLAIN_SSR:
+                        case PLAIN_SSR | CHECKSUM:
+                        case PLAIN_SSR | POLARITY:
+                        case PLAIN_SSR | CHECKSUM | POLARITY:
+                            return_void(err(RED_LT "GpuCanvas.Encode: Plain SSR TODO" ENDCOLOR));
                             break;
                         case CHPLEX_SSR:
+                        case CHPLEX_SSR | CHECKSUM:
+                        case CHPLEX_SSR | POLARITY:
+                        case CHPLEX_SSR | CHECKSUM | POLARITY:
+                        { //kludge: extra scope to avoid "jump to case label" error
+//cfg + chksum + 8 * 7 * (delay, rowmap, colmap) == 170 bytes @ 2 bytes / row == 85 display rows of data
+//NOTE: disp size expands; can't display all rows; last ctlr might be partial
+#define BYTES_PER_DISPROW  2
+#define CHPLEX_DISPROWS  divup(1 + 1 + 3 * NUM_SSR * (NUM_SSR - 1), BYTES_PER_DISPROW) //85
+#define CHPLEX_CTLRLEN  (NUM_SSR * (NUM_SSR - 1))
+                            int ctlr_ofs = y % CHPLEX_DISPROWS, ctlr_adrs = y / CHPLEX_DISPROWS;
+                            if (!ctlr_ofs) //get another display list
+                            {
+                                this->encoders[x].cast->init_list();
+                                myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregate rows %d..%d" ENDCOLOR, x, y, ctlr_adrs * CHPLEX_CTLRLEN, (ctlr_adrs + 1) * CHPLEX_CTLRLEN - 1);
+                                for (int yy = ctlr_adrs * CHPLEX_CTLRLEN; (yy < this->univ_len) && (yy < (ctlr_adrs + 1) * CHPLEX_CTLRLEN); ++yy)
+                                {
+                                    color_out = pixels? pixels[xofs + yy]: fill;
+                                    uint8_t brightness = std::max<int>(Rmask(color_out) >> 16, std::max<int>(Gmask(color_out) >> 8, Bmask(color_out))); //use strongest color element
+                                    myprintf(14, BLUE_LT "pixel[%d] 0x%x -> br %d" ENDCOLOR, xofs + yy, color_out, brightness);
+                                    this->encoders[x].cast->insert(brightness);
+                                }
+                                this->encoders[x].cast->resolve_conflicts();
+                                myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregated into %d disp evts" ENDCOLOR, x, y, this->encoders[x].cast->disp_count);
+                            }
+//2 bytes serial data = 2 * (1 start + 8 data + 1 stop + 2 pad) = 24 data bits spread across 72 screen pixels = 3 pixels per serial data bit:
+//pkt contents: ssr_cfg, checksum, display list (brightness, row map, col map)
+//                            uint8_t byte_even = (ctlr_ofs < 0)? (uint8_t)univ_types[x]: ((uint8_t*)(&this->encoders[x].cast->DispList[0].delay)[2 * ctlr_ofs + 0];
+//                            uint8_t byte_odd = (ctlr_ofs < 0)? this->encoders[x].cast->checksum: (this->encoders[x].cast->DispList[2 * ctlr_ofs + 1];
+                            uint8_t byte_even = !ctlr_ofs? (uint8_t)univ_types[x]: this->encoders[x].cast->DispList[2 * ctlr_ofs - 2];
+                            uint8_t byte_odd = !ctlr_ofs? this->encoders[x].cast->checksum ^ (uint8_t)univ_types[x]: this->encoders[x].cast->DispList[2 * ctlr_ofs - 1]; //CAUTION: incl univ type in checksum
+                            color_out = 0x800000 | (byte_even << (12+3)) | 0x800 | (byte_odd << 3); //NOTE: inverted start + stop bits; using 3 stop bits
+myprintf(14, BLUE_LT "even 0x%x, odd 0x%x -> color_out 0x%x" ENDCOLOR, byte_even, byte_odd, color_out);
+                            for (int bit3 = 0; bit3 < TXR_WIDTH; bit3 += 3, color_out <<= 1)
+                                if (color_out & 0x800000) //set data bit
+                                {
+                                    pxbuf32[yofs + bit3 + 0] |= xmask;
+                                    pxbuf32[yofs + bit3 + 1] |= xmask;
+                                    pxbuf32[yofs + bit3 + 2] |= xmask;
+                                }
+                            row_debug("chplex", yofs, xmask, x);
                             break;
+                        }
                         default:
+                            return_void(err(RED_LT "GpuCanvas.Encode: Unknown universe type[%d]: %d flags 0x%x" ENDCOLOR, x, univ_types[x] & TYPEBITS, univ_types[x] & ~TYPEBITS));
                             break;
                     }
             	}
+                row_debug("aggregate", yofs);
                 continue; //next row
             }
 #endif
 //just copy pixels as-is (dev/debug only):
+            bool rbswap = isRPi(); //R <-> G swap only matters for as-is display; for pivoted data, user can just swap I/O pins
             for (int x = 0, x3 = 0, xofs = 0; x < this->num_univ; ++x, x3 += 3, xofs += this->univ_len)
             {
                 uint32_t color = pixels? pixels[xofs + y]: fill;
@@ -1487,6 +1822,90 @@ private:
                 pxbuf32[yofs + x3 + 0] = pxbuf32[yofs + x3 + 1] = pxbuf32[yofs + x3 + 2] = color;
             }
         }
+        if (this->WantPivot) dump("canvas", pixels, elapsed(start));
+    }
+    void col_debug()
+    {
+return; //dump to file instead
+        char buf[12 * TXR_WIDTH / 3 + 1], *bp = buf;
+        for (int x = 0; x < TXR_WIDTH / 3; ++x)
+            bp += sprintf(bp, ", %d + 0x%x", this->univ_types[x] & TYPEBITS, this->univ_types[x] & ~TYPEBITS & 0xFF);
+        *bp = '\0';
+        myprintf(18, BLUE_LT "Encode: pivot? %d, utypes %s" ENDCOLOR, this->WantPivot, buf + 2);
+    }
+    void row_debug(const char* desc, int yofs, uint32_t xmask = 0, int col = -1)
+    {
+return; //dump to file instead
+        uint32_t* pxbuf32 = reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
+//        char buf[2 * TXR_WIDTH / 3 + 1], *bp = buf;
+        char buf[10 * TXR_WIDTH + 1], *bp = buf + (xmask? 1: 0);
+        for (int x = 0; x < TXR_WIDTH; ++x)
+            if (!xmask) bp += sprintf(bp, (pxbuf32[yofs + x] < 10)? ", %d": ", 0x%x", pxbuf32[yofs + x]); //show hex value (all bits) for each bit
+            else if (!(x % 3)) bp += sprintf(bp, " %d", ((pxbuf32[yofs + x + 0] & xmask)? 4: 0) + ((pxbuf32[yofs + x + 1] & xmask)? 2: 0) + ((pxbuf32[yofs + x + 2] & xmask)? 1: 0)); //show as 1 digit per bit
+        *bp = '\0';
+        myprintf(18, BLUE_LT "Encode: %s[%d] row[%d/%d]: %s" ENDCOLOR, desc, col, yofs / TXR_WIDTH, this->univ_len, buf + 2);
+    }
+    int dump_count; //= 0;
+    void dump(const char* desc, uint32_t* pixels, double duration)
+    {
+        if (!this->DumpFile.length()) return;
+        FILE* fp = fopen(this->DumpFile.c_str(), "a");
+        if (!fp) return;
+//        static std::mutex protect;
+//        std::lock_guard<std::mutex>(protect);
+//        protect.lock();
+
+        if (!dump_count++)
+        {
+            time_t now;
+            time(&now);
+            struct tm* tp = localtime(&now);
+            fprintf(fp, "-------- %d/%d/%.4d %d:%.2d:%.2d --------\n", tp->tm_mon + 1, tp->tm_mday, tp->tm_year + 1900, tp->tm_hour, tp->tm_min, tp->tm_sec);
+        }
+        fprintf(fp, "frame[%d] hex contents (fmt time %3.4f msec)\n", dump_count, 1000 * duration);
+
+        
+        for (int y = 0; y < this->univ_len; ++y)
+        {
+            char buf[10 * TXR_WIDTH + 1], *bp = buf; //, *last_nz = 0;
+            int is_more = 0;
+            for (int x = 0, xofs = 0; x < num_univ; ++x, xofs += this->univ_len)
+            {
+                bp += sprintf(bp, ", %6x", pixels? pixels[xofs + y] & 0xFFFFFF: 0);
+//                if (pixels[xofs + y]) last_nz = bp;
+                if (!pixels || is_more) continue;
+                for (int yy = y + 1; yy < this->univ_len; ++yy)
+                    if (pixels[xofs + yy] & 0xFFFFFF) { is_more = xofs + yy; break; }
+            }
+            *bp = '\0';
+//            if (!last_nz) continue;
+            fprintf(fp, "row-in*%d[%.2d/%d]: %s\n", dump_count, y, this->univ_len, buf + 2); //, is_more / this->univ_len, is_more % this->univ_len);
+            if (!is_more) break;
+        }
+
+        uint32_t xmask = 0x400000; //0x800000;
+        uint32_t* pxbuf32 = reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
+        for (int y = 0, yofs = 0; y < this->univ_len; ++y, yofs += TXR_WIDTH)
+        {
+            char chbuf[TXR_WIDTH / 3 + 1];
+            char buf[10 * TXR_WIDTH + 1], *bp = buf;
+            int is_more = 0;
+            for (int x = 0; x < TXR_WIDTH; ++x)
+            {
+                chbuf[x / 3] = (pxbuf32[yofs + x] & xmask)? '1': '0';
+                bp += sprintf(bp, ", %6x", pxbuf32[yofs + x] & 0xFFFFFF);
+                if (is_more) continue;
+                for (int yy = y + 1, yyofs = (y + 1) * TXR_WIDTH; yy < this->univ_len; ++yy, yyofs += TXR_WIDTH)
+                    if (pxbuf32[yyofs + x] & 0xFFFFFF) { is_more = yyofs + x; break; }
+            }
+            *bp = chbuf[TXR_WIDTH / 3] = '\0';
+            fprintf(fp, "pivot-out*%d[%.2d/%d]: %s; ch & 0x%x: %.1s %.8s %.4s %.8s %.3s\n", dump_count, y, this->univ_len, buf + 2, xmask, chbuf, chbuf + 1, chbuf + 9, chbuf + 13, chbuf + 21);
+            if (!is_more) break;
+        }
+        fflush(fp);
+//        protect.unlock();
+//TODO: leave file open and just flush
+        fclose(fp);
     }
 #if 0 //some sources say to only do it once
 public:
@@ -1605,16 +2024,18 @@ void errjs(v8::Isolate* iso, const char* errfmt, ...)
 }
 
 
-#if 0 //TODO: getter
+#if 0
 void Screen_js(v8::Local<v8::String>& name, const Nan::PropertyCallbackInfo<v8::Value>& info)
 {
 #else
 //void isRPi_js(const Nan::FunctionCallbackInfo<v8::Value>& args)
 //void isRPi_js(const v8::FunctionCallbackInfo<v8::Value>& args)
-NAN_METHOD(isRPi_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+//NAN_METHOD(isRPi_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(isRPi_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
+//    Nan::HandleScope scope;
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    if (info.Length()) return_void(errjs(iso, "isRPi: expected 0 args, got %d", info.Length()));
+//    if (info.Length()) return_void(errjs(iso, "isRPi: expected 0 args, got %d", info.Length()));
 
 //    v8::Local<v8::Boolean> retval = JS_BOOL(iso, isRPi()); //v8::Boolean::New(iso, isRPi());
 //    myprintf(3, "isRPi? %d" ENDCOLOR, isRPi());
@@ -1623,16 +2044,17 @@ NAN_METHOD(isRPi_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 #endif
 
 
-#if 0 //TODO: getter
+#if 0
 void Screen_js(v8::Local<v8::String>& name, const Nan::PropertyCallbackInfo<v8::Value>& info)
 {
 #else
 //int Screen_js() {}
 //void Screen_js(v8::Local<const v8::FunctionCallbackInfo<v8::Value>& info)
-NAN_METHOD(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+//NAN_METHOD(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    if (info.Length()) return_void(errjs(iso, "Screen: expected 0 args, got %d", info.Length()));
+//    if (info.Length()) return_void(errjs(iso, "Screen: expected 0 args, got %d", info.Length()));
 
     WH wh = isRPi()? Screen(): MaxFit(); //kludge: give max size caller can use, not actual screen size
 //    struct { int w, h; } wh = {Screen().w, Screen().h};
@@ -1653,20 +2075,29 @@ NAN_METHOD(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 #endif
 
 
-#if 0 //TODO: getter
+#if 0
 void UnivTypes_js(v8::Local<v8::String>& name, const Nan::PropertyCallbackInfo<v8::Value>& info)
 {
 #else
 //void UnivTypes_js(v8::Local<const v8::FunctionCallbackInfo<v8::Value>& info)
-NAN_METHOD(UnivTypes_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+//NAN_METHOD(UnivTypes_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(UnivTypes_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
 
     v8::Local<v8::Object> retval = v8::Object::New(iso);
 //TODO: make extensible:
+//    enum UniverseTypes { NONE = 0, WS281X = 1, PLAIN_SSR = 2, CHPLEX_SSR = 3, SPAREBIT = 0x10, TYPEBITS = 0xF, RGSWAP = 0x20, CHECKSUM = 0x40, POLARITY = 0x80}; 
+    retval->Set(JS_STR(iso, "NONE"), JS_INT(iso, GpuCanvas::UniverseTypes::NONE));
     retval->Set(JS_STR(iso, "WS281X"), JS_INT(iso, GpuCanvas::UniverseTypes::WS281X));
-    retval->Set(JS_STR(iso, "BARE_SSR"), JS_INT(iso, GpuCanvas::UniverseTypes::BARE_SSR));
+    retval->Set(JS_STR(iso, "PLAIN_SSR"), JS_INT(iso, GpuCanvas::UniverseTypes::PLAIN_SSR));
     retval->Set(JS_STR(iso, "CHPLEX_SSR"), JS_INT(iso, GpuCanvas::UniverseTypes::CHPLEX_SSR));
+    retval->Set(JS_STR(iso, "TYPEBITS"), JS_INT(iso, GpuCanvas::UniverseTypes::TYPEBITS));
+    retval->Set(JS_STR(iso, "RGSWAP"), JS_INT(iso, GpuCanvas::UniverseTypes::RGSWAP));
+    retval->Set(JS_STR(iso, "CHECKSUM"), JS_INT(iso, GpuCanvas::UniverseTypes::CHECKSUM));
+    retval->Set(JS_STR(iso, "POLARITY"), JS_INT(iso, GpuCanvas::UniverseTypes::POLARITY));
+    retval->Set(JS_STR(iso, "ACTIVE_LOW"), JS_INT(iso, GpuCanvas::UniverseTypes::ACTIVE_LOW));
+    retval->Set(JS_STR(iso, "ACTIVE_HIGH"), JS_INT(iso, GpuCanvas::UniverseTypes::ACTIVE_HIGH));
 //    Nan::Export(target, "UnivTypes", UnivTypes);
 //    CONST_thing("UnivTypes", UnivTypes);
     info.GetReturnValue().Set(retval);
@@ -1706,10 +2137,14 @@ private:
 //??    static NAN_PROPERTY_SETTER(set_pivot);
 //    static NAN_GETTER(get_pivot);
 //    static NAN_SETTER(set_pivot);
-    static NAN_METHOD(width_tofix); //TODO: change to accessor/getter; can't figure out how to do that
-    static NAN_METHOD(height_tofix); //TODO: change to accessor/getter; can't figure out how to do that
-    static NAN_METHOD(pivot_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that
-    static NAN_METHOD(UnivTypes_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that
+    static NAN_GETTER(width_getter);
+    static NAN_GETTER(height_getter);
+//    static NAN_METHOD(pivot_tofix);
+    static NAN_GETTER(pivot_getter);
+    static NAN_SETTER(pivot_setter);
+    static NAN_GETTER(DumpFile_getter);
+    static NAN_SETTER(DumpFile_setter);
+    static NAN_METHOD(UnivType_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that with 2 parameters
 //    static NAN_METHOD(release);
 //    static void paint(const Nan::FunctionCallbackInfo<v8::Value>& info);
 //private:
@@ -1737,16 +2172,20 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 
 //prototype:
 //    Nan::SetPrototypeMethod(ctor, "paint", save);// NODE_SET_PROTOTYPE_METHOD(ctor, "save", save);
-//    v8::Local<v8::ObjectTemplate> proto = ctor->PrototypeTemplate();
+    v8::Local<v8::ObjectTemplate> proto = ctor->PrototypeTemplate();
 //    Nan::SetPrototypeMethod(proto, "paint", paint);
 //    NODE_SET_PROTOTYPE_METHOD(ctor, "paint", GpuCanvas_js::paint);
     Nan::SetPrototypeMethod(ctor, "paint", paint);
     Nan::SetPrototypeMethod(ctor, "stats", stats);
-    Nan::SetPrototypeMethod(ctor, "width_tofix", width_tofix);
-    Nan::SetPrototypeMethod(ctor, "height_tofix", height_tofix);
+//    Nan::SetPrototypeMethod(ctor, "width", width_getter);
+//    Nan::SetPrototypeMethod(ctor, "height", height_getter);
+    Nan::SetAccessor(proto, JS_STR(iso, "width"), width_getter);
+    Nan::SetAccessor(proto, JS_STR(iso, "height"), height_getter);
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
-    Nan::SetPrototypeMethod(ctor, "pivot_tofix", pivot_tofix); //TODO: fix this
-    Nan::SetPrototypeMethod(ctor, "UnivTypes_tofix", UnivTypes_tofix); //TODO: fix this
+//    Nan::SetPrototypeMethod(ctor, "pivot_tofix", pivot_tofix);
+    Nan::SetAccessor(proto, JS_STR(iso, "pivot"), pivot_getter, pivot_setter);
+    Nan::SetAccessor(proto, JS_STR(iso, "DumpFile"), DumpFile_getter, DumpFile_setter);
+    Nan::SetPrototypeMethod(ctor, "UnivType_tofix", UnivType_tofix); //TODO: fix this
 //    Nan::SetPrototypeMethod(ctor, "release", GpuCanvas_js::release);
 //    Nan::SetAccessor(proto,JS_STR("width"), WidthGetter);
 //    Nan::SetAccessor(ctor, JS_STR(iso, "pivotprop"), GpuCanvas_js::getprop_pivot, GpuCanvas_js::setprop_pivot);
@@ -1860,50 +2299,86 @@ myprintf(1, "pivot is now = %d" ENDCOLOR, canvas->inner.WantPivot);
 
 #if 1
 //get width:
-void GpuCanvas_js::width_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//void GpuCanvas_js::width_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(GpuCanvas_js::width_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
 
     info.GetReturnValue().Set(JS_INT(iso, canvas->inner.width()));
 }
 
 //get height:
-void GpuCanvas_js::height_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+///void GpuCanvas_js::height_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(GpuCanvas_js::height_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
 
     info.GetReturnValue().Set(JS_INT(iso, canvas->inner.height()));
 }
 
 //get/set pivot flag:
-void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(GpuCanvas_js::pivot_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
 
     info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
-    if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue();
+//    if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue(); //set new value
 //if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
 //else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
+}
+NAN_SETTER(GpuCanvas_js::pivot_setter) //defines "info" and "value"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
+
+//    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
+    if (!value->IsUndefined()) canvas->inner.WantPivot = value->BooleanValue();
+}
+
+
+//get/set dump (debug) file:
+//void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(GpuCanvas_js::DumpFile_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
+
+    info.GetReturnValue().Set(JS_STR(iso, canvas->inner.DumpFile.c_str())); //return old value
+//    if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue(); //set new value
+//if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
+//else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
+}
+NAN_SETTER(GpuCanvas_js::DumpFile_setter) //defines "info" and "value"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
+
+//    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
+    v8::String::Utf8Value filename(!value->IsUndefined()? value->ToString(): JS_STR(iso, ""));
+    canvas->inner.DumpFile = *filename;
 }
 
 
 //get/set univ types:
-void GpuCanvas_js::UnivTypes_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+void GpuCanvas_js::UnivType_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
     GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
     int inx = info[0]->IntegerValue();
-    if ((inx < 0) || (inx >= canvas->inner.width())) return_void(errjs(iso, "GpuCanvas.UnivTypes: invalid inx %d (expected 0..%d)", inx, canvas->inner.width()));
+    if ((inx < 0) || (inx >= canvas->inner.width())) return_void(errjs(iso, "GpuCanvas.UnivType: invalid inx %d (expected 0..%d)", inx, canvas->inner.width()));
 
-    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.UnivTypes[inx])); //return old value
-    if (!info[1]->IsUndefined()) canvas->inner.UnivTypes[inx] = (GpuCanvas::UniverseTypes)info[1]->IntegerValue();
+//myprintf(1, "set univ type[%d] to %d? %d" ENDCOLOR, inx, !info[1]->IsUndefined()? (GpuCanvas::UniverseTypes)info[1]->IntegerValue(): GpuCanvas::UniverseTypes::INVALID, !info[1]->IsUndefined());
+    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.UnivType(inx, !info[1]->IsUndefined()? (GpuCanvas::UniverseTypes)info[1]->IntegerValue(): GpuCanvas::UniverseTypes::INVALID))); //return old type, optionally set new type
+//    if (!info[1]->IsUndefined()) canvas->inner.UnivType[inx] = (GpuCanvas::UniverseTypes)info[1]->IntegerValue();
 //if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
 //else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
 }
@@ -1911,8 +2386,8 @@ void GpuCanvas_js::UnivTypes_tofix(const Nan::FunctionCallbackInfo<v8::Value>& i
 
 
 //xfr/xfm Javascript array to GPU:
-void GpuCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 stack frame)
+//void GpuCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
+NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
     if (info.Length() != 1) return_void(errjs(iso, "GpuCanvas.paint: expected 1 param, got %d", info.Length()));
@@ -1940,7 +2415,7 @@ void GpuCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //    Nan::TypedArrayContents<uint32_t> pixels(info[0].As<v8::Uint32Array>());
 //https://github.com/casualjavascript/blog/issues/12
     v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
-    if (aryp->Length() != canvas->inner.num_univ * canvas->inner.univ_len) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->Length(), canvas->inner.num_univ * canvas->inner.univ_len));
+    if (aryp->Length() != canvas->inner.width() * canvas->inner.height()) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->Length(), canvas->inner.width() * canvas->inner.height()));
     void *data = aryp->Buffer()->GetContents().Data();
     uint32_t* pixels = static_cast<uint32_t*>(data);
 //myprintf(33, "js pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels[0], pixels[1], pixels[2]);
@@ -1994,9 +2469,15 @@ NAN_MODULE_INIT(exports_js) //defines target
     v8::Isolate* iso = target->GetIsolate(); //~vm heap
 //    NODE_SET_METHOD(exports, "isRPi", isRPi_js);
 //    NODE_SET_METHOD(exports, "Screen", Screen_js); //TODO: property instead of method
+#if 0
     Nan::Export(target, "isRPi_tofix", isRPi_js);
     Nan::Export(target, "Screen_tofix", Screen_js);
     Nan::Export(target, "UnivTypes_tofix", UnivTypes_js);
+#else
+    Nan::SetAccessor(target, JS_STR(iso, "isRPi"), isRPi_js); //, DirtySetter);
+    Nan::SetAccessor(target, JS_STR(iso, "Screen"), Screen_js);
+    Nan::SetAccessor(target, JS_STR(iso, "UnivTypes"), UnivTypes_js);
+#endif
 //    target->SetAccessor(JS_STR(iso, "Screen"), Screen_js);
     GpuCanvas_js::Init(target);
 //  Nan::SetAccessor(proto, Nan::New("fillColor").ToLocalChecked(), GetFillColor);
@@ -2128,12 +2609,14 @@ bool eventh(int max /*= INT_MAX*/)
 				myprintf(14, CYAN_LT "got key press 0x%x" ENDCOLOR, evt.key.keysym.sym);
 				if (evt.key.keysym.sym == SDLK_ESCAPE) return true; //quit = true; //return; //key codes defined in /usr/include/SDL2/SDL_keycode.h
 			}
+#if 0 //no worky (evt queue not polled by libuv)
             if (SDL.cast->evtid && (evt.type == SDL.cast->evtid)) //custom event: printf from bkg thread
             {
                 const char* buf = reinterpret_cast<const char*>(evt.user.data1);
                 fputs(buf, stderr);
                 delete[] buf;
             }
+#endif
 /*
             if (kbhit())
             {
@@ -2334,323 +2817,6 @@ uint32_t hsv2rgb(float h, float s, float v)
 //}
 
 
-///////////////////////////////////////////////////////////////////////////////
-////
-/// Chipiplexing encoder
-//
-
-#if 0
-	Private Sub ChipiplexedEvent(ByRef channelValues As Byte())
-		on error goto errh
-		If channelValues.Length <> Me.m_numch Then Throw New Exception(String.Format("event received {0} channels but configured for {1}", channelValues.Length, Me.m_numch))
-		Me.total_inlen += channelValues.Length
-		Me.total_evts += 1
-''TODO: show more or less data
-		If Me.m_trace Then LogMsg(String.Format("Chipiplex[{0}] {1} bytes in: ", Me.total_evts, channelValues.Length) & DumpHex(channelValues, channelValues.Length, 80))
-''format output buf for each PIC (groups of up to 56 chipiplexed channels):
-		Dim buflen As Integer, protolen As Integer 
-		Dim overflow_retry As Integer, overflow_adjust As Integer, merge_retry As Integer 
-		Dim brlevel As Integer, brinx As Integer, row As Integer, col As Integer 
-		Dim i As Integer
-		Dim pic As Integer
-''NOTE to style critics: I hate line numbers but I also hate cluttering up source code with a lot of state/location info
-''I''m only using line#s because they are the most compact way to show the location of errors (kinda like C++''s __LINE__ macro), and there is no additional overhead
-12:
-''send out data to PICs in *reverse* order (farthest PICs first, closest PICs last):
-''this will allow downstream PICs to get their data earlier and start processing while closer PICs are getting their data
-''if we send data to closer PICs first, they will have processed all their channels before downstream PICs even get theirs, which could lead to partially refreshed frames
-''at 115k baud, 100 chars take ~ 8.7 mec, which is > 1 AC half-cycle at 60 Hz; seems like this leads to slight sync problems
-''TODO: make forward vs. reverse processing a config option
-		For pic = Me.m_numch - (Me.m_numch - 1) Mod 56 To 1 Step -56 ''TODO: config #channels per PIC?
-			Dim status As String = "" ''show special processing flags in trace file
-			Dim numbr As Integer = 0 ''#brightness levels
-			Dim numrows As Integer = 0, numcols As Integer ''#rows, columns occupied for this frame
-			For i = 0 To 255 ''initialize brightness level index to all empty
-				Me.m_brindex(i) = 0 ''empty
-			Next i
-14:
-			Dim ch As Integer
-			For ch = pic To pic+55 ''each channel for this PIC (8*7 = 56 for a regular Renard PIC); 1-based
-				If ch > Me.m_numch Then Exit For
-				brlevel = channelValues(ch-1)
-16:
-				If brlevel < Me.m_minbright Then ''don''t need to send this channel to controller (it''s off)
-					If brlevel = 0 then
-						Me.total_realnulls += 1
-					Else
-						Me.total_nearnulls += 1
-					End If
-				Else ''need to send this channel to the controller (it''s not off)
-18:
-					Dim overflow_limit As Integer = Me.m_closeness ''allow overflow into this range of values
-					If brlevel >= Me.m_maxbright Then ''treat as full on
-						If brlevel < 255 Then Me.total_nearfulls += 1
-						overflow_limit += Me.m_fullbright - Me.m_maxbright ''at full-on, expand the allowable overflow range
-						brlevel = Me.m_fullbright ''255
-					End If
-					row = (ch - pic)\7 ''row# relative to this PIC (0..7); do not round up
-					col = (ch - pic) Mod 7 ''column# relative to this row
-					If col >= row Then col += 1 ''skip over row address line (chipiplexing matrix excludes diagonal row/column down the middle)
-#If BOARD1_INCOMPAT Then ''whoops; wired the pins differently between boards; rotate them here rather than messing with channel reordering in Vixen
-''					Dim svch As Integer = ch - pic: ch = 0
-''					If svch And &h80 Then ch += &h10
-''					If svch And &h40 Then ch += 1
-''					If svch And &h20 Then ch += &h40
-''					If svch And &h10 Then ch += &h20
-''					If svch And 8 Then ch += &h80
-''					If svch And 4 Then ch += 8
-''					If svch And 2 Then ch += 4
-''					If svch And 1 Then ch += 2
-''					ch += pic
-					Select Case row
-						Case 0: row = 4''3
-						Case 1: row = 2''7
-						Case 2: row = 3''1
-						Case 3: row = 0''2
-						Case 4: row = 5''0
-						Case 5: row = 6''4
-						Case 6: row = 7''5
-						Case 7: row = 1''6
-					End Select
-					Select Case col
-						Case 0: col = 4''3
-						Case 1: col = 2''7
-						Case 2: col = 3''1
-						Case 3: col = 0''2
-						Case 4: col = 5''0
-						Case 5: col = 6''4
-						Case 6: col = 7''5
-						Case 7: col = 1''6
-					End Select
-#End If
-20:
-					For overflow_retry = 0 To 2 * overflow_limit
-						If (overflow_retry And 1) = 0 Then ''try next higher (brighter) level
-							overflow_adjust = brlevel + overflow_retry\2 ''do not round up
-							If overflow_adjust > Me.m_fullbright Then Continue For
-						Else ''try next lower (dimmer) value
-							overflow_adjust = brlevel - overflow_retry\2 ''do not round up
-							If overflow_adjust < Me.m_minbright Then Continue For
-						End If
-22:
-						brinx = Me.m_brindex(overflow_adjust)
-						If brinx = 0 Then ''allocate a new brightness level
-							If Me.IsRenardByte(overflow_adjust) Then Me.num_avoids += 1: status &= "@": Continue For ''avoid special protocol chars
-							numbr += 1: brinx = numbr ''entry 0 is used as an empty; skip it
-							Me.m_brindex(overflow_adjust) = brinx ''indexing by brightness level automatically sorts them by brightness
-''							Me.m_levels(brinx).level = brlevel ''set brightness level for this entry
-							Me.m_rowindex(brinx) = 0 ''no rows yet for this brightness level
-''							Me.m_levels(brinx).numrows = 0
-							For i = 0 To 7 ''no columns yet for this brightness level
-								Me.m_columns(brinx, i) = 0
-							Next i
-						End If
-24:
-						If Me.m_columns(brinx, row) = 0 Then ''allocate a new row
-''							If Me.m_levels(brinx).numrows >= Me.m_maxrpl Then Continue For ''this level is full; try another one that is close (lossy dimming)
-''enforce maxRPL here to avoid over-fillings brightness levels; lossy dimming will degrade with multiple full levels near each other
-							If Me.NumBits(Me.m_rowindex(brinx)) >= Me.m_maxrpl Then Continue For ''this level is full; try another one that is close (lossy dimming)
-''maxRPL can''t be more than 2 in this version, so we don''t need to check for reserved bytes here (the only one that matters has 7 bits on)
-''							If Me.IsRenardByte(overflow_adjust) Then Me.num_avoids += 1: status &= "@": Continue For ''avoid special protocol chars
-							Me.m_rowindex(brinx) = Me.m_rowindex(brinx) Or 1<<(7 - row)
-''							Me.m_levels(brinx).numrows += 1
-							numrows += 1
-						End If
-						Dim newcols As Byte = Me.m_columns(brinx, row) Or 1<<(7 - col)
-						If Me.IsRenardByte(newcols) Then Me.num_avoids += 1: status &= "@": Continue For ''avoid special protocol chars; treat as full row
-						Me.m_columns(brinx, row) = newcols ''Me.m_columns(brinx, row) Or 1<<(7 - col)
-						If overflow_retry <> 0 Then Me.total_rowsoverflowed += 1: status &= "*"
-						Exit For
-					Next overflow_retry
-26:
-					If overflow_retry > 2 * overflow_limit Then
-						If Me.m_nodiscard Then Throw New Exception(String.Format("Unable to overflow full row after {0} tries.", 2 * overflow_limit))
-						Me.total_rowsdropped += 1
-						status &= "-"
-					End If
-				End If
-			Next ch
-28:
-#If False Then ''obsolete merge/reduction code
-''			Dim brlimit As Integer = Me.m_maxbright + 8\Me.m_maxrpl - 1 ''allow for overflow of max bright level
-''			If brlimit > 255 Then brlimit = 255 ''don''t overshoot real top end of brightness range
-			For merge_retry = 0 To Me.m_closeness
-				If 2+2 + 2*numbr + numrows <= Me.m_outbuf.Length Then Exit For ''no need to merge brightness levels
-				If merge_retry = 0 Then Continue For ''dummy loop entry to perform length check first time
-				For brlevel = Me.m_minbright To Me.m_fullbright 
-					Dim tobrinx As Byte = Me.m_brindex(brlevel)
-					If tobrinx = 0 Then Continue For
-					Dim otherlevel As Integer 
-					Dim mergelimit As Integer = brlevel + merge_retry
-					if brlevel >= Me.m_maxbright Then mergelimit = 255
-30:
-					For otherlevel = brlevel - merge_retry To merge_limit Step 2*merge_retry
-						If (otherlevel < Me.m_minbright) Or (otherlevel > brlimit) Then Continue For
-						Dim frombrinx As Byte = Me.m_brindex(otherlevel)
-						If (frombrinx = 0) or (Me.numbits(Me.m_rowindex(tobrinx) And Me.m_rowindex(frombrinx)) = 0) Then continue for ''can''t save some space by coalescing
-						numrows -= Me.numbits(Me.m_rowindex(tobrinx) And Me.m_rowindex(frombrinx))
-						Me.m_rowindex(tobrinx) = Me.m_rowindex(tobrinx) Or Me.m_rowindex(frombrinx) ''merge row index
-						For row = 0 To 7 ''merge columns
-							Me.m_columns(tobrinx, row) = Me.m_columns(tobrinx, row) Or Me.m_columns(frombrinx, row)
-						Next row
-32:
-						Me.m_brindex(otherlevel) = 0 ''hide entry so it won''t be used again
-						numbr -= 1
-						Me.total_levelsmerged += 1
-						status &= "^"
-						If 2+2 + 2*numbr + numrows <= Me.m_outbuf.Length Then Exit For ''no need to coalesce more brightness levels
-						Continue For
-					Next otherlevel
-				Next brlevel
-			Next merge_retry
-34:
-			If merge_retry > Me.m_closeness Then
-				If Me.m_nodiscard Then Throw New Exception(String.Format("Unable to merge brightness level after {0} tries.", 2*Me.m_closeness))
-				Me.total_levelsdropped += 1
-				status &= "X"
-			End If
-#End If
-			Dim prevlevel As Integer = 0, prevbrinx As Integer 
-''TODO: use MaxData length here
-			While 3+2 + 2*numbr + numrows > Me.m_outbuf.Length ''need to merge brightness levels
-''this is expensive, so config params should be set to try to avoid it
-''TODO: this could be smarter; prioritize and then merge rows that are closest or sparsest first
-				For brlevel = Me.m_minbright To Me.m_fullbright 
-					brinx = Me.m_brindex(brlevel)
-					If brinx = 0 Then Continue For
-					If prevlevel < 256 Then ''merge row with previous to save space
-30:
-						If prevlevel = 0 Then prevlevel = brlevel: prevbrinx = brinx: Continue For ''need 2 levels to compare
-						If (prevlevel + Me.m_closeness < brlevel) And (prevlevel + Me.m_closeness < Me.m_maxbright) Then Continue For ''too far apart to merge
-						Dim newrows As Byte = Me.m_rowindex(brinx) Or Me.m_rowindex(prevbrinx) ''merge row index
-						If Me.NumBits(newrows) > Me.m_maxrpl Then
-''							If Not String.IsNullOrEmpty(Me.m_logfile) Then LogMsg("row " & brlevel & "->" & brinx & " full; can''t merge")
-							Continue For ''can''t merge; row is already full
-						End If
-						If Me.IsRenardByte(newrows) Then Me.num_avoids += 1: status &= "@": Continue For ''can''t merge (would general special protocol chars)
-						Dim newcols(8 - 1) As Byte
-						For row = 0 To 7 ''merge columns
-							newcols(row) = Me.m_columns(brinx, row) Or Me.m_columns(prevbrinx, row)
-							If Me.IsRenardByte(newcols(row)) Then Me.num_avoids += 1: status &= "@": Exit For ''can''t merge (would general special protocol chars)
-						Next row
-						If row <= 7 Then Continue For ''can''t merge (would general special protocol chars)
-						numrows -= Me.NumBits(Me.m_rowindex(brinx) And Me.m_rowindex(prevbrinx))
-						Me.m_rowindex(brinx) = newrows ''Me.m_rowindex(brinx) Or Me.m_rowindex(prevbrinx) ''merge row index
-						For row = 0 To 7 ''merge columns
-							Me.m_columns(brinx, row) = newcols(row) ''Me.m_columns(brinx, row) Or Me.m_columns(prevbrinx, row)
-						Next row
-						If Me.m_trace Then LogMsg(String.Format("merged level {0} with {1}", prevlevel, brlevel))
-						Me.m_brindex(prevlevel) = 0 ''hide this entry so it won''t be used again
-						Me.total_levelsmerged += 1
-						status &= "^"
-					Else ''last try; just drop the row
-						If Me.m_trace Then LogMsg(String.Format("dropped level {0}", brlevel))
-						Me.m_brindex(brlevel) = 0 ''hide this entry so it won''t be used again
-						numrows -= Me.NumBits(Me.m_rowindex(brinx))
-						Me.total_levelsdropped += 1
-						status &= "!"
-					End If
-32:
-					numbr -= 1
-					If 3+2 + 2*numbr + numrows <= Me.m_outbuf.Length Then Exit While ''no need to merge/drop more brightness levels
-				Next brlevel
-				If Me.m_nodiscard Then Throw New Exception(String.Format("Unable to merge brightness level after {0} tries.", 2*Me.m_closeness))
-				prevlevel = 256 ''couldn''t find rows to merge, so start dropping them
-34:
-			End While
-''TODO: resend data after a while even if it hasn''t changed?
-''no, unless dup:			If numbr < 1 Then Continue For ''no channels to send this PIC
-''format data to send to PIC:
-''TODO: send more than 1 SYNC the first time, in case baud rate not yet selected
-			buflen = 0
-			protolen = 0
-''			If pic = 1 Then ''only needed for first PIC in chain?  TODO
-				Me.m_outbuf(buflen) = Renard_SyncByte: buflen += 1 ''&h7E
-				protolen += 1
-''			End If
-			Me.m_outbuf(buflen) = Renard_CmdAdrsByte + pic\56: buflen += 1 ''&h80
-''			Me.m_outbuf(buflen) = Renard_PadByte: buflen += 1 ''&h7D ''TODO?
-			Me.m_outbuf(buflen) = Me.m_cfg: buflen += 1 ''config byte comes first
-			protolen += 2
-			For brlevel = Me.m_fullbright To Me.m_minbright Step -1 ''send out brightess levels in reverse order (brightest first)
-36:
-				brinx = Me.m_brindex(brlevel)
-				If brinx = 0 Then Continue For
-38:
-				If (brlevel = 0) Or (Me.m_rowindex(brinx) = 0) Then SentBadByte(IIf(brlevel = 0, brlevel, Me.m_rowindex(brinx)), buflen, pic\56) ''paranoid
-				If Me.IsRenardByte(brlevel) Then SentBadByte(brlevel, buflen, pic\56) ''paranoid
-				If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = brlevel ''send brightness level; avoid outbuf overflow
-				buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
-				If Me.IsRenardByte(Me.m_rowindex(brinx)) Then SentBadByte(Me.m_rowindex(brinx), buflen, pic\56) ''paranoid
-				If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = Me.m_rowindex(brinx) ''send row index byte; avoid outbuf overflow
-				buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
-40:
-				For row = 0 To 7
-''					If buflen >= m_outbuf.Length Then LogMsg("ERROR: outbuf overflow at row " & row & " of brinx " & brinx & ", brlevel " & brlevel & ", thought I needed 4+2*" & numbr & "+" & numrows & "=" & (2+2 + 2*numbr + numrows) & ", outbuf so far is " & buflen & ":" & DumpHex(Me.m_outbuf, buflen, 80))
-''					If Not String.IsNullOrEmpty(Me.m_logfile) Then LogMsg("err 9 debug: brinx " & brinx & ", row " & row & ", buflen " & buflen)
-					If Me.m_columns(brinx, row) <> 0 Then ''send columns for this row
-						If Me.IsRenardByte(Me.m_columns(brinx, row)) Then SentBadByte(Me.m_columns(brinx, row), buflen, pic\56) ''paranoid
-						If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = Me.m_columns(brinx, row) ''avoid outbuf overflow
-						buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
-					End If
-					numcols += Me.NumBits(Me.m_columns(brinx, row))
-				Next row
-			Next brlevel
-42:
-			If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = 0: ''end of list indicator; avoid outbuf overflow
-			buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
-''			If pic = 1 Then ''last packet; send sync to kick out of packet receive loop (to allow console/debug commands); send this on all, in case last one is dropped as a dup
-''TODO: trailing Sync might not be needed any more
-				If buflen < m_outbuf.Length Then Me.m_outbuf(buflen) = Renard_SyncByte: ''&h7E; avoid outbuf overflow
-				buflen += 1 ''maintain count, even if outbuf overflows (so we know how bad is was)
-				protolen += 1
-''			End If
-			If buflen > m_outbuf.Length Then ''outbuf overflowed; this is a bug if it happens
-				Throw New Exception(String.Format("ERROR: outbuf overflow, thought I needed 5+2*{0}+{1}={2}, but really needed {3}:", numbr, numrows, 3+2 + 2*numbr + numrows, buflen) & DumpHex(Me.m_outbuf, Math.Min(buflen, Me.m_outbuf.Length), 80))
-			End If
-			If (pic\56 = Me.m_bufdedup) And (buflen = Me.m_prevbuflen) Then ''compare current buffer to previous buffer
-				For i = 1 To buflen
-					If Me.m_outbuf(i-1) <> Me.m_prevbuf(i-1) Then Exit For ''need to send output buffer
-				Next i
-				If i > buflen Then ''outbuf was same as last time; skip it
-					Me.num_dups += 1
-					If Me.m_trace Then LogMsg(String.Format("Chipiplex[{0}]= duplicate buffer on {1} discarded", Me.total_evts, Me.m_bufdedup))
-					Continue For
-				End If
-			End If
-			Me.total_outlen += buflen
-			Me.protocol_outlen += protolen
-			Me.total_levels += numbr
-			Me.total_rows += numrows
-			Me.total_columns += numcols
-			If (numbr > 0) And (numbr < Me.min_levels) Then Me.min_levels = numbr
-			If numbr > Me.max_levels Then Me.max_levels = numbr
-			If (numrows > 0) And (numrows < Me.min_rows) Then Me.min_rows = numrows
-			If numrows > Me.max_rows Then Me.max_rows = numrows
-			If (numcols > 0) And (numcols < Me.min_columns) Then Me.min_columns = numcols
-			If numcols > Me.max_columns Then Me.max_columns = numcols
-			If (buflen > 0) And (buflen < Me.min_outlen) Then Me.min_outlen = buflen
-			If buflen > Me.max_outlen Then Me.max_outlen = buflen
-44:
-''TODO: append multiple bufs together, and only write once
-			Me.m_selectedPort.Write(Me.m_outbuf, 0, buflen)
-			If pic\56 = Me.m_bufdedup Then ''save current buffer to compare to next time
-				For i = 1 To buflen 
-					Me.m_prevbuf(i-1) = Me.m_outbuf(i-1)
-				Next i
-				Me.m_prevbuflen = buflen
-			End If
-46:
-			If Me.m_trace Then LogMsg(String.Format("Chipiplex[{0}]{1} {2}+{3} bytes out: ", Me.total_evts, status, protolen, buflen - protolen) & DumpHex(Me.m_outbuf, buflen, 80))
-		Next pic
-		Exit Sub
-	errh:
-		ReportError("ChipiplexedEvent")
-	End Sub
-#End If
-#endif
-
-
 ////////////////////////////////////////////////////////////////////////////////
 ////
 /// Misc helper functions
@@ -2669,7 +2835,7 @@ void* errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...)
         if (!reason || !reason[0]) reason = "(no details)";
         details = ": "; details += reason; //need to save err msg in case MessageBox error below changes it
     }
-    char fmtbuf[500];
+    char fmtbuf[600];
     va_list args;
     va_start(args, fmt);
     size_t needlen = vsnprintf(fmtbuf, sizeof(fmtbuf), fmt, args);
@@ -2706,9 +2872,10 @@ void* errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...)
         int buflen = needlen + details.length() + tooshort.tellp() + /*strlen(shortname)*/ 2 + 2+1;
         char* fwdbuf = new char[buflen];
         snprintf(fwdbuf, buflen, "%.*s%s%.*s%s!%d%s\n", (int)srcline_ofs, fmtbuf, details.c_str(), (int)(lastcolor_ofs - srcline_ofs), fmtbuf + srcline_ofs, tooshort.str().c_str(), /*shortname*/ Thread::isBkgThread(), fmtbuf + lastcolor_ofs);
-#ifdef BUILDING_NODE_EXTENSION //set by node-gyp
- #pragma message("TODO: node console.log")
-#else //stand-alone (XWindows)
+#if 0
+//#ifdef BUILDING_NODE_EXTENSION //set by node-gyp
+// #pragma message("TODO: node console.log")
+//#else //stand-alone (XWindows)
         if (SDL.cast->evtid) //fwd to fg thread
         {
             SDL_Event evt = {0};
@@ -2719,9 +2886,13 @@ void* errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...)
             if (OK(SDL_PushEvent(&evt))) { fprintf(stdlog(), "sent to evt que ok" ENDCOLOR); return NULL; }
             fprintf(stdlog(), "failed to send to evt que: %s" ENDCOLOR, SDL_GetError());
         }
-#endif
+//        fprintf(stdlog(), "nowhere to send" ENDCOLOR);
+//#endif
 //        dest = stdexc;
         return NULL; //nowhere to send; just discard
+#else
+        Thread::enque(fwdbuf); //send to fg thread to write to console
+#endif
     }
     else
     {

@@ -14,6 +14,7 @@
 require('colors').enabled = true; //for console output colors
 const {debug} = require('./shared/debug');
 const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
+
 const {blocking, wait, getchar} = require('blocking-style');
 //const {Screen} = require('./shared/screen');
 //const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
@@ -21,7 +22,7 @@ const {blocking, wait, getchar} = require('blocking-style');
 //display settings:
 const FPS = 60; //how fast to run in auto mode (performance testing)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
-const UNIV_LEN = 24; //Screen.height; //Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+const UNIV_LEN = 60; //24/6; //Screen.height; //Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
 debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
@@ -60,25 +61,30 @@ blocking(function*()
 {
     var canvas = new GpuCanvas("One-by-one", NUM_UNIV, UNIV_LEN, OPTS);
 //console.log("canvas", Object.keys(canvas)); //, Object.keys(canvas.prototype));
-    canvas.UnivTypes(5, UnivTypes.WS281X);
-    canvas.UnivTypes(7, UnivTypes.BARE_SSR);
-    canvas.UnivTypes(9, UnivTypes.CHPLEX_SSR);
-var buf = [];
-    for (var i = 0; i < canvas.width; ++i) buf.push(canvas.UnivTypes(i));
-console.log("univ types: ", buf.join(","));
+//    canvas.UnivType(5, UnivTypes.WS281X);
+//    canvas.UnivType(7, UnivTypes.PLAIN_SSR);
+    canvas.UnivType(1, UnivTypes.CHPLEX_SSR); //| UnivTypes.CHECKSUM | UnivTypes.ACTIVE_HIGH);
+    canvas.DumpFile = "dump.log";
+//    canvas.UnivType(1, UnivTypes.CHPLEX_SSR); //| UnivTypes.CHECKSUM | UnivTypes.ACTIVE_HIGH);
+//console.log("hello");
+//var buf = [];
+//    for (var i = 0; i < canvas.width; ++i) buf.push(canvas.UnivType(i));
+//console.log("univ types: ", buf.join(","));
 
-    if (OPTS.SHOW_INTRO && !Screen.gpio) //show title screen for 10 sec
+    if (OPTS.SHOW_INTRO && !Screen.gpio) //show title image for 10 sec
     {
+//        canvas.fill(MAGENTA);
         canvas.load(__dirname + "/images/one-by-one24x24-5x5.png");
         canvas.duration = OPTS.SHOW_INTRO; //set progress bar limit
         canvas.push.WS281X_FMT(false); //turn off formatting while showing bitmap (debug)
-        for (canvas.elapsed = 0; canvas.elapsed < canvas.duration; ++canvas.elapsed) //update progress bar while waiting
+        for (canvas.elapsed = 0; canvas.elapsed <= canvas.duration; ++canvas.elapsed) //update progress bar while waiting
         {
-if (!(canvas.elapsed % 4)) canvas.SHOW_PROGRESS = !canvas.SHOW_PROGRESS;
+//if (!(canvas.elapsed % 4)) canvas.SHOW_PROGRESS = !canvas.SHOW_PROGRESS;
             canvas.paint(); //this only needed to update progress bar
-            yield wait(1);
+            if (canvas.elapsed < canvas.duration) yield wait(1); //don't need to wait final time, just paint
         }
-        canvas.pop.WS281X_FMT(); //restore to default value
+//        canvas.fill(BLACK);
+        canvas.pop.WS281X_FMT(); //restore previous value
     }
 
     console.error(`begin, turn on ${canvas.width} x ${canvas.height} = ${canvas.width * canvas.height} pixels 1 by 1`.green_lt);

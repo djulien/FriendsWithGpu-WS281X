@@ -113,7 +113,8 @@ void _sdcc_gsinit_startup(void)
 //__sfr / __sfr16 / __sfr32 / __sbit
 #define BANK0  __data //__near
 #define BANK1  __data //__near
-#define NONBANKED  __xdata
+//TODO: sizes > 1
+#define NONBANKED  AT_NONBANKED(__COUNTER__) //__xdata
 
 #define PAGE0  //TODO: what goes here?
 #define PAGE1

@@ -9,7 +9,7 @@ require('colors').enabled = true; //for console output colors
 const {inherits} = require('util');
 const bindings = require('bindings');
 //const {debug} = require('./shared/debug');
-const {Screen, GpuCanvas, UnivTypes} = fixup(bindings('gpu-canvas'));
+const {Screen, GpuCanvas, UnivTypes} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
 
 module.exports.Screen = Screen;
 module.exports.UnivTypes = UnivTypes;
@@ -107,10 +107,14 @@ new Proxy(function(){},
         var THIS = new GpuCanvas(title, width, height, !!opts.WS281X_FMT); //initialize base class
 //        super(title, width, height, !!opts.WS281X_FMT); //initialize base class
 //        etters(Object.getPrototypeOf(this)); //kludge: can't get it to work within fixup; do it here instead
-        etters(THIS); //kludge: can't get it to work within fixup; do it here instead
+//        etters(THIS); //kludge: can't get it to work within fixup; do it here instead
         pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
-        if (opts.UNIV_TYPE) for (var i = 0; i < THIS.width; ++i) THIS.UnivTypes_tofix(i, opts.UNIV_TYPE);
+//console.log("initial props:", THIS.WS281X_FMT, THIS.SHOW_PROGRESS, THIS.UNIV_TYPE);
+//if (THIS.UNIV_TYPE) console.log("set all unv type to", THIS.UNIV_TYPE);
+        THIS.UnivType = THIS.UnivType_tofix;
+        if (THIS.UNIV_TYPE) for (var i = 0; i < THIS.width; ++i) THIS.UnivType(i, THIS.UNIV_TYPE);
 
+//keep pixel data local to reduce #API calls into Nan/v8
         THIS.pixels = new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
         THIS.pixels.fill(BLACK); //start with all pixels dark
         THIS.elapsed = 0;
@@ -120,21 +124,23 @@ new Proxy(function(){},
 //};
 //inherits(GpuCanvas_shim, GpuCanvas);
 
+/*
 //get/set universe types:
 //TODO: use a special pixel() address instead?  (ie, y == 0x5554)
 //GpuCanvas_shim.prototype.pixel = function
-        THIS.UnivTypes = function
-    UnivTypes(x, newtype)
+        THIS.UnivType = function
+    UnivType(x, newtype)
     {
 //console.log("UnivType(%d, %d): %d".blue_lt, x, newType, this);
         var clip = ((x < 0) || (x >= this.width)); //throw "Index of out range";
         if (arguments.length > 1) //set type
         {
-            if (!clip) THIS.UnivTypes_tofix(x, newtype);
+            if (!clip) THIS.UnivType(x, newtype);
             return this; //fluent
         }
-        return !clip? THIS.UnivTypes_tofix(x): 0;
+        return !clip? THIS.UnivType(x): 0;
     } //.bind(this);
+*/
 
 //get/set individual pixel:
 //GpuCanvas_shim.prototype.pixel = function
@@ -197,7 +203,7 @@ new Proxy(function(){},
         THIS.paint = function
     paint(alt_pixels)
     {
-//console.log(`paint: w ${this.width}, h ${this.height}, show progress? ${this.SHOW_PROGRESS} ${opts.SHOW_PROGRESS}, elapsed ${this.elapsed || 0}, duration ${this.duration}, x-limit %d`, Math.round(this.width * (this.elapsed || 0) / this.duration));
+//console.log(`paint: ${this.width} x ${this.height}, progress? ${this.SHOW_PROGRESS}, elapsed ${this.elapsed || 0}, duration ${this.duration}, x-limit %d %d`, this.width * (this.elapsed || 0) / this.duration, Math.round(this.width * (this.elapsed || 0) / this.duration));
         if (!alt_pixels) //don't mess up caller's data
         if (this.SHOW_PROGRESS && this.duration) //kludge: use last row of pixels to display progress bar
             for (var x = 0; x < Math.round(this.width * (this.elapsed || 0) / this.duration); ++x)
@@ -258,10 +264,25 @@ function pushable(props)
 //use push, pop namespace to avoid conflict with getters, setters:
     this.push = {};
     this.pop = {};
+    if (!Array.prototype.top) Object.defineProperty(Array.prototype, "top",
+    {
+        get: function()
+        {
+            if (!this.length) throw "Pushable stack underflow".red_lt;
+            return this[this.length - 1]; //.slice(-1)[0];
+        },
+        set: function(newval)
+        {
+            if (!this.length) throw "Pushable stack underflow".red_lt;
+            this[this.length - 1] = newval;
+        },
+    });
 //CAUTION: use let + const to force name + prop to be unique each time; see http://stackoverflow.com/questions/750486/javascript-closure-inside-loops-simple-practical-example
-    for (let name in props) //NOTE: need "let" here to force correct scope
+//console.log("pushables", JSON.stringify(props));
+    for (let name in props) //CAUTION: need "let" here to force correct scope
     {
         const prop = this._pushable[name] = [props[name]]; //create stack with initial value
+//console.log("pushable %s = %s", name, props[name]);
 //set up getters, setters:
 //ignore underflow; let caller get error
         Object.defineProperty(this, name,
@@ -278,7 +299,7 @@ function pushable(props)
     function update(name)
     {
         if (name == "WS281X_FMT") this.pivot = this[name];
-//console.log("update %s = %s %s", name, this[name], this.pivot);
+//console.log("update %s = %s", name, this[name]);
         this.paint(); //kludge: handle var changes upstream
     }
 }
@@ -289,6 +310,7 @@ function pushable(props)
 /// Fixups; TODO: below code should be moved back into C++ instead of doing it here
 //
 
+/*
 //fix up methods exposed from C++ addon:
 function fixup(imports)
 {
@@ -324,6 +346,7 @@ function etters(clsproto)
         },
     });
 }
+*/
 
 
 //EOF

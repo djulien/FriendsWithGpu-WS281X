@@ -67,7 +67,7 @@ $(TARGET:.hex=.asm): $(@F:.asm=.c)
 	@ echo -e "$(BLUE)compile to asm...$(NORMAL)"
 #	$(SYNTAX_FIXUP) < $(@F:.asm=.c) > $(@:.asm=.c)
 	- $(CC) -S -V $(CFLAGS) $(INCLUDES) $(@F:.asm=.c) -o $(@:.asm=-ugly.asm) 2>$(@:.asm=.out)
-#apply colors, consolidate different message types:
+#consolidate messages by type/color:
 #explicit colors:
 	@ echo -ne "$(RED)"; cat $(@:.asm=.out) | grep -ie "RED_MSG"; echo -ne "$(NORMAL)"
 	@ echo -ne "$(YELLOW)"; cat $(@:.asm=.out) | grep -ie "YELLOW_MSG"; echo -ne "$(NORMAL)"
@@ -87,10 +87,10 @@ $(TARGET:.hex=.asm): $(@F:.asm=.c)
 #echo -e "$(sed -e 's/OK/\\033[0;32mOK\\033[0m/g' test_results.txt)"
 #apply asm fixups then run thru mpasm:
 	@ echo -e "$(BLUE)asm fixup...$(NORMAL)"
-	scripts/asm-fixup-SDCC.js < $(@:.asm=-ugly.asm) > $(@)
+	scripts/asm-fixup-SDCC.js < $(@:.asm=-ugly.asm) > $(@:.asm=-fixup.asm)
 #make a cleanrt version for debug/readability:
 	@ echo -e "$(BLUE)asm clean-up...$(NORMAL)"
-	cat $(@) | grep -v "^\s*;" >$(@:.asm=-clean.asm)
+	cat $(@:.asm=-fixup.asm) | grep -v "^\s*;" | sed 's/;;.*$$//' >$(@)
 
 too_complicated:
 #	echo src $(@F:.hex=.c)

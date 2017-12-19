@@ -128,12 +128,9 @@ volatile BANK0 uint8_t Timer0_Preset;
     debug(); //incl prev debug first
     optreg_debug = MY_OPTIONS(CLOCK_FREQ / PLL);
     tmr0_dimslice_debug = DIMSLICE;
-    tmr0_preset_50dc_debug = TMR0_PRESET_DC50Hz; //should be ~ 100 (156 * 0.5 usec * 50 Hz *
- 256 ~= 1 sec
-    tmr0_preset_50ac_debug = TMR0_PRESET_AC50Hz; //should be ~ 178 (78 * 0.5 usec * 2*50 Hz *
- 256 ~= 1 sec
-    tmr0_preset_60ac_debug = TMR0_PRESET_AC60Hz; //should be ~ 191 (65 * 0.5 usec * 2*60 Hz *
- 256 ~= 1 sec
+    tmr0_preset_50dc_debug = TMR0_PRESET_DC50Hz; //should be ~ 100 (156 * 0.5 usec * 50 Hz * 256 ~= 1 sec
+    tmr0_preset_50ac_debug = TMR0_PRESET_AC50Hz; //should be ~ 178 (78 * 0.5 usec * 2*50 Hz * 256 ~= 1 sec
+    tmr0_preset_60ac_debug = TMR0_PRESET_AC60Hz; //should be ~ 191 (65 * 0.5 usec * 2*60 Hz * 256 ~= 1 sec
     tmr0_presbits_debug = NumBits8(Timer0_Prescalar);
     tmr0_prescalar_debug = Timer0_Prescalar;
     tmr0_limit_debug = Timer0_Limit;

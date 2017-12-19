@@ -314,6 +314,7 @@ INLINE void FrontPanel_reset(void)
 //2/3/5 instr split @ 8 MIPS conforms to WS281X timing spec of 1.25 usec per bit (30 usec per node)
 //#if 1
 #define SPARE_NOPS  8
+//TODO: change these to use INDF0 to relax banksel restrictions
 #define send_0(nop8)  \
 { \
     FRPANEL_PIN = 1; /*start bit (2 instr)*/ \
@@ -560,6 +561,11 @@ INLINE void on_zc_tick_frpanel(void)
 //    iorwf(_frpanel_colors + 0); //kludge: force SDCC to use correct opcodes
     iorwf(_frp_colors + 0); //[0] |= WREG;
     if (CARRY) incf(_frp_colors + 1); //++frpanel_colors.all.high; //kludge: tell SDCC how to handle this
+//4th pixel: show first SSR value (bottom 3 bits)
+    WREG = INDF0; //re-load first byte of display list
+    WREG += WREG; //<< 1
+    iorwf(_frp_colors + 1);
+//now send data to WS281X (timing critical)
     frpanel_refresh(); //moved front panel refresh below FIFO defs so inline enqueue() logic could be reused
 }
 #undef on_zc_rise
@@ -586,15 +592,15 @@ BANK0 volatile union
 {
     struct
     {
-        unsigned ActiveHigh: 1; //lsb
-        unsigned IgnoreChksum: 1;
-        unsigned RGswap: 1;
-        unsigned unused: 5; //msb
+        uint8_t unused: 5; //lsb
+        uint8_t RGswap: 1;
+        uint8_t VerifyChksum: 1;
+        uint8_t ActiveHigh: 1; //msb
     } bits;
     uint8_t allbits;
 } ssr_cfg;
 #define isActiveHigh  ssr_cfg.bits.ActiveHigh //!ALL_OFF //Common Anode is active low (all off = 0xFF or ~0); Common Cathode is active high (all off = 0)
-#define IgnoreChksum  ssr_cfg.bits.IgnoreChksum
+#define VerifyChksum  ssr_cfg.bits.VerifyChksum
 #define RGswap  ssr_cfg.bits.RGswap
 
 //set TRIS to handle output-only pins:
@@ -1021,6 +1027,7 @@ INLINE void inbuf_init(void)
 
 //dissected enqueue() code to interleave with front panel I/O:
 //look at ASM to verify instr overhead; TODO: add logic to asm-fixup script
+//TODO: caller use INDF0 to relax banksel restrictions below
 #define FIFO_ADRS_OVERHEAD  8 //verify by looking at ASM
 INLINE void enqueue_adrs()
 {
@@ -1042,10 +1049,12 @@ INLINE void enqueue_rcv()
 {
 //    if (CARRY) ++FSR1H; //not needed :)
 //    WREG += -3 * NUM_SSR * (NUM_SSR - 1); //compare to buf size; pre-set BORROW; CAUTION: must use += -ve in order to preserve WREG correctly (SUBLW opc is reversed)
+//TODO: change this to PktLen, -3 * NUM_SSR -2 for plain SSRs
     addlw(-3 * NUM_SSR * (NUM_SSR - 1) - 2); //1 extra for config and checksum; compare to buf size; pre-set BORROW; CAUTION: must use += -ve in order to preserve WREG correctly (SUBLW opc is reversed)
 //CAUTION: extra instr inserted here, can't split bit test instr
     WREG = RCREG; //CAUTION: banksel on RCREG takes 1 additional instr
     if (!BORROW) TXREG = WREG; //overflow: pass to down-stream SSRs
+//TODO: check FRERR?
 //    in_timeout = 1; //wait 1+ dimming slot for serial idle; CAUTION: banksel here
     in_timeout = 0; //CAUTION: banksel takes 1 additional instr; must do this within idle period
     in_timeout |= 2; //CAUTION: must preserve WREG here, so use BSF instr
@@ -1121,6 +1130,7 @@ INLINE void on_tmr_dim_serial(void)
 //    {
 //    if (in_timeout) { in_timeout = FALSE; return; } //wait another dimming slot for idle (this one might be partial)
     if (--in_timeout) return; //wait another dimming slot for idle (this one might be partial)
+//TODO: use FRERR if not inverting input
 //    in_timeout = 0; //revert status in order to continue next time
 //BANK0 uint8_t bradjust; //brightness adjustment (for dimming slot fitting)
 //        resolve_conflicts();
@@ -1131,7 +1141,7 @@ INLINE void on_tmr_dim_serial(void)
 //    if (!(INDF1 & 2)) //verify checksum
     WREG = inbuf_chksum;
     if (!ZERO) comm_badpkt = TRUE; //remember checksum error
-    if (!IgnoreChksum && !ZERO) return; //NOTE: set in *previous* framebuf
+    if (VerifyChksum && !ZERO) return; //NOTE: set in *previous* framebuf
     ssr_cfg.allbits = INDF1; //save new config for later processing
     rgswap(RGswap); //update color fmt for front panel
     FSR1L += inbuf_len;
@@ -1313,6 +1323,7 @@ non_inline void frpanel_refresh(void)
 //sends one byte per iteration; CARRY selects whether to send "1"s or "0"s
 //NOTE: one WS281X node takes 24 * 1.25 == 30 usec, so serial port must be checked >= 2x per node
 //check serial port 1x / byte to prevent overruns
+//TODO: move vars to unbanked RAM and use INDF0 to relax banksel restrictions
     for (frloop = 4 * 3; /*frloop*/; --frloop)
     {
         WREG = frloop;

@@ -212,7 +212,7 @@ function asm_optimize()
             if (parts = line.match(/^([a-z0-9_]+)(\s|$)/i)) //assign storage to data label
             {
                 symtab[parts[1]] = Math.abs(varadrs);
-                all[inx] = `${parts[1]} equ 0x${Math.abs(varadrs).toString(16)};;S3 ` + all[inx]; //assign adrs to symbol; NOTE: could be multiple; don't change "line"
+                all[inx] = `${parts[1]}\tequ 0x${Math.abs(varadrs).toString(16)} ;;S3 ` + all[inx]; //assign adrs to symbol; NOTE: could be multiple; don't change "line"
                 if (parts[1].match(/^(_indf\d_(preinc|predec|postinc|postdec)|_labdcl|_swopcode|[psw]save|stk\d+|r0x\d+)$/i))
                 {
                     all.comment(inx, "U2"); //leave undefined to catch optimization errors

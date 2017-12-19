@@ -9,8 +9,60 @@ https://wiki.libsdl.org/SDL_GetWindowBordersSize?highlight=%28%5CbCategoryAPI%5C
 https://github.com/projectM-visualizer/projectm
 https://www.perl.com/pub/2011/01/visualizing-music-with-sdl-and-perl.html
 https://www.cg.tuwien.ac.at/courses/Seminar/WS2010/processing.pdf
+https://nodeaddons.com/streaming-data-from-c-to-node-js/
 
 
+  sudo apt-get dist-upgrade
+  sudo apt-get update
+  sudo apt-get upgrade
+RPi firmware:  (4.9.69-v7+ as of 12/17/17)
+  sudo rpi-update
+offline update:
+https://www.element14.com/community/thread/25357/l/updating-raspberry-pi-without-connecting-to-the-internet?displayFullThread=true
+  https://github.com/raspberrypi/firmware    download + extract, move to /boot
+
+find disk usage:
+https://askubuntu.com/questions/432836/how-can-i-check-disk-space-used-in-a-partition-using-the-terminal-in-ubuntu-12-0/432842
+  cd /; sudo du -sh ./*
+
+wifi diag:
+** https://www.raspberrypi.org/forums/viewtopic.php?t=44044
+  lsusb
+  lsmod        8192cu 
+  try to load it manually:   modprobe 8192cu
+  ifconfig -a      wlx...
+  apt-get install <firmware-package>
+sudo vi /etc/NetworkManager/system-connections/SSID-file
+copy an existing ssid file to correct ssid in /etc/NetworkManager/system-connections; change UUID (must be unique)
+uuidgen
+sudo systemctl stop NetworkManager
+sudo systemctl start NetworkManager
+sudo ifconfig wlan0 down && sudo ifconfig wlan0 up
+journalctl -u NetworkManager
+#https://askubuntu.com/questions/117065/how-do-i-find-out-the-name-of-the-ssid-im-connected-to-from-the-command-line
+nmcli -t -f active,ssid dev wifi
+iwgetid
+iwgetid -r
+nmcli con show
+ifconfig
+------------------------------------
+sudo apt-get dist-upgrade
+sudo apt-get update
+sudo apt-get upgrade
+------------------------------------------------------
+sudo /etc/init.d/network-manager start
+
+
+
+list largest Ubuntu packages:
+http://www.commandlinefu.com/commands/view/3842/list-your-largest-installed-packages-on-debianubuntu
+  dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -n
+remove packages:
+https://www.howtogeek.com/229699/how-to-uninstall-software-using-the-command-line-in-linux/
+  sudo apt-get --purge remove   xyz
+
+RPi /boot/cmdline.txt:
+dwc_otg.lpm_enable=0 console=serial0,115200 console=tty1 root=/dev/sda2 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait
 
 [![Build Status](https://travis-ci.org/djulien/friends-gpu-ws281x.svg?branch=master)](https://travis-ci.org/djulien/friends-gpu-ws281x) 
 [![Build status](https://ci.appveyor.com/api/projects/status/tbd/branch/master?svg=true)](https://ci.appveyor.com/project/djulien/friends-gp4-ws281x/branch/master) 
