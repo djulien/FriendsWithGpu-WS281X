@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+//DEBUG=*,-speaker,-lame:encoder,-lame:decoder  demos/butt*core.js
+
 //Butterfly demo pattern: tests GPU effects
 //based on xLights/NutCracker Butterfly effect
 //Copyright (c) 2016-2017 Don Julien
@@ -12,31 +14,38 @@
 
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output (incl bkg threads)
-const pathlib = require('path');
+const fs = require("fs");
+//const pathlib = require('path');
 //const {Worker} = require('webworker-threads');
 const cluster = require('cluster');
 //const {blocking, wait} = require('blocking-style');
-const ary2buf = require('typedarray-to-buffer');
+//const ary2buf = require('typedarray-to-buffer');
+const lame = require('lame');
+const Speaker = require('speaker');
+const JSON = require('circular-json'); //CAUTION: replacing std JSON with circular-safe version
+const deglob = require('./shared/deglob');
+const mp3len = require('./shared/mp3len');
 const {debug} = require('./shared/debug');
 //NOTE: it's preferential to put all requires() at top, but some are not needed for bkg wker processes
 const {Screen, GpuCanvas, shmbuf} = restrict(require('gpu-friends-ws281x')); //: {Screen: {}, GpuCanvas: {}, shmbuf: {}};
-//worker procs don't need access to GPU/Screen:
+//worker procs don't need access to GPU:
 function restrict(imports)
 {
-    if (!cluster.isMaster) imports.Screen = imports.GpuCanvas = {};
+    if (!cluster.isMaster) imports.GpuCanvas = {};
     return imports;
 }
 //const {vec3, vec4, mat4} = require('node-webgl/test/glMatrix-0.9.5.min.js');
 Screen.gpio = true; //TEMP: force full screen
 
+const MP3 = getaudio();
 //display settings:
 //const SPEED = 1/60; //1/10; //1/30; //animation speed (sec); fps
-const FPS = 60; //animation speed (performance testing)
-const DURATION = 2; //60; //how long to run (sec)
-const NUM_UNIV = !cluster.isMaster? process.env.NUM_UNIV: 24; //can't exceed #VGA output pins unless external mux used
-const UNIV_LEN = !cluster.isMaster? process.env.UNIV_LEN: Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+const FPS = 60; //animation speed (performance testing); NOTE: won't go faster than video card refresh rate
+const DURATION = MP3? mp3len(MP3): 60; //how long to run (sec)
+const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
+const UNIV_LEN = Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
 if (cluster.isMaster)
-    debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
+    debug("Screen %d x %d, is RPi? %d, GPIO? %d, #CPU %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //show extra debug info:
@@ -82,16 +91,17 @@ const BF_opts =
 };
 
 
-//use shared memory buffer to reduce inter-process data:
-//mem copying reported can take ~ 25 msec for 100K; that is way too high for this app
-//var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
+//shared memory buffer for inter-process data:
+//significantly reduces inter-process serialization and data passing overhead
+//mem copying reportedly can take ~ 25 msec for 100KB; that is way too high for 60 FPS frame rate
 //to see shm segs:  ipcs -a
 //to delete:  ipcrm -M key
-var shared_buf = shmbuf(0xbeef, NUM_UNIV * UNIV_LEN * Uint32Array.BYTES_PER_ELEMENT); //.buffer);
-var SharedPixels = new Uint32Array(shared_buf);
+//var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
+const SHMKEY = 0xbeef; //make value easy to find (for debug)
+var SharedPixels = new Uint32Array(shmbuf(SHMKEY, NUM_UNIV * UNIV_LEN * Uint32Array.BYTES_PER_ELEMENT));
 
 
-//dummy class to emulate real one:
+//dummy class to emulate real canvas class:
 //main purpose is to hold partial pixel data
 class PartialCanvas
 {
@@ -129,9 +139,9 @@ class PartialCanvas
 //could be partial (rect) so use nested loop:
         for (var x = 0; x < this.width; ++x)
             for (var y = 0; y < this.height; ++y)
-                this.pixels.writeUInt32BE(color >>> 0, i);
+                this.pixels[x * this.height + y] = color >>> 0;
     }
-    paint() {}
+    paint() { process.send({done: true}); }
 };
 
 if (cluster.isWorker)
@@ -149,12 +159,15 @@ if (cluster.isWorker)
 //var pb = new Buffer(2 * Uint32Array.BYTES_PER_ELEMENT);
 //canvas.pixels_fake = new Uint32Array(2);
 //canvas.pixels_fake.buffer = pb;
-    
+    var total_time = 0, busy = 0;
+    total_time -= elapsed();
+
     process.on('message', (msg) =>
     {
 //console.log(`wker ${process.pid} got req ${JSON.stringify(msg)}`);
         if (msg.render)
         {
+            busy -= elapsed();
 //    for (var t = 0, ofs = 0; t <= DURATION * FPS; ++t, ++canvas.elapsed)
 //    {
 //        ofs += BF_opts.reverse? -BF_opts.speed: BF_opts.speed;
@@ -163,9 +176,9 @@ if (cluster.isWorker)
 //        if (!OPTS.gpufx) //generate fx on CPU instead of GPU
             var {XSTART, XEND, ofs} = msg;
             for (var x = XSTART; x < XEND; ++x)
-                for (var y = 0+1; y < canvas.height; ++y)
+                for (var y = 0; y < canvas.height; ++y)
                     canvas.pixel(x, y, butterfly(x, y, ofs, BF_opts));
-            canvas.pixel(2 * msg.w + 1, 0, msg.w * 0x10101);
+//            canvas.pixel(2 * msg.w + 1, 0, (msg.w + 1) * 0x10101);
 //        proctime += elapsed();
 //            yield bkg({render: ofs});
 //console.log("paint");
@@ -174,10 +187,16 @@ if (cluster.isWorker)
 //canvas.pixels_fake[0] = XOFS;
 //canvas.pixels_fake[1] = ofs;
 //            process.send({pixels: canvas.pixels, XOFS, ofs});
-            process.send({done: true});
+            busy += elapsed();
             return;
         }
-        if (msg.quit) { process.exit(0); return; }
+        if (msg.quit)
+        {
+            total_time += elapsed();
+            process.send({quit: true, busy, total_time, '%busy': tenths(100 * busy / total_time)});
+            process.exit(0);
+            return;
+        }
 //        process.send(msg);
         throw `Unknown msg type: '${Object.keys(msg)}'`.red_lt;
     });
@@ -187,7 +206,8 @@ if (cluster.isWorker)
 
 //if (cluster.isMaster)
 //{
-const XPARTN = Math.ceil(NUM_UNIV / 2); //assign 12 cols to each wker
+const NWKERS = 2;
+const XPARTN = Math.ceil(NUM_UNIV / NWKERS); //too much rendering for 1 CPU @60 FPS; use 2 wkers; assign 12 cols to each wker
 var numWkers = Math.ceil(NUM_UNIV / XPARTN); //require('os').cpus().length;
 var wkers = {};
 cluster.on('online', (wker) =>
@@ -198,26 +218,28 @@ cluster.on('online', (wker) =>
 cluster.on('message', (wker, msg, handle) =>
 {
     if (arguments.length == 2) { handle = msg; msg = wker; wker = undefined; } //?? shown in example at https://nodejs.org/api/cluster.html#cluster_event_message_1
-    step.retval = msg;
+    step.retval = {msg, wker: {process: {pid: wker.process._handle.pid}}, narg: arguments.length};
+//BROKEN console.log("got reply", JSON.stringify(step.retval).slice(0, 200));
     step(); //wake up caller
 });
 cluster.on('disconnect', (wker) =>
 {
-    debug(`The worker #${wker.id} has disconnected`.cyan_lt);
+    debug(`The worker #${wker.id} pid '${wker.process.pid}' has disconnected`.cyan_lt);
 });
 cluster.on('exit', (wker, code, signal) =>
 {
     delete wkers[wker.process.pid];
     var want_restart = (Object.keys(wkers).length < numWkers);
     debug(`worker ${wker.process.pid} died (${code || signal}), restart? ${want_restart}`.red_lt);
-    if (want_restart) cluster.fork({NUM_UNIV, UNIV_LEN});
+    if (want_restart) cluster.fork(); //{NUM_UNIV, UNIV_LEN});
 });
 debug(`master proc '${process.pid}', starting ${numWkers} workers`.green_lt);
 //divide canvas into vertical partitions:
+//NOTE: 24 cols is evenly divisible by 2, 3, 4, and 8 so it is nice for spreading across CPUs/cores
 debug(`dividing render work into ${numWkers} partitions`.blue_lt);
 for (var x = 0; x < NUM_UNIV; x += XPARTN)
 //    cluster.fork({NUM_UNIV: Math.min(NUM_UNIV - x, XPARTN), XPARTNOFS: x, UNIV_LEN});
-    cluster.fork({NUM_UNIV, UNIV_LEN}); //NOTE: might be extra due to round up; make uniform so workers are interchangeable
+    cluster.fork(); //{NUM_UNIV, UNIV_LEN}); //NOTE: might be extra due to round up; make uniform so workers are interchangeable
 //numWkers = 0; //don't want auto-restart
 //var canvas = new GpuCanvas("Butterfly", NUM_UNIV, UNIV_LEN, OPTS);
 //other logic here
@@ -238,8 +260,8 @@ step(function*()
 //        var ary = new Uint32Array(4);
 //        var buf = ary2buf(ary);
 //        ary[0] = 1111; ary[1] = 2222; ary[2] = 3333; ary[3] = 4444;
-        var msg = yield;
-        console.log(`got ack ${JSON.stringify(msg)} from wker`);
+        var {msg, wker} = yield;
+        console.log(`got wker ack ${JSON.stringify(msg)} from wker '${wker.process.pid}'`);
 //        ary.set(msg.ary, 1);
 //        console.log(ary);
 //        ary.set(msg.buf, 1);
@@ -261,9 +283,10 @@ step(function*()
 //buf3.set(buf0, 2);
 //console.log("dest0", typeof buf0, JSON.stringify(buf0), hex32(buf3[0]), hex32(buf3[1]), hex32(buf3[2]), hex32(buf3[3]), hex32(buf3[4]), hex32(buf3[5]));
 
-    var canvas = new GpuCanvas("Butterfly", NUM_UNIV, UNIV_LEN, OPTS);
+    var canvas = new GpuCanvas("Butterfly-multi core", NUM_UNIV, UNIV_LEN, OPTS);
     canvas.pixels = SharedPixels;
-//console.log("canvas", Object.keys(canvas));
+//console.log("canvas", Object.keys(canvas));DEBUG=*,-speaker,-lame:encoder,-lame:decoder  demos/butt*core.js
+
 //    var all_pixels = new Uint32Array(canvas.width * canvas.height);
 //    wker.postMessage("all");
 //    var retval = yield bkg({ack: 1});
@@ -272,18 +295,22 @@ step(function*()
 //    bkg.canvas = canvas;
 
 //OPTS.gpufx = true; //TEMP: bypass
+    if (MP3) mp3playback(MP3); //TODO: sync, account for latency, add visualizer; move to bkg process?
     debug("begin, run for %d sec @%d fps".green_lt, DURATION, FPS);
-    var started = now_sec();
+//    var started = now_sec();
     canvas.duration = DURATION * FPS; //progress bar limit
 //    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
-    var proctime = 0;
-    for (var t = 0, ofs = 0; t <= 0 * DURATION * FPS; ++t, ++canvas.elapsed)
+    var total_time = 0, busy = 0;
+    total_time -= elapsed();
+    for (var t = 0, ofs = 0; t <= DURATION * FPS; ++t, ++canvas.elapsed)
     {
+        if (mp3playback.done) { debug("whoops, audio is done"); break; }
         ofs += BF_opts.reverse? -BF_opts.speed: BF_opts.speed;
+//console.log(`parent: render t ${t}/${DURATION * FPS}, ofs ${ofs}`);
 //pixel [0, 0] is upper left on screen
-        proctime -= elapsed();
+        busy -= elapsed();
 //canvas.pixels[0] = canvas.pixels[1] = canvas.pixels[2] = canvas.pixels[3] = canvas.pixels[4] = canvas.pixels[5] = -1;
-canvas.fill(0x12345678);
+//canvas.fill(0x12345678);
         if (!OPTS.gpufx) //generate fx on CPU instead of GPU
         {
 //	        for (var x = 0; x < canvas.width; ++x)
@@ -296,31 +323,39 @@ canvas.fill(0x12345678);
             }
             for (var w in wkers) //get responses, overlay into composite pixel array
             {
-                var msg = yield;
-//if (t < 2) console.log("got reply", JSON.stringify(msg).slice(0, 200));
+                var {msg, wker} = yield;
+//if (t < 2) 
+//console.log("got reply", JSON.stringify(msg).slice(0, 200));
 //                var {pixels, XOFS} = msg; //yield;
 //if (t < 2) console.log("before", hex32(canvas.pixels[0]), hex32(canvas.pixels[1]), hex32(canvas.pixels[2]), hex32(canvas.pixels[3]), hex32(canvas.pixels[4]), hex32(canvas.pixels[5]));
 //                canvas.pixels.set(pixels, XOFS / XPARTN * 2); //XOFS * UNIV_LEN);
 //if (t < 2) console.log("after", hex32(canvas.pixels[0]), hex32(canvas.pixels[1]), hex32(canvas.pixels[2]), hex32(canvas.pixels[3]), hex32(canvas.pixels[4]), hex32(canvas.pixels[5]));
             }
         }
-if (t < 2)
-{
-var buf = [];
-for (var i = 0; (i < canvas.pixels.length) && (i < 6); ++i) buf.push(hex32(canvas.pixels[i]));
-console.log("pixels[%d] %s", t, buf.join(","));
-}
-        proctime += elapsed();
+//if (t < 2)
+//{
+//var buf = [];
+//for (var x = 0; x < 6; ++x) buf.push(hex32(canvas.pixel(x, 0)));
+//console.log("pixels[%d] %s", t, buf.join(","));
+//}
+        busy += elapsed();
 //            yield bkg({render: ofs});
 //console.log("paint");
         canvas.paint();
 //        yield wait((t + 1) / FPS - now_sec() + started); //canvas.elapsed); //avoid cumulative timing errors
 //        yield wait(started + (t + 1) / FPS - now_sec()); ///use cumulative time to avoid drift
     }
-console.log("proc time", proctime / DURATION / FPS);
+    total_time += elapsed();
+//NOTE: not meaningful with bkg processes
+console.log(`avg proc time ${milli(1000 * total_time / DURATION / FPS)} msec, %busy ${tenths(100 * busy / total_time)}`.cyan_lt);
     numWkers = 0; //don't want auto-restart
     for (var XOFS = 0, w = 0; XOFS < NUM_UNIV; XOFS += XPARTN, ++w) //send requests
         wkers[Object.keys(wkers)[w]].send({quit: true});
+    for (var XOFS = 0, w = 0; XOFS < NUM_UNIV; XOFS += XPARTN, ++w) //get replies
+    {
+        var {msg, wker} = yield;
+        console.log(`wker quit ack ${JSON.stringify(msg)} from wker '${wker.process.pid}'`);
+    }
 //    bkg(); //wker.postMessage(null); //.close();
     debug("end, pause 10 sec".green_lt);
     yield wait(10); //pause at end so screen doesn't disappear too fast
@@ -328,12 +363,7 @@ console.log("proc time", proctime / DURATION / FPS);
 });
 
 
-function elapsed()
-{
-    var parts = process.hrtime();
-    return parts[0] + parts[1] / 1e9;
-}
-
+setTimeout(mp3cancel, 10  * 1000);
 
 /*
 //send msg to bkg worker thread:
@@ -368,7 +398,8 @@ console.log("wker replied: " + evt.data);
             step(); //wake up caller
         };
     }
-    if (!arguments.length) { bkg.wker.terminate(); delete bkg.wker; return; }
+    if (!arguments.length) { bkg.wker.terminate(); delete bkg.wker; return; }DEBUG=*,-speaker,-lame:encoder,-lame:decoder  demos/butt*core.js
+
 console.log("send2bkg", JSON.stringify(data));
     bkg.wker.postMessage(data);
 //        if (data !== null) return yield;
@@ -398,6 +429,7 @@ if (done) debug("process %s done", process.pid);
 
 
 //delay next step:
+//NOTE: only used for debug at end; everything else runs flat out :)
 function wait(delay)
 {
 console.log("wait %d sec", milli(delay));
@@ -406,29 +438,65 @@ console.log("wait %d sec", milli(delay));
 }
 
 
-//truncate after 3 dec places:
-function milli(val)
+////////////////////////////////////////////////////////////////////////////////
+////
+/// MP3 playback
+//
+
+
+function getaudio()
 {
-    return Math.floor(val * 1e3) / 1e3;
+    return deglob(process.argv[2] || __dirname + "/X*.mp3", 1)[0]; //cmd line or current folder
 }
 
 
-//current time in seconds:
-function now_sec()
+function mp3playback(filename)
 {
-    return Date.now() / 1000;
+    if (!filename) return;
+    debug(`mp3playback: '${filename}'`.blue_lt);
+    fs.createReadStream(filename) //process.argv[2]) //specify mp3 file on command line
+        .pipe(mp3playback.pipe = new lame.Decoder())
+        .on('format', function(fmt)
+        {
+            mp3playback.persec = fmt.sampleRate * fmt.channels * fmt.bitDepth / 8; //#bytes per sec
+            debug(`mp3 format ${JSON.stringify(fmt)}`.blue_lt); //.sampleRate, format.bitDepth);
+//            if (want_play) 
+            this.pipe(new Speaker(fmt))
+                .on('open', function() { mp3cb("audio open".blue_lt); }) //pbstart = elapsed(); /*pbtimer = setInterval(position, 1000)*/; console.log("[%s] speaker opened".yellow_light, timescale(pbstart - started)); })
+                .on('progress', function(data) { mp3cb("audio progress".blue_lt, data); }) //pbstart = elapsed(); /*pbtimer = setInterval(position, 1000)*/; console.log("[%s] speaker opened".yellow_light, timescale(pbstart - started)); })
+                .on('flush', function() { mp3playback.done = true; mp3cb("audio flush".blue_lt); }) // /*clearInterval(pbtimer)*/; console.log("[%s] speaker end-flushed".yellow_light, timescale(elapsed() - started)); })
+                .on('close', function() { mp3playback.done = true; mp3cb("audio close".blue_lt); }) // /*clearInterval(pbtimer)*/; console.log("[%s] speaker closed".yellow_light, timescale(elapsed() - started)); });
+//            elapsed(0);
+            mp3cb("audio start".green_lt);
+        })
+        .on('end', function() { mp3cb("audio done".green_lt); }) //console.log("[%s] decode done!".yellow_light, timescale(elapsed() - started)); })
+        .on('error', function(err) { mp3playback.done = true; mp3cb(`audio ERROR: ${err}`.red_lt, err); }); //console.log("[%s] decode ERROR %s".red_light, timescale(elapsed() - started), err); });
+}
+
+function mp3cb(desc, data)
+{
+    if (data)
+    {
+        if (data.numwr % 100) return; //don't report progress too often
+        data["%done"] = tenths(100 * data.wrtotal / (DURATION * mp3playback.persec)); //estimated based on data written so far vs. total size
+//don't report these:
+        delete data.wrlen;
+        delete data.buflen;
+    }
+    debug(`mp3 ${desc}`.pink_lt, data? JSON.stringify(data).pink_lt: "");
 }
 
 
-function hex32(val)
+function mp3cancel()
 {
-    return (val >>> 0).toString(16);
+    mp3playback.done = true;
+    mp3playback.pipe.end(); //push(null); //https://stackoverflow.com/questions/19277094/how-to-close-a-readable-stream-before-end
 }
 
 
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// Butterfly effect (not used if generated on GPU)
+/// Butterfly effect (if rendered on CPU instead of GPU)
 //
 
 //CPU effects generator:
@@ -532,5 +600,48 @@ function mix(vec1, vec2, a)
     for (var i = 0; i < vec1.length; ++i) retval[i] = (1 - a) * vec1[i] + a * vec2[i];
     return retval;
 }
+
+
+////////////////////////////////////////////////////////////////////////////////
+////
+/// Misc helpers
+//
+
+
+//high-res elapsed time:
+//NOTE: unknown epoch; useful for relative times only
+function elapsed()
+{
+    var parts = process.hrtime();
+    return parts[0] + parts[1] / 1e9; //sec, with nsec precision
+}
+
+
+//current time in seconds:
+//function now_sec()
+//{
+//    return Date.now() / 1000;
+//}
+
+
+//truncate after 1 dec place:
+function tenths(val)
+{
+    return Math.floor(val * 10) / 10;
+}
+
+
+//truncate after 3 dec places:
+function milli(val)
+{
+    return Math.floor(val * 1e3) / 1e3;
+}
+
+
+function hex32(val)
+{
+    return (val >>> 0).toString(16);
+}
+
 
 //eof
