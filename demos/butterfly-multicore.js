@@ -83,6 +83,7 @@ const BF_opts =
 
 
 //use shared memory buffer to reduce inter-process data:
+//mem copying reported can take ~ 25 msec for 100K; that is way too high for this app
 //var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
 //to see shm segs:  ipcs -a
 //to delete:  ipcrm -M key

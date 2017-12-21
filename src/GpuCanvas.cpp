@@ -2087,6 +2087,9 @@ NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 
 
 //alloc shared memory buffer:
+//this reduces the need for expensive memory copying:
+// memcpy.100k > cc Buffer -> Buffer: 22.756ms
+// memcpy.100k > cc Buffer -> ArrayBuffer: 23.861ms
 //from ws281x-gpu.cpp 2016
 //based on https://github.com/vpj/node_shm/blob/master/shm_addon.cpp
 //to see shm segs:  ipcs -a
