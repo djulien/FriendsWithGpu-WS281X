@@ -9,9 +9,10 @@ require('colors').enabled = true; //for console output colors
 const {inherits} = require('util');
 const bindings = require('bindings');
 //const {debug} = require('./shared/debug');
-const {Screen, GpuCanvas, UnivTypes} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
+const {Screen, GpuCanvas, UnivTypes, shmbuf} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
 
 module.exports.Screen = Screen;
+module.exports.shmbuf = shmbuf;
 module.exports.UnivTypes = UnivTypes;
 //attach config info as properties:
 //no need for callable functions (config won't change until reboot)
@@ -151,7 +152,7 @@ new Proxy(function(){},
         var clip = ((x < 0) || (x >= this.width) || (y < 0) || (y >= this.height)); //throw "Index of out range";
         if (arguments.length > 2) //set color
         {
-            if (!clip) this.pixels[x * this.height + y] = color;
+            if (!clip) this.pixels[x * this.height + y] = color >>> 0;
             return this; //fluent
         }
         return !clip? this.pixels[x * this.height + y]: BLACK;
@@ -162,7 +163,7 @@ new Proxy(function(){},
         THIS.fill = function
     fill(color)
     {
-        this.pixels.fill(color);
+        this.pixels.fill(color >>> 0);
 //        return this; //fluent
     }
 

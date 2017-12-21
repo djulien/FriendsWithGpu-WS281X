@@ -92,6 +92,7 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <stdarg.h> //varargs
+#include <sys/shm.h> //shmatt, shmget, shmctl
 //#include <byteswap.h> //bswap_32(x)
 //#include <iostream> //std::cin
 //using std::cin;
@@ -300,7 +301,7 @@ int stdlog::count = 0;
 //const uint32_t PALETTE[] = {RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE};
 
 //hard-coded ARGB format:
-#pragma message("Compiled for ARGB color format (hard-coded)")
+//#pragma message("Compiled for ARGB color format (hard-coded)")
 #if SDL_BYTEORDER == SDL_BIG_ENDIAN
 // #pragma message("Big endian")
 // #define Rmask  0xFF000000
@@ -1278,6 +1279,7 @@ private:
 //    static int count;
 //performance stats:
     uint64_t started; //doesn't need to be atomic; won't be modified after fg thread wakes
+    uint64_t render_timestamp, frame_rate;
     std::atomic<uint32_t> numfr, numerr, num_dirty; //could be updated by another thread
     struct { uint64_t previous; std::atomic<uint64_t> user_time, caller_time, pivot_time; } fg; //, lock_time, update_time, unlock_time; } fg;
     struct { uint64_t previous; std::atomic<uint64_t> caller_time, pivot_time, lock_time, update_time, unlock_time, copy_time, present_time; } bg;
@@ -1447,6 +1449,7 @@ private:
         bg.caller_time = bg.pivot_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = num_dirty = 0;
 
         started = fg.previous = bg.previous = now();
+        render_timestamp = frame_rate = 0;
 //        PresentTime = 0; //start of official playback
 //        myprintf(33, "bkg ack main" ENDCOLOR);
         out.wake(pxbuf); //tell main thread i'm ready
@@ -1470,9 +1473,10 @@ private:
 
 //            encode((uint32_t*)pixels);
             memcpy(pixels_copy, pixels, this->num_univ * this->univ_len * sizeof(uint32_t)); //copy caller's data without encode so caller can wake sooner
-            delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
+//            delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
             out.wake((void*)true); //allow fg thread to refill buf while render finishes in bkg
             encode(pixels_copy); //encode while caller does other things (encode is CPU-expensive)
+            delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
 
             { //scope for locked texture
                 auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
@@ -1540,7 +1544,9 @@ private:
 
 //            myprintf(8, MAGENTA_LT "renderer thread: render+wait" ENDCOLOR);
             SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
-            delta = now() - bg.previous; bg.present_time += delta; bg.previous += delta;
+            delta = now() - bg.previous; bg.present_time += delta; bg.previous += delta; //== now()
+            if (render_timestamp) frame_rate += bg.previous - render_timestamp; //now - previous timestamp
+            render_timestamp = bg.previous; //now
 //            PresentTime = elapsed(started); //update presentation timestamp (in case main thread wants to know)
 //myprintf(22, BLUE_LT "fr[%d] deltas: %lld, %lld, %lld, %lld, %lld" ENDCOLOR, numfr, delta1, delta2, delta3, delta4, delta5);
             if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec @60 FPS
@@ -1643,9 +1649,10 @@ public:
 //#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
-        uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty; //kludge: avoid "deleted function" error on atomic
+        uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
 //        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
 //        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.pivot_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+        myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000);
         myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: fg(user %2.3f + caller %2.3f + pivot %2.3f), bg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f + copy %2.3f + present %2.3f), bg %2.1f%% idle" ENDCOLOR, 
             numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
             avg_ms(fg.user_time), avg_ms(fg.caller_time), avg_ms(fg.pivot_time), 
@@ -2079,6 +2086,37 @@ NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 #endif
 
 
+//alloc shared memory buffer:
+//from ws281x-gpu.cpp 2016
+//based on https://github.com/vpj/node_shm/blob/master/shm_addon.cpp
+//to see shm segs:  ipcs -a
+//to delete:  ipcrm -M key
+NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+//    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+//    v8::HandleScope scope(isolate);
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    if (info.Length() < 2) return_void(errjs(iso, "shmbuf: missing key, size args"));
+//	if (!args[0]->IsNumber()) Nan::ThrowTypeError("Pixel: 1st arg should be number");
+	int key = info[0]->Uint32Value(); //NumberValue();
+//	if (!args[1]->IsNumber()) Nan::ThrowTypeError("Pixel: 2nd arg should be number");
+	int size = info[1]->Int32Value(); //NumberValue();
+	if (/*(size < 1) ||*/ (size >= 10000000)) return_void(errjs(iso, "shmbuf: size %d out of range 1..10M", size));
+
+    int shmid = shmget(key, (size > 0)? size: 1, (size > 0)? IPC_CREAT | 0666: 0666);
+    if (shmid < 0 ) return_void(errjs(iso, "shmbuf: can't alloc shmem: %d", shmid));
+//if (!data) //don't attach again
+    uint8_t* data = (size > 0)? (uint8_t*)shmat( shmid, NULL, 0 ): (uint8_t*)shmctl(shmid, IPC_RMID, NULL);
+    if (data < 0) return_void(errjs(iso, "shbuf: att sh mem failed: %d", data));
+    if (size < 1) { info.GetReturnValue().SetUndefined(); return; } //.Set(0); return; }
+
+//Create ArrayBuffer:
+    v8::Local<v8::ArrayBuffer> buffer = v8::ArrayBuffer::New(iso, (void*)data, size);
+    info.GetReturnValue().Set(buffer);
+//    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.UnivType(inx, !info[1]->IsUndefined()? (GpuCanvas::UniverseTypes)info[1]->IntegerValue(): GpuCanvas::UniverseTypes::INVALID))); //return old type, optionally set new type
+}
+
+
 #if 0
 void UnivTypes_js(v8::Local<v8::String>& name, const Nan::PropertyCallbackInfo<v8::Value>& info)
 {
@@ -2398,8 +2436,8 @@ NAN_SETTER(GpuCanvas_js::DumpFile_setter) //defines "info" and "value"; implicit
 
 
 //get/set univ types:
-void GpuCanvas_js::UnivType_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+//void GpuCanvas_js::UnivType_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+NAN_METHOD(GpuCanvas_js::UnivType_tofix) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
     GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
@@ -2506,6 +2544,10 @@ NAN_MODULE_INIT(exports_js) //defines target
 #else
     Nan::SetAccessor(target, JS_STR(iso, "isRPi"), isRPi_js); //, DirtySetter);
     Nan::SetAccessor(target, JS_STR(iso, "Screen"), Screen_js);
+//    NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+//	exports->Set(Nan::New("shmatt").ToLocalChecked(),
+//                 Nan::New<v8::FunctionTemplate>(shmatt_entpt)->GetFunction());
+    Nan::Export(target, "shmbuf", shmbuf_js);
     Nan::SetAccessor(target, JS_STR(iso, "UnivTypes"), UnivTypes_js);
 #endif
 //    target->SetAccessor(JS_STR(iso, "Screen"), Screen_js);
