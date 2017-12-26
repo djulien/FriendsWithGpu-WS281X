@@ -9,15 +9,29 @@ require('colors').enabled = true; //for console output colors
 const {inherits} = require('util');
 const bindings = require('bindings');
 //const {debug} = require('./shared/debug');
-const {Screen, GpuCanvas, UnivTypes, shmbuf} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
-
-module.exports.Screen = Screen;
+const {/*Screen,*/ GpuCanvas, UnivTypes, shmbuf} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
+//lazy-load Screen to avoid extraneous SDL inits:
+//module.exports.Screen = Screen;
+Object.defineProperty(module.exports, "Screen",
+{
+//define getter so Screen can be lazy-loaded:
+    get: function()
+    {
+const {caller} = require('./demos/shared/caller');
+        console.log("mod exp", caller(1));
+        const {Screen} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
+        Screen.gpio = toGPIO();
+        Screen.isRPi = isRPi();
+        return Screen;
+    },
+    configurable: true, //allow modify/delete by caller
+});
 module.exports.shmbuf = shmbuf;
 module.exports.UnivTypes = UnivTypes;
 //attach config info as properties:
 //no need for callable functions (config won't change until reboot)
-module.exports.Screen.gpio = toGPIO();
-module.exports.Screen.isRPi = isRPi();
+//module.exports.Screen.gpio = toGPIO();
+//module.exports.Screen.isRPi = isRPi();
 //module.exports.GpuCanvas = GpuCanvas_shim;
 
 //display modes:
@@ -82,6 +96,7 @@ const supported_OPTS =
 const BLACK = 0xff000000; //NOTE: need A to affect output
 const WHITE = 0xffffffff;
 
+
 //temp shim until OpenGL support is re-enabled:
 //use ctor function instead of class syntax to allow hidden vars, factory call, etc
 const GpuCanvas_shim =
@@ -96,28 +111,48 @@ new Proxy(function(){},
 //    if (!(this instanceof GpuCanvas_shim)) return new GpuCanvas_shim(title, width, height, opts); //convert factory call to class
 //    constructor(title, width, height, opts)
 //    {
+        const WANT_SHARED = true;
         var [title, width, height, opts] = args;
 //console.log("proxy ctor", title, width, height, opts);
         if (!opts) opts = (typeof opts == "boolean")? {WS281X_FMT: opts}: {};
-        Object.keys(opts).forEach(key => { if (opts[key] && !supported_OPTS[key]) throw `Opt '${key}' not supported until maybe 2018 (OpenGL re-enabled)`.red_lt; });
+        Object.keys(opts).forEach((key, inx, all) =>
+        {
+            if (opts[key] && !supported_OPTS[key]) throw `Option '${key}' not supported until maybe 2018 (OpenGL re-enabled)`.red_lt;
+            if (!opts.WS281X_FMT || (['WS281X_FMT', 'UNIV_TYPE'].indexOf(key) != -1)) return;
+            all[inx] = null; //don't show other stuff in live mode (interferes with output signal)
+            console.log(`Ignoring option '${key}' for live mode`.yellow_lt);
+        });
 //        if (opts.WS281X_FMT) delete opts.SHOW_PROGRESS; //don't show progress bar in live mode (interferes with LED output)
-        if (opts.WS281X_FMT) opts = {WS281X_FMT: opts.WS281X_FMT}; //don't show other stuff in live mode (interferes with LED output)
+//        if (opts.WS281X_FMT) opts = {WS281X_FMT: opts.WS281X_FMT, UNIV_TYPE: opts.UNIV_TYPE}; //don't show other stuff in live mode (interferes with LED output)
 //        this.opts = opts; //save opts for access by other methods; TODO: hide from caller
 //console.log(title, width, height, opts);
 //        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
-        var THIS = new GpuCanvas(title, width, height, !!opts.WS281X_FMT); //initialize base class
+        var THIS = (!WANT_SHARED || cluster.isMaster)? new GpuCanvas(title, width, height, !!opts.WS281X_FMT): {title, width, height}; //initialize base class
+        if (!WANT_SHARED || cluster.isMaster)
+        {
 //        super(title, width, height, !!opts.WS281X_FMT); //initialize base class
 //        etters(Object.getPrototypeOf(this)); //kludge: can't get it to work within fixup; do it here instead
 //        etters(THIS); //kludge: can't get it to work within fixup; do it here instead
-        pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
-//console.log("initial props:", THIS.WS281X_FMT, THIS.SHOW_PROGRESS, THIS.UNIV_TYPE);
-//if (THIS.UNIV_TYPE) console.log("set all unv type to", THIS.UNIV_TYPE);
-        THIS.UnivType = THIS.UnivType_tofix;
-        if (THIS.UNIV_TYPE) for (var i = 0; i < THIS.width; ++i) THIS.UnivType(i, THIS.UNIV_TYPE);
+            pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
+//console.log("initial props:", THIS.WS281X_FMT, THIS.SHOW_PROGRESS, opts.UNIV_TYPE);
+//if (opts.UNIV_TYPE) console.log("set all unv type to", opts.UNIV_TYPE);
+            THIS.UnivType = THIS.UnivType_tofix;
+            if (THIS.UNIV_TYPE) for (var i = 0; i < THIS.width; ++i) THIS.UnivType(i, THIS.UNIV_TYPE);
+        }
 
 //keep pixel data local to reduce #API calls into Nan/v8
-        THIS.pixels = new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
-        THIS.pixels.fill(BLACK); //start with all pixels dark
+//        THIS.pixels = new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
+//shared memory buffer for inter-process data:
+//significantly reduces inter-process serialization and data passing overhead
+//mem copying reportedly can take ~ 25 msec for 100KB; that is way too high for 60 FPS frame rate
+//to see shm segs:  ipcs -a
+//to delete:  ipcrm -M key
+//var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
+        const SHMKEY = 0xbeef; //make value easy to find (for debug)
+        THIS.pixels = WANT_SHARED?
+            new Uint32Array(shmbuf(SHMKEY, THIS.width * THIS.height * Uint32Array.BYTES_PER_ELEMENT)):
+            new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
+        if (!WANT_SHARED || cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
         THIS.elapsed = 0;
 //console.log("here1");
 //        return THIS;
@@ -161,8 +196,21 @@ new Proxy(function(){},
 //fill all pixels:
 //GpuCanvas_shim.prototype.fill = function
         THIS.fill = function
-    fill(color)
+    fill(xstart, ystart, w, h, color)
     {
+//use nested loop on partial (rect) fill:
+        if (arguments.length > 1)
+        {
+            xstart = Math.max(xstart, 0);
+            ystart = Math.max(ystart, 0);
+            w = Math.min(w, this.width - xstart);
+            h = Math.min(h, this.height - ystart);
+            for (var x = 0, xofs = xstart * this.height; x < w; ++x, xofs += this.height)
+                for (var y = 0; y < h; ++y)
+                    this.pixels[xofs + y] = color >>> 0;
+            return this; //fluent
+        }
+        color = x; //shuffle params
         this.pixels.fill(color >>> 0);
 //        return this; //fluent
     }
@@ -204,6 +252,7 @@ new Proxy(function(){},
         THIS.paint = function
     paint(alt_pixels)
     {
+        if (WANT_SHARED && !cluster.isMaster) return process.send({done: true});
 //console.log(`paint: ${this.width} x ${this.height}, progress? ${this.SHOW_PROGRESS}, elapsed ${this.elapsed || 0}, duration ${this.duration}, x-limit %d %d`, this.width * (this.elapsed || 0) / this.duration, Math.round(this.width * (this.elapsed || 0) / this.duration));
         if (!alt_pixels) //don't mess up caller's data
         if (this.SHOW_PROGRESS && this.duration) //kludge: use last row of pixels to display progress bar

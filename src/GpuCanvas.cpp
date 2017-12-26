@@ -944,7 +944,8 @@ std::queue<const char*> Thread::msg_que;
 
 
 //SDL_Init must be called before most other SDL functions and only once, so put it at global scope:
-auto_ptr<SDL_lib> SDL(SDL_INIT(SDL_INIT_VIDEO));
+//*however*, RPi is sensitive to resource usage so don't init unless needed
+auto_ptr<SDL_lib> SDL; //don't initialize unless needed; //(SDL_INIT(SDL_INIT_VIDEO));
 
 typedef struct WH { uint16_t w, h; } WH; //pack width, height into single word for easy return from functions
 
@@ -1227,6 +1228,8 @@ WH Screen()
     if (!wh.w || !wh.h)
     {
 //        auto_ptr<SDL_lib> sdl(SDL_INIT(SDL_INIT_VIDEO)); //for access to video info; do this in case not already done
+        if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
+
         if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get screen info before SDL_Init" ENDCOLOR);
 //        if (!sdl && !(sdl = SDL_INIT(SDL_INIT_VIDEO))) err(RED_LT "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
         myprintf(22, BLUE_LT "%d display(s):" ENDCOLOR, SDL_GetNumVideoDisplays());
@@ -1319,6 +1322,7 @@ public:
 //ctor/dtor:
     GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(0), StatsAdjust(0), dump_count(0)
     {
+        if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
 //        myprintf(33, "GpuCanvas ctor" ENDCOLOR);
         if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
 //        if (!count++) Init();
@@ -2109,6 +2113,7 @@ NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
     int shmid = shmget(key, (size > 0)? size: 1, (size > 0)? IPC_CREAT | 0666: 0666);
     if (shmid < 0 ) return_void(errjs(iso, "shmbuf: can't alloc shmem: %d", shmid));
 //if (!data) //don't attach again
+//TODO: need Detach and delete: if (shmdt(data) == -1) fprintf(stderr, "shmdt failed\n");
     uint8_t* data = (size > 0)? (uint8_t*)shmat( shmid, NULL, 0 ): (uint8_t*)shmctl(shmid, IPC_RMID, NULL);
     if (data < 0) return_void(errjs(iso, "shbuf: att sh mem failed: %d", data));
     if (size < 1) { info.GetReturnValue().SetUndefined(); return; } //.Set(0); return; }

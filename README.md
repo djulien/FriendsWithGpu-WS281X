@@ -3,14 +3,82 @@
 # UNDER CONSTRUCTION
 
 
+Pixel clock:
+** https://github.com/raspberrypi/firmware/issues/734
+  vcgencmd hdmi_timings 506 1 8 44 52 264 1 6 10 6 0 0 0 60 0 4000000 1
+  hdmi_timings=506 1 8 44 52 264 1 6 10 6 0 0 0 60 0 4000000 1
+  tvservice  -e "CEA 4" ; sleep 1; vcgencmd measure_clock pixel ; tvservice  -e "DMT 87"; sleep 1; vcgencmd measure_clock pixel
+According to spec PLLH must be between 600MHz and 2400MHz (but we support up to 3000MHz when overclocking)
+There is a fixed divide by 10 from the PLL, plus an 8-bit divisor.
+So we should be able to divide PLL by between 10 and 2550.
+So highest pixel clock is 240MHz (300MHz with overclock)
+And lowest pixel clock is 0.235MHz
+
+http://www.techmind.org/lcd/phasexplan.html
+
 TODO:
+- fix npm install (quits, nan absent, requires 2x)
 https://www.npmjs.com/package/tiny-worker
 https://wiki.libsdl.org/SDL_GetWindowBordersSize?highlight=%28%5CbCategoryAPI%5Cb%29%7C%28SDLFunctionTemplate%29
 https://github.com/projectM-visualizer/projectm
 https://www.perl.com/pub/2011/01/visualizing-music-with-sdl-and-perl.html
 https://www.cg.tuwien.ac.at/courses/Seminar/WS2010/processing.pdf
 https://nodeaddons.com/streaming-data-from-c-to-node-js/
+good expl of pre-reqs (g++): https://github.com/chrisemunt/tcp-netx
+maybe use Docker on a stack of (say, 4) RPis or RPi-Zeros? https://blog.alexellis.io/getting-started-with-docker-on-raspberry-pi/
+  16 cores * 0.1 Intel ~= 1.5 Intel CPUs
+password-less ssh:
+  ssh-keygen
+  cat ~/.ssh/id_rsa.pub | ssh pi@raspberrypi "mkdir ~/.ssh; cat >> ~/.ssh/authorized_keys"
+  https://blog.codecentric.de/en/2013/03/home-automation-with-angularjs-and-node-js-on-a-raspberry-pi/
+RPi cluster? https://makezine.com/projects/build-a-compact-4-node-raspberry-pi-cluster/
+LCD front panel: https://www.raspberrypi-spy.co.uk/2012/07/16x2-lcd-module-control-using-python/#prettyPhoto
+RPi 2/3 SAMBA + cross-over: http://thisdavej.com/connecting-a-raspberry-pi-using-an-ethernet-crossover-cable-and-internet-connection-sharing/
+https://raspberrypi.stackexchange.com/questions/37554/local-network-between-two-rpis/37596#37596
+http://amzn.to/2chSQ4N
+http://amzn.to/2cqvjn5
+Video core info:
+https://github.com/hermanhermitage/videocoreiv/wiki/VideoCore-IV-Programmers-Manual
 
+PERF notes:
+** https://medium.com/the-node-js-collection/get-ready-a-new-v8-is-coming-node-js-performance-is-changing-46a63d6da4de
+- func calls were slow within try/catch
+- avoid delete and instead set properties to undefined 
+- fat arrow functions which do not have arguments objects
+- less code != faster code
+- expose arguments object to another function instead of converting to array
+- bind was slower than closure
+- comments used to slow down funcs
+- put long numeric ID’s in strings
+- use Object.keys for loop, Object.values directly is slower
+- monomorphic func args are faster
+- remove "debugger" stmts
+the soc is a GPU with a CPU bolted on as a feature
+to check version# of components:  npm version   -OR-    node -e 'console.log(process.versions);'
+32-bit vs. 64-bit:
+- 32 bit more mature?
+- 64-bit code is sometimes larger, fewer instructions fit in cache
+- 64-bit ptrs take more RAM, cache than 32-bit ptrs; most data they point to isn't, #pointers is a lot lees than overall data. So the memory hit is fairly insignificant.
+https://groups.google.com/forum/#!topic/nodejs/rAvPzqZ-YY4
+- Instructions with immediate values are larger but position independent code tends to be smaller
+and more efficient due to RIP-relative addressing.
+- **more registers so data gets spilled to the stack less often.
+- 32-bit system call performance suffers on 64 bit hosts because every system call goes through a thunk that
+switches modes and converts arguments and the return value.
+- Javascript uses 64 bits for its numbers exclusively. 
+- reuse functions (esp lambas) so optimized versions are used
+arm7 == 32-bit
+armv8 = 32/64-bit
+cat /proc/cpuinfo
+
+node -p "process.config"
+node -p "process.arch"
+
+flamegraphs
+node --trace_opt --trace_inlining --trace_deopt file.js
+
+
+for scripts, remember to edit getcfg.js
 
   sudo apt-get dist-upgrade
   sudo apt-get update
