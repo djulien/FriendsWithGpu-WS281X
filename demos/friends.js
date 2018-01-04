@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+//sudo DEBUG=*,-ref,-ref:struct,-ref:array demos/friends.js
 
 'use strict';
-require('colors').enabled = true;
+require('colors').enabled = true; //console output colors; allow bkg threads to use it also
 const os = require('os');
 const cluster = require('cluster');
 const {debug} = require('./shared/debug');
@@ -11,14 +12,16 @@ const {debug} = require('./shared/debug');
 //const mmapio = require('mmap-io');
 //const framebuffer = require('framebuffer');
 //const {Screen, GpuCanvas, shmbuf} = require('gpu-friends-ws281x');
-const {GpuCanvas, SimplerCanvas} = require('gpu-friends-ws281x');
-const {Screen} = cluster.isMaster? require('gpu-friends-ws281x'): {Screen: {}}; //bkg wkers do not need screen info from SDL
+//const {GpuCanvas, SimplerCanvas} = require('gpu-friends-ws281x');
+const GpuCanvas = require('gpu-friends-ws281x').SimplerCanvas;
+const Screen = cluster.isMaster? require('gpu-friends-ws281x').Screen: {}; //avoid extra SDL_init for bkg wkers
+//const Screen = require('gpu-friends-ws281x').Screen;
 
 const NUM_UNIV = cluster.isWorker? +process.env.NUM_UNIV: 24;
 const UNIV_LEN = cluster.isWorker? +process.env.UNIV_LEN: Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
-const NUM_WKER = os.cpus().length - 1 + 3; //leave 1 core for render and/or audio
-const WKER_UNIV = NUM_WKER? Math.ceil(NUM_UNIV / NUM_WKER): NUM_UNIV;
-const FPS = 1000000 / ((UNIV_LEN + 4) * 30);
+const NUM_WKER = 1; //os.cpus().length - 1 +3; //leave 1 core for render, audio, ui
+const WKER_UNIV = NUM_WKER? Math.ceil(NUM_UNIV / NUM_WKER): NUM_UNIV; //#univ rendered by each bkg wker
+const FPS = cluster.isWorker? +process.env.FPS: Screen.fps; //1000000 / ((UNIV_LEN + 4) * 30);
 
 const EPOCH = cluster.isWorker? +process.env.EPOCH: elapsed(); //use master for shared time base
 const WKER_CFG = cluster.isWorker? JSON.parse(process.env.WKER_CFG): {};
@@ -46,7 +49,7 @@ const OPTS =
 //const shmbuf = cluster.isWorker? shm.get(SHM_KEY): shm.create(NUM_UNIV * UNIV_LEN + 1, "Uint32Array", SHM_KEY);
 //const SHMKEY = 0xfeed; //make value easy to find (for debug)
 //const shmbuf = new Uint32Array(shmbuf(SHMKEY, (NUM_UNIV * UNIV_LEN + 1) * Uint32Array.BYTES_PER_ELEMENT)):
-const canvas = new SimplerCanvas("Friends", NUM_UNIV, UNIV_LEN, OPTS);
+const canvas = new GpuCanvas("Friends", NUM_UNIV, UNIV_LEN, OPTS);
 
 //const cpu = new Semaphore('mySema-cpu', { xdebug: true, xsilent: true, value: os.cpus().length - 1});
 //const idle = new Semaphore('mySema-idle', { xdebug: true, xsilent: true, value: os.cpus().length - 1});
@@ -63,7 +66,7 @@ function* master()
 //            fb.fbp[fb.line_length * y + x] = 0xff00ff00;
 //    setTimeout(function() { process.exit(0); }, 10000); return;
 
-    const DURATION = 10;
+    const DURATION = 2;
 //    master.AutoRestart = true;
 //    sema.acquire();
     console.log(`master hello, shm key 0x%s, launch ${NUM_WKER} wker(s) (${os.cpus().length} core(s)) @${micro(elapsed(EPOCH))} sec`.green_lt, 0); //shmbuf.key.toString(16));
@@ -80,7 +83,9 @@ function* master()
     canvas.paint(canvas.pixels);
 
     yield wait(1);
-return;
+    canvas.fill(0);
+    canvas.paint(canvas.pixels);
+//return;
 
 //set exit handler < fork in case wker dies immediately:
     cluster.on('exit', (wker, code, signal) =>
@@ -95,7 +100,9 @@ return;
 //    setTimeout(() => { child.kill('SIGINT') }, 10000);
     for (var frnum = 0; frnum < DURATION * FPS; ++frnum)
     {
+console.log(`master render[${frnum}]`.blue_lt);
         render(frnum);
+console.log(`master paint[${frnum}]`.blue_lt);
         paint();
     }
 }
@@ -121,7 +128,9 @@ function worker()
 //    setTimeout(function() { quit(); }, 2000);
     for (var frnum = 0;; ++frnum)
     {
+console.log(`child '${process.pid}' render[${frnum}]`.blue_lt);
         render(frnum);
+console.log(`child '${process.pid}' paint[${frnum}]`.blue_lt);
         paint();
     }
 }
@@ -150,12 +159,12 @@ function paint()
 {
     if (cluster.isMaster)
     {
-        var frnum = shmbuf[NUM_UNIV * UNIV_LEN];
+        var frnum = canvas.pixels[NUM_UNIV * UNIV_LEN];
         validate(frnum);
-        PaintSync(shmbuf); //encode and paint; NOTE: does not return until V-sync
+        canvas.paint(canvas.pixels); //encode and paint; NOTE: does not return until V-sync
         return;
     }
-    PaintSync(); //dummy paint to sync with master; NOTE: does not return until V-sync
+    canvas.paint(); //dummy paint to sync with master; NOTE: does not return until V-sync
 }
 
 
@@ -166,8 +175,8 @@ function validate(frnum)
     {
         var data = (Math.floor(x / WKER_UNIV) << 16) | frnum; //TEST ONLY
         for (var y = 0; y < 10; ++y)
-            if (shmbuf[xofs + y] != data)
-                throw `incorrect render: shm[${x},${y}] = ${shmbuf[xofs + y]}, should be ${data}`.red_lt;
+            if (canvas.pixels[xofs + y] != data)
+                throw `incorrect render: canvas[${x},${y}] = ${canvas.pixels[xofs + y]}, should be ${data}`.red_lt;
     }
 }
 
@@ -180,7 +189,7 @@ function fork(cfg)
 
     if (isNaN(++fork.count)) fork.count = 1;
     if (fork.count > 100) throw "Too many forks".red_lt;
-    var wker = cluster.fork({NUM_UNIV, UNIV_LEN, EPOCH, SHM_KEY, WKER_CFG: JSON.stringify(cfg)});
+    var wker = cluster.fork({NUM_UNIV, UNIV_LEN, EPOCH, FPS, WKER_CFG: JSON.stringify(cfg)}); //, SHM_KEY});
 //        console.log("forked", wker); //cluster.workers); //cluster[1..4].id, .process.pid
     wker.cfg = cfg; //cache wker cfg
 }

@@ -5,11 +5,11 @@
 var fs = require('fs');
 const glob = require('glob');
 const pathlib = require('path');
-require('colors').enabled = true; //for console output colors
+require('colors').enabled = true; //console output colors; allow bkg threads to use it also
 const cluster = require('cluster');
-const {inherits} = require('util');
+//const {inherits} = require('util');
 const bindings = require('bindings');
-//const {debug} = require('./shared/debug');
+const {debug} = require('./demos/shared/debug');
 const {/*Screen,*/ GpuCanvas, SimplerCanvas, UnivTypes, shmbuf, AtomicAdd} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
 //lazy-load Screen to avoid extraneous SDL inits:
 //module.exports.Screen = Screen;
@@ -23,6 +23,41 @@ Object.defineProperty(module.exports, "Screen",
         const {Screen} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
         Screen.gpio = toGPIO();
         Screen.isRPi = isRPi();
+//adapted from node-framebuffer:
+        const ioctl = require('ioctl');
+        const fbstruct = require('framebuffer/lib/structs');
+        const fbconst = require('framebuffer/lib/constants');
+
+        const vinfo = new fbstruct.Vinfo(); //variable display info struct
+        var fbfd = fs.openSync("/dev/fb0", 'r');
+        var ret = ioctl(fbfd, fbconst.FBIOGET_VSCREENINFO, vinfo.ref());
+        fs.closeSync(fbfd);
+        if (ret) throw new Error("ioctl error".red_lt);
+//  xres: ref.types.uint32,
+//  yres: ref.types.uint32,
+//  xres_virtual: ref.types.uint32,
+//  yres_virtual: ref.types.uint32,
+//  xoffset: ref.types.uint32,
+//  yoffset: ref.types.uint32,
+//  bits_per_pixel: ref.types.uint32,
+
+//  pixclock: ref.types.uint32,
+//  left_margin: ref.types.uint32,
+//  right_margin: ref.types.uint32,
+//  upper_margin: ref.types.uint32,
+//  lower_margin: ref.types.uint32,
+//  hsync_len: ref.types.uint32,
+//  vsync_len: ref.types.uint32,
+//        const Screen = vinfo; //{};
+        Screen.bits_per_pixel = vinfo.bits_per_pixel || 32;
+        Screen.pixclock = vinfo.pixclock || 50000000;
+        Screen.hblank = (vinfo.left_margin + vinfo.hsync_len + vinfo.right_margin) || Math.floor(Screen.width / 23.25);
+        Screen.vblank = (vinfo.upper_margin + vinfo.vsync_len + vinfo.lower_margin) || Math.floor(Screen.height / 23.25);
+        Screen.rowtime = (Screen.width + Screen.hblank) / Screen.pixclock; //must be ~ 30 usec for WS281X
+        Screen.frametime = (Screen.height + Screen.vblank) * Screen.rowtime;
+        Screen.fps = 1 / Screen.frametime;
+        Object.defineProperty(module.exports, "Screen", Screen); //info won't change; reuse it next time
+debug("Screen info %s".blue_lt, JSON.stringify(Screen, null, 2));
         return Screen;
     },
     configurable: true, //allow modify/delete by caller
@@ -406,8 +441,9 @@ new Proxy(function(){},
 //to delete:  ipcrm -M key
 //var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
         const SHMKEY = 0xface; //make value easy to find (for debug)
-        console.log(`GpuCanvas: alloc ${(THIS.width * THIS.height + 2) * Uint32Array.BYTES_PER_ELEMENT} bytes`.blue_lt);
-        THIS.pixels = new Uint32Array(shmbuf(SHMKEY, (THIS.width * THIS.height + 2) * Uint32Array.BYTES_PER_ELEMENT));
+        const EXTRA = 1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
+        THIS.pixels = new Uint32Array(shmbuf(SHMKEY, (THIS.width * THIS.height + EXTRA) * Uint32Array.BYTES_PER_ELEMENT));
+        console.log(`GpuCanvas: alloc ${THIS.pixels.byteLength} bytes`.blue_lt);
 //        if ((WANT_SHARED === false) || cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
         THIS.elapsed = 0;
 //console.log("here1");
@@ -441,14 +477,14 @@ new Proxy(function(){},
         {
             xstart = Math.max(xstart, 0);
             ystart = Math.max(ystart, 0);
-            w = Math.min(w, this.width - xstart);
-            h = Math.min(h, this.height - ystart);
-            for (var x = 0, xofs = xstart * this.height; x < w; ++x, xofs += this.height)
-                for (var y = 0; y < h; ++y)
+            var xend = Math.min(xstart + w, this.width);
+            var yend = Math.min(ystart + h, this.height);
+            for (var x = xstart, xofs = x * this.height; x < xend; ++x, xofs += this.height)
+                for (var y = ystart; y < yend; ++y)
                     this.pixels[xofs + y] = color >>> 0;
             return this; //fluent
         }
-        color = x; //shuffle params
+        color = xstart; //shuffle params
         this.pixels.fill(color >>> 0);
 //        return this; //fluent
     }
@@ -502,7 +538,7 @@ new Proxy(function(){},
         if (arguments.length) SimplerCanvas.prototype.paint.call(this, alt_pixels); //CAUTION: blocks a few msec for bkg renderer
         else SimplerCanvas.prototype.paint.call(this); //CAUTION: blocks a few msec for bkg renderer
         if (isNaN(++this.render_count)) this.render_count = 1;
-        console.log(`paint# ${this.render_count}`.blue_lt);
+        debug(`paint# ${this.render_count}, ${arguments.length} arg(s)`.blue_lt);
 //        return this; //fluent
     } //.bind(this);
 

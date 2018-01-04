@@ -2026,7 +2026,7 @@ public:
 #endif
 
 //window create and redraw:
-//all GPU work done in bkg thread (asynchronously)
+//all GPU work done in fg thread (synchronously)
 class SimplerCanvas
 {
 private:
@@ -3099,7 +3099,7 @@ NAN_METHOD(SimplerCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8
         void *data = aryp->Buffer()->GetContents().Data();
         pixels = static_cast<uint32_t*>(data);
     }
-//myprintf(33, "js pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels[0], pixels[1], pixels[2]);
+myprintf(32, "js paint(0x%x) %d arg(s): pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, info.Length(), pixels[0], pixels[1], pixels[2]);
     if (!canvas->inner.Paint(pixels)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
