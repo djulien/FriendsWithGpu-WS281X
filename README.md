@@ -16,6 +16,13 @@ And lowest pixel clock is 0.235MHz
 
 http://www.techmind.org/lcd/phasexplan.html
 
+Node.js tuning:
+https://blog.jayway.com/2015/04/13/600k-concurrent-websocket-connections-on-aws-using-node-js/
+- use Websockets/ws instead of socket.io
+- –nouse-idle-notification
+- –expose-gc + call gc every ~ 30 sec
+
+
 TODO:
 - fix npm install (quits, nan absent, requires 2x)
 https://www.npmjs.com/package/tiny-worker

@@ -18,30 +18,39 @@
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output (incl bkg threads)
 //const {Worker} = require('webworker-threads');
+const os = require('os');
 const cluster = require('cluster');
 const JSON = require('circular-json'); //CAUTION: replace std JSON with circular-safe version
 const {debug} = require('./shared/debug');
+//const Semaphore = require('posix-semaphore');
+//const shm = require('shm-typed-array');
+//const fs = require('fs');
+//const mmapio = require('mmap-io');
+//const framebuffer = require('framebuffer');
+const {GpuCanvas} = require('gpu-friends-ws281x');
+const {Screen} = cluster.isMaster? require('gpu-friends-ws281x'): {Screen: {}}; //bkg wkers do not need screen info from SDL
 const {mp3playback, mp3len, DefaultAudioFile} = require('./shared/mp3playback');
-const {Screen, GpuCanvas} = cluster.isMaster? require('gpu-friends-ws281x'): {Screen: {}, GpuCanvas: {}};
 //const {blocking, wait} = require('blocking-style');
 //const ary2buf = require('typedarray-to-buffer');
 //const {vec3, vec4, mat4} = require('node-webgl/test/glMatrix-0.9.5.min.js');
 
 //display settings:
 Screen.gpio = true; //force full screen (test only)
-//const SPEED = 1/60; //1/10; //1/30; //animation speed (sec); fps
-const FPS = 60; //estimated animation speed; NOTE: won't go faster than video card refresh rate
-const NUM_UNIV = !cluster.isMaster? process.env.NUM_UNIV: 24; //can't exceed #VGA output pins unless external mux used
-const UNIV_LEN = !cluster.isMaster? process.env.UNIV_LEN: Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+const NUM_UNIV = !cluster.isMaster? +process.env.NUM_UNIV: 24; //can't exceed #VGA output pins unless external mux used
+const UNIV_LEN = !cluster.isMaster? +process.env.UNIV_LEN: Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
+const NUM_WKERS = os.cpus().length - 1; //+ 3; //leave 1 core for render and/or audio; //0; //1; //1; //2; //3; //bkg render wkers: 43 fps 1 wker, 50 fps 2 wkers on RPi
+const WKER_UNIV = NUM_WKER? Math.ceil(NUM_UNIV / NUM_WKER): NUM_UNIV;
 if (cluster.isMaster)
     debug("Screen %d x %d, is RPi? %d, GPIO? %d, #CPU %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //other run-time options:
-const MP3 = DefaultAudioFile; //defaults to mp3 file in current folder
+//const SPEED = 1/60; //1/10; //1/30; //animation speed (sec); fps
+//const FPS = 60; //estimated animation speed; NOTE: won't go faster than video card refresh rate
+const FPS = 1000000 / ((UNIV_LEN + 4) * 30); //TODO: use ioctl to get actual timing
+const MP3 = DefaultAudioFile; //defaults to mp3 file in current folder (if any)
 const DURATION = MP3? mp3len(MP3): 60; //how long to run (sec)
 const MP3BKG = false; //true; //false; //true; //use bkg thread to protect against timing jitter
-const NUM_WKERS = 1; //0; //1; //1; //2; //3; //render wkers: 43 fps 1 wker, 50 fps 2 wkers on RPi
 const XPARTN = NUM_WKERS? Math.ceil(NUM_UNIV / NUM_WKERS): NUM_UNIV; //too much rendering in fg for 1 CPU @60 FPS; use bkg wkers; assign 12 cols to each wker
 const END_PAUSE = 2; //10; //how long to pause at end (only for debug)
 
@@ -59,6 +68,7 @@ const OPTS =
 };
 
 //butterfly options:
+//most not implemented
 const BF_opts =
 {
 //    palette: null, //"Rainbow",
@@ -89,15 +99,15 @@ const BF_opts =
 
 
 //bkg wker mgmt:
-//use bkg wkers when full render takes longer than target frame time
-//render deadline ~= 16 msec @60 FPS or 33 msec @30 FPS
+//use bkg wkers when fg render takes longer than target frame rate
+//render time must be <= 16 msec @60 FPS or 33 msec @30 FPS
 //NOTE: RPi bkg render seems to run 3x as fast as fg render; maybe due to libuv traffic in main event loop?
 //var wkers = {};
 //var WkerRestart = true;
 //var numWkers = Math.ceil(NUM_UNIV / XPARTN); //require('os').cpus().length;
 const bkg_wkers =
 {
-    wkers: {},
+    wkers: {}, //hash of bkg wkers
     AutoRestart: true,
 //create bkg wkers:
     open: function*(canvas)
@@ -118,7 +128,7 @@ cluster.on('disconnect', (wker) =>
         {
 //try{
 //??        if (arguments.length == 2) { handle = msg; msg = wker; wker = undefined; } //?? shown in example at https://nodejs.org/api/cluster.html#cluster_event_message_1
-            var pid = wker.process._handle.pid; //kludge: pid is different place
+            var pid = wker.process._handle.pid; //NOTE: pid is in different place during this callback
 //console.log("got reply from wker %s, has proc? %d", pid, !!wkers[pid].process, JSON.stringify(msg, null, 2).slice(0, 100));
 //    if (!wkers[pid].process) wkers[pid].process = {pid};
             if (this.wkers[pid].process && (this.wkers[pid].process.pid != pid)) throw "wker pid mismatch";
@@ -137,7 +147,7 @@ cluster.on('disconnect', (wker) =>
             if (this.AutoRestart) cluster.fork({UNIV_UNIV, UNIV_LEN}); //preserve settings
         });
 
-        debug(`master proc '${process.pid}', starting ${NUM_WKERS} workers`.green_lt);
+        debug(`master process '${process.pid}' starting ${NUM_WKERS} workers`.green_lt);
 //divide canvas into vertical partitions:
 //NOTE: 24 cols is evenly divisible by 2, 3, 4, and 8 so it is nice for spreading across CPUs/cores
 //        debug(`dividing render work into ${NUM_WKERS} partitions`.blue_lt);
@@ -148,26 +158,29 @@ cluster.on('disconnect', (wker) =>
         {
 //    cluster.fork({NUM_UNIV: Math.min(NUM_UNIV - x, XPARTN), XPARTNOFS: x, UNIV_LEN});
 //        cluster.fork(); //{NUM_UNIV, UNIV_LEN}); //NOTE: might be extra due to round up; make uniform so workers are interchangeable
-            var wker = cluster.fork();
+            var wker = cluster.fork({NUM_UNIV, UNIV_LEN});
             debug(`bkg wker '${wker.process.pid}' forked`.green_lt, JSON.stringify(wker));
             this.wkers[wker.process.pid] = wker;
             wker.on('online', () =>
             {
                 debug(`bkg wker started`.green_lt);
-                step(); //wake fg thread
+//no                step(); //wake fg thread
 //            wkers[wker.process.pid] = wker;
             });
             wker.on('disconnect', () =>
             {
                 debug(`bkg wker disconnected`.cyan_lt);
             });
+/*
             wker.on('message', (msg) =>
             {
                 debug(`got msg ${JSON.stringify(msg)} from bkg wker`.blue_lt);
+//no                step(); //wake fg thread
 //send msgs back to caller:
 //            if (msg.mp3done) done_cb.apply(null, msg.mp3done);
 //            if (msg.mp3progess) progress_cb.apply(null, msg.mp3progress);
             });
+*/
         }
         for (var x = 0; x < NUM_UNIV; x += XPARTN) //wait for startup + ack
             var {msg, wker} = yield;
@@ -253,7 +266,7 @@ step(function* main()
 
 //OPTS.gpufx = true; //TEMP: bypass
 //    if (MP3) mp3playback(MP3); //TODO: sync, account for latency, add visualizer; move to bkg process?
-    if (MP3) yield mp3playback(MP3); //don't continue until speaker data queued up
+    if (MP3 && cluster.isMaster) yield mp3playback(MP3); //don't continue until speaker data queued up
     debug("begin, run for %d sec @%d fps".green_lt, DURATION, FPS);
 //    var started = now_sec();
     canvas.elapsed = 0; //reset progress bar
@@ -295,6 +308,7 @@ step(function* main()
 });
 
 
+//various render types:
 function* render(t, canvas, XSTART)
 {
     var ani_ofs = t * BF_opts.speed * BF_opts.reverse? -1: 1;
@@ -487,3 +501,51 @@ function hex32(val)
 
 
 //eof
+/*
+https://medium.freecodecamp.org/scaling-node-js-applications-8492bd8afadc
+https://httpd.apache.org/docs/2.4/programs/ab.html
+ab -c200 -t10 http://localhost:8080/
+fx(frame) == cli req
+bkg wker render == svr
+
+cluster.workers
+//broadcast:
+Object.values(cluster.workers).forEach(worker => {
+  worker.send(`Hello Worker ${worker.id}`);
+});
+
+// server.js
+const http = require('http');
+const pid = process.pid;
+http.createServer((req, res) => {
+  for (let i=0; i<1e7; i++); // simulate CPU work
+  res.end(`Handled by process ${pid}`);
+}).listen(8080, () => {
+  console.log(`Started process ${pid}`);
+});
+
+// cluster.js
+const cluster = require('cluster');
+const os = require('os');
+if (cluster.isMaster) {
+  const cpus = os.cpus().length;
+  console.log(`Forking for ${cpus} CPUs`);
+  for (let i = 0; i<cpus; i++) {
+    cluster.fork();
+  }
+} else {
+  require('./server');
+}
+
+//master:
+cluster.on('exit', (worker, code, signal) => {
+  if (code !== 0 && !worker.exitedAfterDisconnect) {
+    console.log(`Worker ${worker.id} crashed. ` +
+                'Starting a new worker...');
+    cluster.fork();
+  }
+});
+
+//SIGUSR2 (SIGUSR1 used by Node debugger)
+=================================
+*/
