@@ -75,9 +75,15 @@ function* master()
 //    bufParent.write('hi there'.pink_lt);
 //    setTimeout(function() { sema.release(); }, 5000);
 
-    var started = elapsed();
-    usleep(25);
-    console.log(`25 usec delay took ${elapsed(started) * 1e6} usec`.blue_lt);
+    var time = 0, time2 = 0;
+    for (var i = 0; i < 1000; ++i)
+    {
+        time -= elapsed();
+        time2 += usleep(2500);
+        time += elapsed();
+    }
+    console.log(`2500 usec delay took ${time} or ${time2} msec avg`.blue_lt);
+return;
 
     canvas.fill(0xffff0000);
     canvas.paint(canvas.pixels);

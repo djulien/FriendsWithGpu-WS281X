@@ -418,10 +418,10 @@ inline float _mix(float x, float y, float a) { return (1 - a) * x + a * y; }
 //timing stats:
 inline uint64_t now() { return SDL_Ticks(); }
 inline double elapsed(uint64_t started) { return (double)(now() - started) / SDL_TickFreq(); } //Freq = #ticks/second
-inline uint32_t elapsed_usec(uint64_t started)
+inline double elapsed_usec(uint64_t started)
 {
 //    static uint64_t tick_per_usec = SDL_TickFreq() / 1000000;
-    return (now() - started) * 1000000 / SDL_TickFreq(); //Freq = #ticks/second
+    return (double)(now() - started) * 1000000 / SDL_TickFreq(); //Freq = #ticks/second
 }
 
 
@@ -2449,7 +2449,7 @@ NAN_METHOD(usleep_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
             info.GetReturnValue().Set(JS_INT(iso, usec)); //return actual delay time (usec)
             return;
         }
-        myprintf(24, BLUE_LT "usleep(%d -> %d)" ENDCOLOR, delay, delay - usec);
+//        myprintf(24, BLUE_LT "usleep(%d -> %d)" ENDCOLOR, delay, delay - usec);
         usleep(delay - usec); //NOTE: might wake up early due to signal
     }
 }
