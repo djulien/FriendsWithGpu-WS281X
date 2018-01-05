@@ -17,11 +17,11 @@ const {debug} = require('./shared/debug');
 const GpuCanvas = require('gpu-friends-ws281x').SimplerCanvas;
 const Screen = cluster.isMaster? require('gpu-friends-ws281x').Screen: {}; //avoid extra SDL_init for bkg wkers
 //const Screen = require('gpu-friends-ws281x').Screen;
-const usleep = require('gpu-friends-ws281x').usleep;
+const {AtomicAdd, usleep} = require('gpu-friends-ws281x');
 
 const NUM_UNIV = cluster.isWorker? +process.env.NUM_UNIV: 24;
 const UNIV_LEN = cluster.isWorker? +process.env.UNIV_LEN: Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
-const NUM_WKER = 1; //os.cpus().length - 1 +3; //leave 1 core for render, audio, ui
+const NUM_WKER = os.cpus().length - 1; //+3; //leave 1 core for render, audio, ui
 const WKER_UNIV = NUM_WKER? Math.ceil(NUM_UNIV / NUM_WKER): NUM_UNIV; //#univ rendered by each bkg wker
 const FPS = cluster.isWorker? +process.env.FPS: Screen.fps; //1000000 / ((UNIV_LEN + 4) * 30);
 
@@ -52,6 +52,7 @@ const OPTS =
 //const SHMKEY = 0xfeed; //make value easy to find (for debug)
 //const shmbuf = new Uint32Array(shmbuf(SHMKEY, (NUM_UNIV * UNIV_LEN + 1) * Uint32Array.BYTES_PER_ELEMENT)):
 const canvas = new GpuCanvas("Friends", NUM_UNIV, UNIV_LEN, OPTS);
+const NUM_PX = NUM_UNIV * UNIV_LEN;
 
 //const cpu = new Semaphore('mySema-cpu', { xdebug: true, xsilent: true, value: os.cpus().length - 1});
 //const idle = new Semaphore('mySema-idle', { xdebug: true, xsilent: true, value: os.cpus().length - 1});
@@ -71,10 +72,11 @@ function* master()
     const DURATION = 2;
 //    master.AutoRestart = true;
 //    sema.acquire();
-    console.log(`master hello, shm key 0x%s, launch ${NUM_WKER} wker(s) (${os.cpus().length} core(s)) @${micro(elapsed(EPOCH))} sec`.green_lt, 0); //shmbuf.key.toString(16));
+    debug(`master hello, shm key 0x%s, launch ${NUM_WKER} wker(s) (${os.cpus().length} core(s)) @${trunc(elapsed(EPOCH), 1e6)} sec`.green_lt, 0); //shmbuf.key.toString(16));
 //    bufParent.write('hi there'.pink_lt);
 //    setTimeout(function() { sema.release(); }, 5000);
 
+/*
     var time = 0, time2 = 0;
     for (var i = 0; i < 1000; ++i)
     {
@@ -82,19 +84,20 @@ function* master()
         time2 += usleep(2500);
         time += elapsed();
     }
-    console.log(`2500 usec delay took ${time} or ${time2} msec avg`.blue_lt);
+    console.log(`2500 usec delay took ${trunc(time, 1e3)}..${trunc(time2 / 1e6, 1e3)} msec avg`.blue_lt);
 return;
+*/
 
     canvas.fill(0xffff0000);
     canvas.paint(canvas.pixels);
-    yield wait(1);
+    yield wait(1-.005);
     canvas.fill(0xff00ff00);
     canvas.paint(canvas.pixels);
-    yield wait(1);
+    yield wait(1-.005);
     canvas.fill(0xff0000ff);
     canvas.paint(canvas.pixels);
 
-    yield wait(1);
+    yield wait(1-.005);
     canvas.fill(0);
     canvas.paint(canvas.pixels);
 //return;
@@ -104,19 +107,30 @@ return;
     {
 //console.log(cluster.workers);
 //console.log(wker);
-        console.log(`wker[${wker.id}], cfg ${JSON.stringify(wker.cfg)}, pid '${wker.process.pid}' died (${code || signal}), restart? ${master.AutoRestart}`.red_lt);
+        debug(`wker[${wker.id}], cfg ${JSON.stringify(wker.cfg)}, pid '${wker.process.pid}' died (${code || signal}), restart? ${master.AutoRestart}`.red_lt);
         fork(wkid.cfg); //preserve cfg for process affinity
     });
+    canvas.pixels[NUM_PX + 1] = 0;
+    debug(`launching ${NUM_WKER} wkers @${elapsed(EPOCH)}`.blue_lt);
     for (var w = 0; w < NUM_WKER; ++w) fork({first_univ: w * WKER_UNIV, inx: w}); //launch bkg wkers
+    for (;;) //sync up
+    {
+        var numwker = AtomicAdd(canvas.pixels, NUM_PX + 1, 0);
+        if (numwker == NUM_WKER) break;
+    }
+    debug(`${NUM_WKER} wkers ready @${elapsed(EPOCH)}`.blue_lt);
+    AtomicAdd(canvas.pixels, NUM_PX + 1, 100);
 
+//    canvas.pixels
 //    setTimeout(() => { child.kill('SIGINT') }, 10000);
     for (var frnum = 0; frnum < DURATION * FPS; ++frnum)
     {
-console.log(`master render[${frnum}]`.blue_lt);
+debug(`master render[${frnum}]`.blue_lt);
         render(frnum);
-console.log(`master paint[${frnum}]`.blue_lt);
+debug(`master paint[${frnum}]`.blue_lt);
         paint();
     }
+    quit();
 }
 
 
@@ -125,13 +139,20 @@ function worker()
 //    const sema = new Semaphore('mySemaphore', { xdebug: true, xsilent: true });
 //    const shmKey = parseInt(process.env.SHM_KEY);
 //    const bufChild = shm.get(shmKey);
-    console.log(`wker hello, cfg ${JSON.stringify(WKER_CFG)}, pid '${process.pid}' started @${micro(elapsed(EPOCH))}`.green_lt);
+    console.log(`wker hello, cfg ${JSON.stringify(WKER_CFG)}, pid '${process.pid}' started @${trunc(elapsed(EPOCH), 1e6)}`.green_lt);
   
     process.on("message", (msg) =>
     {
         if (msg.quit) return quit();
         throw `Unhandled message: ${JSON.stringify(msg)}`.red_lt;
     });
+    AtomicAdd(canvas.pixels, NUM_PX + 1, 1);
+    for (;;) //sync up
+    {
+        var count = AtomicAdd(canvas.pixels, NUM_PX + 1, 0);
+        if (count == NUM_WKER + 100) break;
+    }
+    debug(`${NUM_WKER} wkers ready @${elapsed(EPOCH)}`.blue_lt);
 
 //    cpu.acquire();
 //console.log(`wker '${process.pid}' acq @${elapsed(EPOCH)}`.cyan_lt);
@@ -140,9 +161,9 @@ function worker()
 //    setTimeout(function() { quit(); }, 2000);
     for (var frnum = 0;; ++frnum)
     {
-console.log(`child '${process.pid}' render[${frnum}]`.blue_lt);
+debug(`child '${process.pid}' render[${frnum}]`.blue_lt);
         render(frnum);
-console.log(`child '${process.pid}' paint[${frnum}]`.blue_lt);
+debug(`child '${process.pid}' paint[${frnum}]`.blue_lt);
         paint();
     }
 }
@@ -154,11 +175,12 @@ function render(frnum)
 {
     if (cluster.isMaster)
     {
-        /*shmbuf*/ canvas.pixels[NUM_UNIV * UNIV_LEN] = frnum; //tell wkers which frame to render
+        /*shmbuf*/ canvas.pixels[NUM_PX] = frnum; //tell wkers which frame to render
         if (NUM_WKER) return;
     }
 
-    if (/*shmbuf*/ canvas.pixels[NUM_UNIV * UNIV_LEN] != frnum) throw `render out of sync: expected fr ${frnum}, got fr ${/*shmbuf*/ canvas.pixels[NUM_UNIV * UNIV_LEN]}`.red_lt;
+    usleep(10); //delay wkers while mastser updates fr#
+    if (/*shmbuf*/ canvas.pixels[NUM_PX] != frnum) throw `render out of sync: expected fr ${frnum}, got fr ${/*shmbuf*/ canvas.pixels[NUM_PX]}`.red_lt;
     for (var x = WKER_CFG.first_univ, xofs = x * UNIV_LEN; x < WKER_CFG.last_univ; ++x, xofs += UNIV_LEN)
         for (var y = 0; y < 20; ++y)
             /*shmbuf*/ canvas.pixels[xofs + y] = (WKER_CFG.inx << 16) | frnum; //TEST ONLY
@@ -171,12 +193,15 @@ function paint()
 {
     if (cluster.isMaster)
     {
-        var frnum = canvas.pixels[NUM_UNIV * UNIV_LEN];
+        usleep(10000); //delay until wkers update pixels
+        var frnum = canvas.pixels[NUM_PX];
         validate(frnum);
         canvas.paint(canvas.pixels); //encode and paint; NOTE: does not return until V-sync
+        debug(`master wake @${elapsed(EPOCH)}`.cyan_lt)
         return;
     }
     canvas.paint(); //dummy paint to sync with master; NOTE: does not return until V-sync
+    debug(`child '${process.pid}' wake @${elapsed(EPOCH)}`.blue_lt)
 }
 
 
@@ -244,7 +269,7 @@ if (done) debug("process %s done".cyan_lt, process.pid);
 //NOTE: only used for debug at end; everything else is V-synced for precision timing :)
 function wait(delay)
 {
-//console.log("wait %d sec", milli(delay));
+//console.log("wait %d sec", trunc(delay, 1e3));
     delay *= 1000; //sec -> msec
     return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
 }
@@ -260,9 +285,9 @@ function elapsed(epoch)
 }
 
 
-function micro(val)
+function trunc(val, places)
 {
-    return Math.floor(val * 1e6) / 1e6;
+    return Math.floor(val * places) / places;
 }
 
 //eof

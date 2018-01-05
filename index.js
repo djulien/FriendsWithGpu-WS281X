@@ -159,7 +159,7 @@ new Proxy(function(){},
             if (/*opts[key] &&*/ !supported_OPTS[key]) throw `Option '${key}' not supported until maybe 2018 (OpenGL re-enabled)`.red_lt;
             if (!opts.WS281X_FMT || (['WS281X_FMT', 'UNIV_TYPE', 'WANT_SHARED'].indexOf(key) != -1)) return;
             all[inx] = null; //don't show other stuff in live mode (interferes with output signal)
-            console.log(`Ignoring option '${key}' for live mode`.yellow_lt);
+            console.error(`Ignoring option '${key}' for live mode`.yellow_lt);
         });
 //        if (typeof opts.WANT_SHARED == "undefined") opts.WANT_SHARED = !cluster.isMaster;
 //        if (opts.WS281X_FMT) delete opts.SHOW_PROGRESS; //don't show progress bar in live mode (interferes with LED output)
@@ -265,7 +265,7 @@ new Proxy(function(){},
         path = pathlib.relative(__dirname, path);
         if ((png.width != this.width) || (png.height != this.height))
             console.error("image '%s' %d x %d doesn't match canvas %d x %d".yellow_lt, path, png.width, png.height, this.width, this.height);
-            else console.error("image '%s' size %d x %d matches canvas".green_lt, path, png.width, png.height);
+            else debug("image '%s' size %d x %d matches canvas".green_lt, path, png.width, png.height);
         png.pixels = new Uint32Array(png.data.buffer); //gives RGBA
         png.data.readUInt32_shuffle = function(ofs)
         {
@@ -418,7 +418,7 @@ new Proxy(function(){},
             if (/*opts[key] &&*/ !supported_OPTS[key]) throw `Option '${key}' not supported until maybe 2018 (OpenGL re-enabled)`.red_lt;
             if (!opts.WS281X_FMT || (['WS281X_FMT', 'UNIV_TYPE', 'WANT_SHARED'].indexOf(key) != -1)) return;
             all[inx] = null; //don't show other stuff in live mode (interferes with output signal)
-            console.log(`Ignoring option '${key}' for live mode`.yellow_lt);
+            console.error(`Ignoring option '${key}' for live mode`.yellow_lt);
         });
 //        if (typeof opts.WANT_SHARED == "undefined") opts.WANT_SHARED = !cluster.isMaster;
 //        if (opts.WS281X_FMT) delete opts.SHOW_PROGRESS; //don't show progress bar in live mode (interferes with LED output)
@@ -444,7 +444,7 @@ new Proxy(function(){},
         const SHMKEY = 0xface; //make value easy to find (for debug)
         const EXTRA = 1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
         THIS.pixels = new Uint32Array(shmbuf(SHMKEY, (THIS.width * THIS.height + EXTRA) * Uint32Array.BYTES_PER_ELEMENT));
-        console.log(`GpuCanvas: alloc ${THIS.pixels.byteLength} bytes`.blue_lt);
+        debug(`GpuCanvas: alloc ${THIS.pixels.byteLength} bytes`.blue_lt);
 //        if ((WANT_SHARED === false) || cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
         THIS.elapsed = 0;
 //console.log("here1");
@@ -500,7 +500,7 @@ new Proxy(function(){},
         path = pathlib.relative(__dirname, path);
         if ((png.width != this.width) || (png.height != this.height))
             console.error("image '%s' %d x %d doesn't match canvas %d x %d".yellow_lt, path, png.width, png.height, this.width, this.height);
-            else console.error("image '%s' size %d x %d matches canvas".green_lt, path, png.width, png.height);
+            else debug("image '%s' size %d x %d matches canvas".green_lt, path, png.width, png.height);
         png.pixels = new Uint32Array(png.data.buffer); //gives RGBA
         png.data.readUInt32_shuffle = function(ofs)
         {
