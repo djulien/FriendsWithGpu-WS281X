@@ -10,7 +10,7 @@ const cluster = require('cluster');
 //const {inherits} = require('util');
 const bindings = require('bindings');
 const {debug} = require('./demos/shared/debug');
-const {/*Screen,*/ GpuCanvas, SimplerCanvas, UnivTypes, shmbuf, AtomicAdd} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
+const {/*Screen,*/ GpuCanvas, SimplerCanvas, UnivTypes, shmbuf, AtomicAdd, usleep} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
 //lazy-load Screen to avoid extraneous SDL inits:
 //module.exports.Screen = Screen;
 Object.defineProperty(module.exports, "Screen",
@@ -65,6 +65,7 @@ debug("Screen info %s".blue_lt, JSON.stringify(Screen, null, 2));
 module.exports.shmbuf = shmbuf;
 module.exports.UnivTypes = UnivTypes;
 module.exports.AtomicAdd = AtomicAdd;
+module.exports.usleep = usleep;
 //attach config info as properties:
 //no need for callable functions (config won't change until reboot)
 //module.exports.Screen.gpio = toGPIO();

@@ -91,6 +91,7 @@
 //#include <math.h> //sqrt
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <unistd.h> //usleep
 #include <stdarg.h> //varargs
 #include <sys/shm.h> //shmatt, shmget, shmctl
 //#include <byteswap.h> //bswap_32(x)
@@ -417,6 +418,11 @@ inline float _mix(float x, float y, float a) { return (1 - a) * x + a * y; }
 //timing stats:
 inline uint64_t now() { return SDL_Ticks(); }
 inline double elapsed(uint64_t started) { return (double)(now() - started) / SDL_TickFreq(); } //Freq = #ticks/second
+inline uint32_t elapsed_usec(uint64_t started)
+{
+//    static uint64_t tick_per_usec = SDL_TickFreq() / 1000000;
+    return (now() - started) * 1000000 / SDL_TickFreq(); //Freq = #ticks/second
+}
 
 
 #if 0
@@ -2427,6 +2433,28 @@ NAN_METHOD(AtomicAdd_js) //defines "info"; implicit HandleScope (~ v8 stack fram
 }
 
 
+//short sleep (usec):
+NAN_METHOD(usleep_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    if (info.Length() != 1) return_void(errjs(iso, "usleep: expected 1 param, got %d", info.Length()));
+    int delay = info[0]->IntegerValue() - 2; //usec; subtract some for overhead
+
+    uint64_t started = now(); //, delay = info[0]->IntegerValue() * SDL_TickFreq() / 1000000; //#ticks
+    for (;;)
+    {
+        uint32_t usec = elapsed_usec(started);
+        if (usec >= delay) //overdue or close enough
+        {
+            info.GetReturnValue().Set(JS_INT(iso, usec)); //return actual delay time (usec)
+            return;
+        }
+        myprintf(24, BLUE_LT "usleep(%d -> %d)" ENDCOLOR, delay, delay - usec);
+        usleep(delay - usec); //NOTE: might wake up early due to signal
+    }
+}
+
+
 #if 0
 void UnivTypes_js(v8::Local<v8::String>& name, const Nan::PropertyCallbackInfo<v8::Value>& info)
 {
@@ -3149,6 +3177,7 @@ NAN_MODULE_INIT(exports_js) //defines target
 //                 Nan::New<v8::FunctionTemplate>(shmatt_entpt)->GetFunction());
     Nan::Export(target, "AtomicAdd", AtomicAdd_js);
     Nan::Export(target, "shmbuf", shmbuf_js);
+    Nan::Export(target, "usleep", usleep_js);
     Nan::SetAccessor(target, JS_STR(iso, "UnivTypes"), UnivTypes_js);
 #endif
 //    target->SetAccessor(JS_STR(iso, "Screen"), Screen_js);

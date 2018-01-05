@@ -3,6 +3,18 @@
 # UNDER CONSTRUCTION
 
 
+install/repair:
+update nvm (CAUTION: removes node + npm)
+ sudo rm -rf ~/.nvm
+curl https://raw.githubusercontent.com/creationix/nvm/v0.25.0/install.sh | bash
+nvm --version
+nvm ls-remote
+nvm install v9.2.1
+node -v
+npm -v
+npm install
+sudo ln -s "$(which node)" /usr/local/bin/node
+
 Pixel clock:
 ** https://github.com/raspberrypi/firmware/issues/734
   vcgencmd hdmi_timings 506 1 8 44 52 264 1 6 10 6 0 0 0 60 0 4000000 1

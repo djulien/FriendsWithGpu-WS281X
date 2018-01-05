@@ -4,6 +4,7 @@
 'use strict';
 require('colors').enabled = true; //console output colors; allow bkg threads to use it also
 const os = require('os');
+//require('require-rebuild')(); //kludge: work-around for "module was compiled against a different Node.js version" errors
 const cluster = require('cluster');
 const {debug} = require('./shared/debug');
 //const Semaphore = require('posix-semaphore');
@@ -16,6 +17,7 @@ const {debug} = require('./shared/debug');
 const GpuCanvas = require('gpu-friends-ws281x').SimplerCanvas;
 const Screen = cluster.isMaster? require('gpu-friends-ws281x').Screen: {}; //avoid extra SDL_init for bkg wkers
 //const Screen = require('gpu-friends-ws281x').Screen;
+const usleep = require('gpu-friends-ws281x').usleep;
 
 const NUM_UNIV = cluster.isWorker? +process.env.NUM_UNIV: 24;
 const UNIV_LEN = cluster.isWorker? +process.env.UNIV_LEN: Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
@@ -72,6 +74,10 @@ function* master()
     console.log(`master hello, shm key 0x%s, launch ${NUM_WKER} wker(s) (${os.cpus().length} core(s)) @${micro(elapsed(EPOCH))} sec`.green_lt, 0); //shmbuf.key.toString(16));
 //    bufParent.write('hi there'.pink_lt);
 //    setTimeout(function() { sema.release(); }, 5000);
+
+    var started = elapsed();
+    usleep(25);
+    console.log(`25 usec delay took ${elapsed(started) * 1e6} usec`.blue_lt);
 
     canvas.fill(0xffff0000);
     canvas.paint(canvas.pixels);
