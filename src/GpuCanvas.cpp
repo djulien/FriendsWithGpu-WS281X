@@ -94,6 +94,8 @@
 #include <unistd.h> //usleep
 #include <stdarg.h> //varargs
 #include <sys/shm.h> //shmatt, shmget, shmctl
+//?? #define _MULTI_THREADED
+#include <pthread.h> //rwlock
 //#include <byteswap.h> //bswap_32(x)
 //#include <iostream> //std::cin
 //using std::cin;
@@ -1304,20 +1306,33 @@ WH Screen()
 #define WS281X_BITS  24 //each WS281X node has 24 data bits; send 24 bits to GPIO pins for each display row
 #define TXR_WIDTH  (3 * WS281X_BITS) //- 1) //data signal is generated at 3x bit rate, last bit overlaps H blank
 
+//#define MULTI_THREADED
+//#ifdef MULTI_THREADED
+// #define IFMULTI(stmt)  stmt
+// #define IFSINGLE(stmt)  //noop
+//#else
+// #define IFMULTI(stmt)  //noop
+// #define IFSINGLE(stmt)  stmt
+//#endif
+
+
 //window create and redraw:
-//all GPU work done in bkg thread (asynchronously)
-class GpuCanvas: public Thread
+//MULTI: all GPU work done in bkg thread (asynchronously)
+//SINGLE: all GPU work done in fg thread (synchronously)
+class GpuCanvas //: public Thread
 {
 private:
 //    auto_ptr<SDL_lib> sdl; //NOTE: this must occur before thread? most sources say do this once only; TODO: use ref counter?
 //set only by fg thread:
-    std::atomic<bool> dirty, done;
     auto_ptr<SDL_Window> window;
-    auto_ptr<SDL_Surface> pxbuf;
 //set only by bkg thread:
     auto_ptr<SDL_Renderer> renderer;
 //set by bkg + fg threads:
+#ifdef MULTI_THREADED
+    std::atomic<bool> dirty, done;
+    auto_ptr<SDL_Surface> pxbuf;
     auto_ptr<SDL_mutex> busy;
+#endif
 //    std::atomic<int> txr_busy;
     auto_ptr<SDL_Texture> canvas;
 //shared data:
@@ -1326,14 +1341,22 @@ private:
 //performance stats:
     uint64_t started; //doesn't need to be atomic; won't be modified after fg thread wakes
     uint64_t render_timestamp, frame_rate;
+#ifdef MULTI_THREADED
     std::atomic<uint32_t> numfr, numerr, num_dirty; //could be updated by another thread
-    struct { uint64_t previous; std::atomic<uint64_t> user_time, caller_time, pivot_time; } fg; //, lock_time, update_time, unlock_time; } fg;
-    struct { uint64_t previous; std::atomic<uint64_t> caller_time, pivot_time, lock_time, update_time, unlock_time, copy_time, present_time; } bg;
+    struct { uint64_t previous; std::atomic<uint64_t> user_time, caller_time, encode_time; } fg; //, lock_time, update_time, unlock_time; } fg;
+    struct { uint64_t previous; std::atomic<uint64_t> caller_time, encode_time, lock_time, update_time, unlock_time, copy_time, present_time; } bg;
+#else
+    SDL_Rect Hclip;
+    const bool want_pivot = false;
+//NO: could be updated by another thread
+    uint32_t numfr, numerr, num_dirty;
+    struct { uint64_t previous, caller, update, encode, render; } times;
+#endif //def MULTI_THREADED
 //    bool reported;
     int num_univ, univ_len; //caller-defined
 public:
-    bool WantPivot; //dev/debug vs. live mode; TODO: getter/setter
-    std::string DumpFile;
+    bool DEV_MODE; //WantPivot; //dev/debug vs. live mode; TODO: getter/setter
+//    std::string DumpFile;
 //    std::atomic<double> PresentTime; //presentation timestamp (set by bkg rendering thread)
     double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
     int StatsAdjust; //allow caller to tweak stats
@@ -1363,7 +1386,11 @@ private:
     std::vector<auto_ptr<ChplexEncoder<NUM_SSR>>> encoders;
 public:
 //ctor/dtor:
+#ifdef MULTI_THREADED
     GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(now()), StatsAdjust(0), dump_count(0)
+#else
+    GpuCanvas(const char* title, int num_univ, int univ_len): started(now()), StatsAdjust(0)
+#endif
     {
         if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
 //        myprintf(33, "GpuCanvas ctor" ENDCOLOR);
@@ -1405,6 +1432,7 @@ public:
         if (wndw % (TXR_WIDTH - 1)) myprintf(1, YELLOW_LT "Window width %d is not a multiple of %d" ENDCOLOR, wndw, TXR_WIDTH - 1);
         if (wndh % univ_len) myprintf(1, YELLOW_LT "Window height %d is not a multiple of %d" ENDCOLOR, wndh, univ_len);
 
+#ifdef MULTI_THREADED
 //create memory buf to hold pixel data:
 //NOTE: surface + texture must always be 3 * WS281X_BITS - 1 pixels wide
 //data signal is generated at 3x bit rate, last bit overlaps H blank
@@ -1427,12 +1455,15 @@ public:
         done = false;
         dirty = true; //force initial screen update + notification of canvas available (no paint doesn't block)
 //        txr_busy = 0;
+        this->DEV_MODE = !want_pivot;
+#endif //def MULTI_THREADED
         this->num_univ = num_univ;
         this->univ_len = univ_len;
-        this->WantPivot = want_pivot;
         this->univ_types.resize(num_univ, NONE); //NOTE: caller needs to call paint() after changing this
         this->encoders.resize(num_univ, NULL);
-        fg.user_time = fg.caller_time = fg.pivot_time = 0; //fg.update_time = fg.unlock_time = 0;
+
+#ifdef MULTI_THREADED
+        fg.user_time = fg.caller_time = fg.encode_time = 0; //fg.update_time = fg.unlock_time = 0;
         myprintf(22, BLUE_LT "GpuCanvas wake thread" ENDCOLOR);
 #if 0 //TODO
         TOBKG();
@@ -1445,15 +1476,34 @@ public:
         this->wait(); //wait for bkg thread to init
 #endif
         myprintf(22, BLUE_LT "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
+#else
+	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); //NOTE: PRESENTVSYNC syncs with V refresh rate (typically 60 Hz)
+        if (!renderer) return_void(err(RED_LT "Create renderer failed" ENDCOLOR));
+        debug_info(renderer);
+
+        canvas = SDL_CreateTexture(renderer, fmt, SDL_TEXTUREACCESS_STREAMING, TXR_WIDTH, univ_len); //SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, wndw, wndh);
+        if (!canvas) return_void(err(RED_LT "Can't create canvas texture" ENDCOLOR));
+
+        Hclip = {0, 0, TXR_WIDTH - 1, univ_len}; //CRITICAL: clip last col (1/3 pixel) so it overlaps with H-sync
+        myprintf(22, BLUE_LT "clip rect (%d, %d, %d, %d)" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
+
+        myprintf(8, MAGENTA_LT "canvas startup took %2.1f msec" ENDCOLOR, elapsed(started));
+        times.caller = times.encode = times.update = times.render = numfr = numerr = num_dirty = 0;
+        started = times.previous = now();
+        render_timestamp = frame_rate = 0;
+#endif //def MULTI_THREADED
     }
     ~GpuCanvas()
     {
-        myprintf(22, BLUE_LT "GpuCanvas dtor" ENDCOLOR);
+//        myprintf(22, BLUE_LT "GpuCanvas dtor" ENDCOLOR);
         stats();
+#ifdef MULTI_THREADED
         this->done = true;
         this->wake(); //eof; tell bkg thread to quit (if it's waiting)
+#endif
         myprintf(22, YELLOW_LT "GpuCanvas dtor" ENDCOLOR);
     }
+#ifdef MULTI_THREADED
 private:
 //bkg thread:
     void* main(void* data)
@@ -1494,7 +1544,7 @@ private:
         myprintf(22, BLUE_LT "render copy (%d, %d, %d, %d) => target" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
 
 //        Paint(NULL); //start with all pixels dark
-        bg.caller_time = bg.pivot_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = num_dirty = 0;
+        bg.caller_time = bg.encode_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = num_dirty = 0;
 
         started = fg.previous = bg.previous = now();
         render_timestamp = frame_rate = 0;
@@ -1521,10 +1571,10 @@ private:
 
 //            encode((uint32_t*)pixels);
             memcpy(pixels_copy, pixels, this->num_univ * this->univ_len * sizeof(uint32_t)); //copy caller's data without encode so caller can wake sooner
-//            delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
+//            delta = now() - bg.previous; bg.encode_time += delta; bg.previous += delta;
             out.wake((void*)true); //allow fg thread to refill buf while render finishes in bkg
             encode(pixels_copy); //encode while caller does other things (encode is CPU-expensive)
-            delta = now() - bg.previous; bg.pivot_time += delta; bg.previous += delta;
+            delta = now() - bg.previous; bg.encode_time += delta; bg.previous += delta;
 
             { //scope for locked texture
                 auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
@@ -1640,13 +1690,14 @@ if (pixels)
 //        struct { uint32_t* pixels; const std::function<void (void*)>& cb; void* data; } info = {pixels, cb, data};
         this->wake(pixels);
         bool ok = this->wait(); //delay until bg thread has grabbed my data, so I can reuse my buf
-        delta = now() - fg.previous; fg.pivot_time += delta; fg.previous += delta;
+        delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
 //        if (cb) cb(data);
         return ok;
 #else //gpu upload in fg thread
 //        myprintf(22, "GpuCanvas pivot" ENDCOLOR);
-        encode(pixels, fill);
-        delta = now() - fg.previous; fg.pivot_time += delta; fg.previous += delta;
+        uint32_t* pxbuf32 = reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
+        encode(pixels, pxbuf32);
+        delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
 //TODO? void* ok = this->wait(); //check if bkg thread init'ed okay
 
         /*if (numfr)*/ this->wait(); //NOTE: don't want to block main thread (bad for libuv), but need to wait until renderer releases canvas
@@ -1691,25 +1742,25 @@ public:
     {
 //TODO: skip if numfr already reported
 //        uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
-//        uint64_t unknown_time = elapsed - caller_time - pivot_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
+//        uint64_t unknown_time = elapsed - caller_time - encode_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
         uint64_t idle_time = isRPi()? bg.present_time: bg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
         double elaps = elapsed(started) + StatsAdjust, fps = numfr / elaps;
 //#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
         uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
-//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
-//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.pivot_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
+//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
         myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000);
         myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: fg(user %2.3f + caller %2.3f + pivot %2.3f), bg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f + copy %2.3f + present %2.3f), bg %2.1f%% idle" ENDCOLOR, 
             numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
-            avg_ms(fg.user_time), avg_ms(fg.caller_time), avg_ms(fg.pivot_time), 
-            avg_ms(bg.caller_time), avg_ms(bg.pivot_time), avg_ms(bg.lock_time), avg_ms(bg.update_time), avg_ms(bg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), 
+            avg_ms(fg.user_time), avg_ms(fg.caller_time), avg_ms(fg.encode_time), 
+            avg_ms(bg.caller_time), avg_ms(bg.encode_time), avg_ms(bg.lock_time), avg_ms(bg.update_time), avg_ms(bg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), 
             (double)100 * idle_time / (now() - started));
         myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(user %s, caller %s, pivot %s), bg(caller %s, pivot %s, lock %s, update %s, unlock %s, copy %s, present %s)" ENDCOLOR, 
             commas(now() - started), commas(SDL_TickFreq()), 
-            commas(fg.user_time), commas(fg.caller_time), commas(fg.pivot_time), 
-            commas(bg.caller_time), commas(bg.pivot_time), commas(bg.lock_time), commas(bg.update_time), commas(bg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+            commas(fg.user_time), commas(fg.caller_time), commas(fg.encode_time), 
+            commas(bg.caller_time), commas(bg.encode_time), commas(bg.lock_time), commas(bg.update_time), commas(bg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
 //        myprintf(22, "raw-raw: elapsed %ld, freq %ld" ENDCOLOR, now() - started, SDL_TickFreq());
         return true;
     }
@@ -1724,6 +1775,70 @@ public:
         return true;
     }
 */
+#else //def MULTI_THREADED
+public:
+//repaint screen (fg thread):
+//NOTE: xfrs data to canvas then returns
+//actual render occurs asynchronously in bkg; texture won't be displayed until next video frame (v-synced at 60 Hz)
+//this allows Node.js event loop to remain responsive
+//NOTE: caller owns pixel buf; leave it in caller's memory so it can be updated (need to copy here for pivot anyway)
+//NOTE: pixel array assumed to be the correct size here (already checked by Javascript wrapper before calling)
+//    inline int xyofs(int x, int y) { return x * this->univ_len + y; }
+    bool Paint(uint32_t* pixels = 0) //, void* cb)
+    {
+        uint64_t delta;
+        delta = now() - times.previous; times.caller += delta; times.previous += delta;
+        if (pixels) //updated data from caller (optional)
+        {
+            { //scope for locked texture
+                auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
+//                delta = now() - fg.previous; fg.lock_time += delta; fg.previous += delta;
+//NOTE: pixel data must be in correct (texture) format
+//NOTE: SDL_UpdateTexture is reportedly slow; use Lock/Unlock and copy pixel data directly for better performance
+//            memcpy(lock.data.surf.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
+                encode(pixels, (uint32_t*)lock.data.surf.pixels);
+                delta = now() - times.previous; times.encode += delta; times.previous += delta;
+            }
+//            delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
+//slower; doesn't work with streaming texture?
+//        if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
+//            return err(RED_LT "Can't update texture" ENDCOLOR);
+        	if (!OK(SDL_RenderCopy(renderer, canvas, &Hclip, NORECT))) //&renderQuad, angle, center, flip ))
+            {
+                err(RED_LT "Unable to render to screen" ENDCOLOR);
+                ++numerr;
+            }
+            delta = now() - times.previous; times.update += delta; times.previous += delta;
+        }
+        SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
+        delta = now() - times.previous; times.render += delta; times.previous += delta;
+        return true;
+    }
+    bool stats()
+    {
+//TODO: skip if numfr already reported
+//        uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
+//        uint64_t unknown_time = elapsed - caller_time - encode_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
+        uint64_t idle_time = times.render; //isRPi()? bg.present_time: bg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
+        double elaps = elapsed(started) + StatsAdjust, fps = numfr / elaps;
+//#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
+//#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
+#define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
+        uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
+//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
+//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+        myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000);
+        myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: caller %2.3f + encode %2.3f + update %2.3f + render %2.3f, %2.1f%% idle" ENDCOLOR, 
+            numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
+            avg_ms(times.caller), avg_ms(times.encode), avg_ms(times.update), avg_ms(times.render), 
+            (double)100 * idle_time / (now() - started));
+        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, caller %s, update %s, encode %s, render %s" ENDCOLOR, 
+            commas(now() - started), commas(SDL_TickFreq()), 
+            commas(times.caller), commas(times.update), commas(times.encode), commas(times.render));
+//        myprintf(22, "raw-raw: elapsed %ld, freq %ld" ENDCOLOR, now() - started, SDL_TickFreq());
+        return true;
+    }
+#endif //def MULTI_THREADED
 private:
 //encode (24-bit pivot):
 //CAUTION: expensive CPU loop here
@@ -1735,9 +1850,10 @@ private:
 //        memset(pixels, 4 * this->w * this->h, 0);
 //TODO: perf compare inner/outer swap
 //TODO? locality of reference: keep nodes within a universe close to each other (favors caller)
-    void encode(uint32_t* pixels, uint32_t fill = BLACK)
+    void encode(uint32_t* src, uint32_t* dest) //fill = BLACK)
     {
-        uint32_t* pxbuf32 = reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
+        if (!src) return;
+//        uint32_t* pxbuf32 = reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
         uint64_t start = now();
 //myprintf(22, "paint pxbuf 0x%x pxbuf32 0x%x" ENDCOLOR, toint(this->pxbuf.cast->pixels), toint(pxbuf32));
 #if 0 //test
@@ -1784,17 +1900,17 @@ private:
 ////                if (x3) pxbuf32[yofs + x3 - 1] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
 //                pxbuf32[yofs + x3 + 2] = BLACK; //trailing edge of data bits (right-most overlaps H-blank)
 //            }
-            memset(&pxbuf32[yofs], 0, TXR_WIDTH * sizeof(uint32_t));
+            memset(&dest[yofs], 0, TXR_WIDTH * sizeof(uint32_t));
 #if 1
 //pivot pixel data onto 24 parallel GPIO pins:
 //  WS281X = 1, PLAIN_SSR = 2, CHPLEX_SSR = 3,TYPEBITS = 0xF,
 // RGSWAP = 0x20, CHECKSUM = 0x40, POLARITY = 0x80};
-            if (this->WantPivot)
+            if (!this->DEV_MODE)
             {
 //NOTE: xmask loop assumes ARGB or ABGR fmt (A in upper byte)
                 for (uint32_t x = 0, xofs = 0, xmask = 0x800000; x < (uint32_t)this->num_univ; ++x, xofs += this->univ_len, xmask >>= 1)
             	{
-                    uint24_t color_out = pixels? pixels[xofs + y]: fill;
+                    uint24_t color_out = src[xofs + y]; //pixels? pixels[xofs + y]: fill;
 //TODO: make this extensible, move out to Javascript?
                     switch (univ_types[x])
                     {
@@ -1808,8 +1924,8 @@ private:
 //24 WS281X data bits spread across 72 screen pixels = 3 pixels per WS281X data bit:
                             for (int bit3 = 0; bit3 < TXR_WIDTH; bit3 += 3, color_out <<= 1)
                             {
-                                pxbuf32[yofs + bit3 + 0] |= xmask; //leading edge = high
-                                if (color_out & 0x800000) pxbuf32[yofs + bit3 + 1] |= xmask; //set data bit
+                                dest[yofs + bit3 + 0] |= xmask; //leading edge = high
+                                if (color_out & 0x800000) dest[yofs + bit3 + 1] |= xmask; //set data bit
 //                                pxbuf32[yofs + bit3 + 2] &= ~xmask; //trailing edge = low
                             }
 //                            row_debug("ws281x", yofs, xmask, x);
@@ -1837,7 +1953,7 @@ private:
                                 no_myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregate rows %d..%d" ENDCOLOR, x, y, ctlr_adrs * CHPLEX_CTLRLEN, (ctlr_adrs + 1) * CHPLEX_CTLRLEN - 1);
                                 for (int yy = ctlr_adrs * CHPLEX_CTLRLEN; (yy < this->univ_len) && (yy < (ctlr_adrs + 1) * CHPLEX_CTLRLEN); ++yy)
                                 {
-                                    color_out = pixels? pixels[xofs + yy]: fill;
+                                    color_out = src[xofs + yy]; //pixels? pixels[xofs + yy]: fill;
                                     uint8_t brightness = std::max<int>(Rmask(color_out) >> 16, std::max<int>(Gmask(color_out) >> 8, Bmask(color_out))); //use strongest color element
                                     no_myprintf(14, BLUE_LT "pixel[%d] 0x%x -> br %d" ENDCOLOR, xofs + yy, color_out, brightness);
                                     this->encoders[x].cast->insert(brightness);
@@ -1856,9 +1972,9 @@ private:
                             for (int bit3 = 0; bit3 < TXR_WIDTH; bit3 += 3, color_out <<= 1)
                                 if (color_out & 0x800000) //set data bit
                                 {
-                                    pxbuf32[yofs + bit3 + 0] |= xmask;
-                                    pxbuf32[yofs + bit3 + 1] |= xmask;
-                                    pxbuf32[yofs + bit3 + 2] |= xmask;
+                                    dest[yofs + bit3 + 0] |= xmask;
+                                    dest[yofs + bit3 + 1] |= xmask;
+                                    dest[yofs + bit3 + 2] |= xmask;
                                 }
 //                            row_debug("chplex", yofs, xmask, x);
                             break;
@@ -1876,9 +1992,9 @@ private:
             bool rbswap = isRPi(); //R <-> G swap only matters for as-is display; for pivoted data, user can just swap I/O pins
             for (int x = 0, x3 = 0, xofs = 0; x < this->num_univ; ++x, x3 += 3, xofs += this->univ_len)
             {
-                uint32_t color = pixels? pixels[xofs + y]: fill;
+                uint32_t color = src[xofs + y]; //pixels? pixels[xofs + y]: fill;
                 if (rbswap) color = ARGB2ABGR(color);
-                pxbuf32[yofs + x3 + 0] = pxbuf32[yofs + x3 + 1] = pxbuf32[yofs + x3 + 2] = color;
+                dest[yofs + x3 + 0] = dest[yofs + x3 + 1] = dest[yofs + x3 + 2] = color;
             }
         }
 //        if (this->WantPivot) dump("canvas", pixels, elapsed(start));
@@ -1890,12 +2006,12 @@ return; //dump to file instead
         for (int x = 0; x < TXR_WIDTH / 3; ++x)
             bp += sprintf(bp, ", %d + 0x%x", this->univ_types[x] & TYPEBITS, this->univ_types[x] & ~TYPEBITS & 0xFF);
         *bp = '\0';
-        myprintf(18, BLUE_LT "Encode: pivot? %d, utypes %s" ENDCOLOR, this->WantPivot, buf + 2);
+        myprintf(18, BLUE_LT "Encode: pivot? %d, utypes %s" ENDCOLOR, !this->DEV_MODE, buf + 2);
     }
     void row_debug(const char* desc, int yofs, uint32_t xmask = 0, int col = -1)
     {
 return; //dump to file instead
-        uint32_t* pxbuf32 = reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
+        uint32_t* pxbuf32 = NULL; //TODO: reinterpret_cast<uint32_t*>(this->pxbuf.cast->pixels);
 //        char buf[2 * TXR_WIDTH / 3 + 1], *bp = buf;
         char buf[10 * TXR_WIDTH + 1], *bp = buf + (xmask? 1: 0);
         for (int x = 0; x < TXR_WIDTH; ++x)
@@ -1904,6 +2020,7 @@ return; //dump to file instead
         *bp = '\0';
         myprintf(18, BLUE_LT "Encode: %s[%d] row[%d/%d]: %s" ENDCOLOR, desc, col, yofs / TXR_WIDTH, this->univ_len, buf + 2);
     }
+#if 0
     int dump_count; //= 0;
     void dump(const char* desc, uint32_t* pixels, double duration)
     {
@@ -1966,6 +2083,7 @@ return; //dump to file instead
 //TODO: leave file open and just flush
         fclose(fp);
     }
+#endif
 #if 0 //some sources say to only do it once
 public:
 //initialize SDL:
@@ -2031,6 +2149,7 @@ public:
     delta = now() - bg.previous; bg.present_time += delta; bg.previous += delta; //== now()
 #endif
 
+#if 0
 //window create and redraw:
 //all GPU work done in fg thread (synchronously)
 class SimplerCanvas
@@ -2169,7 +2288,7 @@ public:
                 encode(pixels, (uint32_t*)lock.data.surf.pixels);
                 delta = now() - times.previous; times.encode += delta; times.previous += delta;
             }
-//            delta = now() - fg.previous; fg.pivot_time += delta; fg.previous += delta;
+//            delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
 //slower; doesn't work with streaming texture?
 //        if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
 //            return err(RED_LT "Can't update texture" ENDCOLOR);
@@ -2188,15 +2307,15 @@ public:
     {
 //TODO: skip if numfr already reported
 //        uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
-//        uint64_t unknown_time = elapsed - caller_time - pivot_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
+//        uint64_t unknown_time = elapsed - caller_time - encode_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
         uint64_t idle_time = times.render; //isRPi()? bg.present_time: bg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
         double elaps = elapsed(started) + StatsAdjust, fps = numfr / elaps;
 //#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
         uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
-//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.pivot_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
-//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.pivot_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
+//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
         myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000);
         myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: caller %2.3f + encode %2.3f + update %2.3f + render %2.3f, %2.1f%% idle" ENDCOLOR, 
             numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
@@ -2245,6 +2364,7 @@ private:
 //        if (this->WantPivot) dump("canvas", pixels, elapsed(start));
     }
 };
+#endif
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2292,7 +2412,7 @@ namespace NodeAddon //namespace wrapper for Node.js functions; TODO: is this nee
 #define JS_STR(iso, val) v8::String::NewFromUtf8(iso, val)
 //#define JS_INT(iso, val) Nan::New<v8::Integer>(iso, val)
 #define JS_INT(iso, val) v8::Integer::New(iso, val)
-//#define JS_FLOAT(iso, val) Nan::New<v8::Number>(iso, val)
+#define JS_FLOAT(iso, val) v8::Number::New(iso, val)
 //#define JS_BOOL(iso, val) Nan::New<v8::Boolean>(iso, val)
 #define JS_BOOL(iso, val) v8::Boolean::New(iso, val)
 
@@ -2366,6 +2486,7 @@ NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 
 
 //alloc shared memory buffer:
+//usage: shm_buffer = shmbuf(key, byte_length)
 //this reduces the need for expensive memory copying:
 // memcpy.100k > cc Buffer -> Buffer: 22.756ms
 // memcpy.100k > cc Buffer -> ArrayBuffer: 23.861ms
@@ -2386,10 +2507,17 @@ NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 	if (/*(size < 1) ||*/ (size >= 10000000)) return_void(errjs(iso, "shmbuf: size %d out of range 1..10M", size));
 
     int shmid = shmget(key, (size > 0)? size: 1, (size > 0)? IPC_CREAT | 0666: 0666);
-    if (shmid < 0 ) return_void(errjs(iso, "shmbuf: can't alloc(%d) shmem: %d (errno %d %s)", size, shmid, errno, strerror(errno)));
+    if ((shmid < 0) && (size > 0) && (errno == EINVAL) && !info[2]->IsUndefined() && info[2]->BooleanValue()) //retry
+    {
+        myprintf(22, YELLOW_LT "retry shmget" ENDCOLOR);
+        if ((shmid = shmget(key, 1, 0666)) >= 0)
+            if (!shmctl(shmid, IPC_RMID, NULL /*ignored*/)) //try deleting shm seg first
+                shmid = shmget(key, size, IPC_CREAT | 0666);
+    }
+    if (shmid < 0) return_void(errjs(iso, "shmbuf: can't alloc(%d) shmem: %d (errno %d %s)", size, shmid, errno, strerror(errno)));
 //if (!data) //don't attach again
 //TODO: need Detach and delete: if (shmdt(data) == -1) fprintf(stderr, "shmdt failed\n");
-    uint8_t* data = (size > 0)? (uint8_t*)shmat( shmid, NULL, 0 ): (uint8_t*)shmctl(shmid, IPC_RMID, NULL);
+    uint8_t* data = (size > 0)? (uint8_t*)shmat(shmid, NULL, 0): (uint8_t*)shmctl(shmid, IPC_RMID, NULL);
     if (data < 0) return_void(errjs(iso, "shbuf: att sh mem(%d) failed: %d (errno %d %s)", shmid, data, errno, strerror(int errno)));
     if (size < 1) { info.GetReturnValue().SetUndefined(); return; } //.Set(0); return; }
 
@@ -2401,6 +2529,7 @@ NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 
 
 //atomic add:
+//usage: old_value = AtomicAdd(uint32array, offset, value_to_add)
 //allows multiple threads to safely read/write shared data
 NAN_METHOD(AtomicAdd_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
@@ -2433,7 +2562,87 @@ NAN_METHOD(AtomicAdd_js) //defines "info"; implicit HandleScope (~ v8 stack fram
 }
 
 
+//rwlock consts:
+enum RwlockOps { Init = 1, RdLock = 2, RdLockTry = 3, WrLock = 4, WrLockTry = 5, Unlock = 6, Destroy = 7};
+NAN_GETTER(RwlockOps_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+
+    v8::Local<v8::Object> retval = v8::Object::New(iso);
+    retval->Set(JS_STR(iso, "INIT"), JS_INT(iso, RwlockOps::Init));
+    retval->Set(JS_STR(iso, "RDLOCK"), JS_INT(iso, RwlockOps::RdLock));
+    retval->Set(JS_STR(iso, "RDLOCK_TRY"), JS_INT(iso, RwlockOps::RdLockTry));
+    retval->Set(JS_STR(iso, "WRLOCK"), JS_INT(iso, RwlockOps::WrLock));
+    retval->Set(JS_STR(iso, "WRLOCK_TRY"), JS_INT(iso, RwlockOps::WrLockTry));
+    retval->Set(JS_STR(iso, "UNLOCK"), JS_INT(iso, RwlockOps::Unlock));
+    retval->Set(JS_STR(iso, "DESTROY"), JS_INT(iso, RwlockOps::Destroy));
+
+//    CONST_thing("RWLOCK_SIZE32", divup(__SIZEOF_PTHREAD_RWLOCK_T, sizeof(uint32_t)));
+    retval->Set(JS_STR(iso, "SIZE32"), JS_INT(iso, __SIZEOF_PTHREAD_RWLOCK_T));
+//    Nan::Export(target, "UnivTypes", UnivTypes);
+//    CONST_thing("UnivTypes", UnivTypes);
+    info.GetReturnValue().Set(retval);
+}
+
+
+//read/write lock:
+//NOTE: this works across processes if uint32array is in shared memeory
+//usage: ok = rwlock(uint32array, offset, op); //op == 1 for init, 2 for lock, 3 for unlock, 4 for destroy
+//for example code see https://www.ibm.com/support/knowledgecenter/en/ssw_aix_72/com.ibm.aix.genprogc/using_readwrite_locks.htm
+NAN_METHOD(rwlock_js)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    if (info.Length() != 3) return_void(errjs(iso, "rwlock: expected 3 params, got %d", info.Length()));
+	if (!info[0]->IsUint32Array()) return_void(errjs(iso, "rwlock: expected first param of uint32 array"));
+    v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
+    int ofs = info[1]->IntegerValue(), op = info[2]->IntegerValue();
+    if ((ofs < 0) || (ofs >= aryp->Length())) return_void(errjs(iso, "rwlock: array ofs bad: is %d, should be 0..%d", ofs, aryp->Length()));
+    uint32_t* data = (uint32_t*)aryp->Buffer()->GetContents().Data();
+//    pthread_rwlockattr_t attr;
+    /*volatile*/ pthread_rwlock_t& rwlock = *(pthread_rwlock_t*)&data[ofs]; //CAUTION: can be up to 56 bytes long
+    const int RETRIES = 10; //TODO: allow caller to set
+    int retval;
+
+    switch (op)
+    {
+        case RwlockOps::Init: //init (unlocked state)
+//            pthread_rwlockattr_init(&attr);
+//            pthread_rwlock_init(&data[ofs], &attr);
+//            pthread_rwlockattr_destroy(&attr);
+            retval = pthread_rwlock_init(&rwlock, NULL); //equiv to: pthread_rwlock_t rwlock = PTHREAD_RWLOCK_INITIALIZER;
+            break;
+        case RwlockOps::RdLock: //read lock (blocking, recursive); succeeds if not locked for write
+            retval = pthread_rwlock_rdlock(&rwlock);
+            break;
+        case RwlockOps::RdLockTry: //read lock (non-blocking)
+            for (int retry = 0; retry < RETRIES; ++retry)
+                if ((retval = pthread_rwlock_tryrdlock(&rwlock)) != EBUSY) break;
+            break;
+        case RwlockOps::WrLock: //write lock (blocking); succeeds if no other locks
+            retval = pthread_rwlock_wrlock(&rwlock);
+            break;
+        case RwlockOps::WrLockTry: //write lock (non-blocking)
+            for (int retry = 0; retry < RETRIES; ++retry)
+                if ((retval = pthread_rwlock_trywrlock(&rwlock)) != EBUSY) break;
+            break;
+        case RwlockOps::Unlock: //unlock
+            retval = pthread_rwlock_unlock(&rwlock);
+            break;
+        case RwlockOps::Destroy: //destroy
+            retval = pthread_rwlock_destroy(&rwlock);
+            break;
+        default:
+            return_void(errjs(iso, "rwlock: unknown op %d", op));
+    }
+    myprintf(28, BLUE_LT "rwlock: op %d, result %d (%s)" ENDCOLOR, op, retval, strerror(retval));
+    if (retval) info.GetReturnValue().Set(JS_STR(iso, strerror(retval)));
+    else info.GetReturnValue().Set(JS_BOOL(iso, false)); //0 == success, !0 == errno
+//    info.GetReturnValue().SetUndefined();
+}
+
+
 //short sleep (usec):
+//usage: actual_usec = usleep(usec_to_sleep)
 NAN_METHOD(usleep_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
@@ -2489,6 +2698,9 @@ NAN_GETTER(UnivTypes_js) //defines "info"; implicit HandleScope (~ v8 stack fram
 //const char* dbg(const char* str) { myprintf(22, "str %s" ENDCOLOR, str? str: "(none)"); return str; }
 //int dbg(int val) { myprintf(22, "int %s" ENDCOLOR, val); return val; }
 
+//#define INNER_CLASS  GpuCanvas
+//#define INNER_CLASS  SimplerCanvas
+
 //?? https://nodejs.org/docs/latest/api/addons.html#addons_wrapping_c_objects
 //https://github.com/nodejs/nan/blob/master/doc/methods.md
 class GpuCanvas_js: public Nan::ObjectWrap
@@ -2503,7 +2715,8 @@ public:
     static std::vector<GpuCanvas_js*> all; //keep track of currently existing instances
 //protected:
 private:
-    explicit GpuCanvas_js(const char* title, int w, int h, bool pivot): inner(title, w, h, pivot) { all.push_back(this); };
+//    explicit GpuCanvas_js(const char* title, int w, int h, bool pivot): inner(title, w, h, pivot) { all.push_back(this); };
+    explicit GpuCanvas_js(const char* title, int w, int h/*, bool pivot*/): inner(title, w, h/*, pivot*/) { all.push_back(this); };
 //    virtual ~GpuCanvas_js();
     ~GpuCanvas_js() { all.erase(std::find(all.begin(), all.end(), this)); };
 
@@ -2519,13 +2732,14 @@ private:
 //    static NAN_SETTER(set_pivot);
     static NAN_GETTER(width_getter);
     static NAN_GETTER(height_getter);
-//    static NAN_METHOD(pivot_tofix);
-    static NAN_GETTER(pivot_getter);
-    static NAN_SETTER(pivot_setter);
+    static NAN_GETTER(elapsed_getter);
+//    static NAN_METHOD(devmode_tofix);
+    static NAN_GETTER(devmode_getter);
+    static NAN_SETTER(devmode_setter);
     static NAN_GETTER(StatsAdjust_getter);
     static NAN_SETTER(StatsAdjust_setter);
-    static NAN_GETTER(DumpFile_getter);
-    static NAN_SETTER(DumpFile_setter);
+//    static NAN_GETTER(DumpFile_getter);
+//    static NAN_SETTER(DumpFile_setter);
     static NAN_METHOD(UnivType_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that with 2 parameters
 //    static NAN_METHOD(release);
 //    static void paint(const Nan::FunctionCallbackInfo<v8::Value>& info);
@@ -2563,11 +2777,12 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 //    Nan::SetPrototypeMethod(ctor, "height", height_getter);
     Nan::SetAccessor(proto, JS_STR(iso, "width"), width_getter);
     Nan::SetAccessor(proto, JS_STR(iso, "height"), height_getter);
+    Nan::SetAccessor(proto, JS_STR(iso, "elapsed"), elapsed_getter);
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
-//    Nan::SetPrototypeMethod(ctor, "pivot_tofix", pivot_tofix);
-    Nan::SetAccessor(proto, JS_STR(iso, "pivot"), pivot_getter, pivot_setter);
+//    Nan::SetPrototypeMethod(ctor, "devmode_tofix", devmode_tofix);
+    Nan::SetAccessor(proto, JS_STR(iso, "devmode"), devmode_getter, devmode_setter);
     Nan::SetAccessor(proto, JS_STR(iso, "StatsAdjust"), StatsAdjust_getter, StatsAdjust_setter);
-    Nan::SetAccessor(proto, JS_STR(iso, "DumpFile"), DumpFile_getter, DumpFile_setter);
+//    Nan::SetAccessor(proto, JS_STR(iso, "DumpFile"), DumpFile_getter, DumpFile_setter);
     Nan::SetPrototypeMethod(ctor, "UnivType_tofix", UnivType_tofix); //TODO: fix this
 //    Nan::SetPrototypeMethod(ctor, "release", GpuCanvas_js::release);
 //    Nan::SetAccessor(proto,JS_STR("width"), WidthGetter);
@@ -2612,9 +2827,9 @@ void GpuCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
 //myprintf(22, "num %f" ENDCOLOR, info[1]->NumberValue());
         int h = info[2]->IntegerValue(); //ToInt32()->Value(); //args[0]->IsUndefined()
 //        bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
-        bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
+//        bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
 //myprintf(22, "GpuCanvas_js('%s', %d, %d, %d)" ENDCOLOR, *title? *title: "(none)", w, h, pivot);
-        GpuCanvas_js* canvas = new GpuCanvas_js(*title? *title: NULL, w, h, pivot);
+        GpuCanvas_js* canvas = new GpuCanvas_js(*title? *title: NULL, w, h); //, pivot);
         canvas->Wrap(info.This());
 //??        Nan::SetAccessor(*canvas, JS_STR(iso, "pivot"), GpuCanvas_js::get_pivot, GpuCanvas_js::set_pivot);
         info.GetReturnValue().Set(info.This());
@@ -2680,7 +2895,7 @@ myprintf(1, "pivot is now = %d" ENDCOLOR, canvas->inner.WantPivot);
 #endif
 
 
-#if 1
+//#if 1
 //get width:
 //void GpuCanvas_js::width_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
@@ -2703,31 +2918,40 @@ NAN_GETTER(GpuCanvas_js::height_getter) //defines "info"; implicit HandleScope (
     info.GetReturnValue().Set(JS_INT(iso, canvas->inner.height()));
 }
 
-//get/set pivot flag:
-//void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
-NAN_GETTER(GpuCanvas_js::pivot_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
+//elapsed time:
+NAN_GETTER(GpuCanvas_js::elapsed_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
     GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
 
-    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
+    info.GetReturnValue().Set(JS_FLOAT(iso, canvas->inner.PresentTime()));
+}
+
+//get/set pivot flag:
+//void GpuCanvas_js::devmode_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(GpuCanvas_js::devmode_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
+
+    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.DEV_MODE)); //return old value
 //    if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue(); //set new value
 //if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
 //else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
 }
-NAN_SETTER(GpuCanvas_js::pivot_setter) //defines "info" and "value"; implicit HandleScope (~ v8 stack frame)
+NAN_SETTER(GpuCanvas_js::devmode_setter) //defines "info" and "value"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
     GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
 
 //    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
-    if (!value->IsUndefined()) canvas->inner.WantPivot = value->BooleanValue();
+    if (!value->IsUndefined()) canvas->inner.DEV_MODE = value->BooleanValue();
 }
 
 
 //get/set stats adjust:
-//void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//void GpuCanvas_js::devmode_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
 NAN_GETTER(GpuCanvas_js::StatsAdjust_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
@@ -2749,8 +2973,9 @@ NAN_SETTER(GpuCanvas_js::StatsAdjust_setter) //defines "info" and "value"; impli
 }
 
 
+#if 0
 //get/set dump (debug) file:
-//void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//void GpuCanvas_js::devmode_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
 NAN_GETTER(GpuCanvas_js::DumpFile_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
@@ -2771,6 +2996,7 @@ NAN_SETTER(GpuCanvas_js::DumpFile_setter) //defines "info" and "value"; implicit
     v8::String::Utf8Value filename(!value->IsUndefined()? value->ToString(): JS_STR(iso, ""));
     canvas->inner.DumpFile = *filename;
 }
+#endif
 
 
 //get/set univ types:
@@ -2788,7 +3014,7 @@ NAN_METHOD(GpuCanvas_js::UnivType_tofix) //defines "info"; implicit HandleScope 
 //if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
 //else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
 }
-#endif
+//#endif
 
 
 //xfr/xfm Javascript array to GPU:
@@ -2796,8 +3022,8 @@ NAN_METHOD(GpuCanvas_js::UnivType_tofix) //defines "info"; implicit HandleScope 
 NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    if (info.Length() != 1) return_void(errjs(iso, "GpuCanvas.paint: expected 1 param, got %d", info.Length()));
-	if (!info.Length() || !info[0]->IsUint32Array()) return_void(errjs(iso, "GpuCanvas.paint: missing uint32 array param"));
+//    if (info.Length() != 1) return_void(errjs(iso, "GpuCanvas.paint: expected 1 param, got %d", info.Length()));
+	if (info.Length() && !info[0]->IsUint32Array()) return_void(errjs(iso, "GpuCanvas.paint: missing uint32 array param"));
     GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
 //void* p = handle->GetAlignedPointerFromInternalField(0); 
 
@@ -2820,11 +3046,15 @@ NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 sta
 //    v8::Local<v8::Uint32Array> ary = args[0].As<Uint32Array>();
 //    Nan::TypedArrayContents<uint32_t> pixels(info[0].As<v8::Uint32Array>());
 //https://github.com/casualjavascript/blog/issues/12
-    v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
-    if (aryp->Length() < canvas->inner.width() * canvas->inner.height()) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->Length(), canvas->inner.width() * canvas->inner.height()));
-    void *data = aryp->Buffer()->GetContents().Data();
-    uint32_t* pixels = static_cast<uint32_t*>(data);
-//myprintf(33, "js pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels[0], pixels[1], pixels[2]);
+    uint32_t* pixels = 0;
+    if (info.Length())
+    {
+        v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
+        if (aryp->Length() < canvas->inner.width() * canvas->inner.height()) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->Length(), canvas->inner.width() * canvas->inner.height()));
+        void *data = aryp->Buffer()->GetContents().Data();
+        pixels = static_cast<uint32_t*>(data);
+    }
+myprintf(33, "js paint(0x%x) %d arg(s): pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, info.Length(), pixels[0], pixels[1], pixels[2]);
     if (!canvas->inner.Paint(pixels)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
@@ -2862,296 +3092,6 @@ void GpuCanvas_js::Quit(void* ignored)
 }
 
 
-class SimplerCanvas_js: public Nan::ObjectWrap
-{
-//private:
-public:
-    SimplerCanvas inner;
-public:
-//    static void Init(v8::Handle<v8::Object> exports);
-    static void Init(v8::Local<v8::Object> exports);
-    static void Quit(void* ignored); //signature reqd for AtExit
-    static std::vector<SimplerCanvas_js*> all; //keep track of currently existing instances
-//protected:
-private:
-    explicit SimplerCanvas_js(const char* title, int w, int h): inner(title, w, h) { all.push_back(this); };
-//    virtual ~GpuCanvas_js();
-    ~SimplerCanvas_js() { all.erase(std::find(all.begin(), all.end(), this)); };
-
-//    static NAN_METHOD(New);
-    static void New(const v8::FunctionCallbackInfo<v8::Value>& info); //TODO: convert to Nan?
-//    static NAN_GETTER(WidthGetter);
-//    static NAN_GETTER(PitchGetter);
-    static NAN_METHOD(paint);
-    static NAN_METHOD(stats);
-//??    static NAN_PROPERTY_GETTER(get_pivot);
-//??    static NAN_PROPERTY_SETTER(set_pivot);
-//    static NAN_GETTER(get_pivot);
-//    static NAN_SETTER(set_pivot);
-    static NAN_GETTER(width_getter);
-    static NAN_GETTER(height_getter);
-//    static NAN_METHOD(pivot_tofix);
-    static NAN_GETTER(pivot_getter);
-    static NAN_SETTER(pivot_setter);
-    static NAN_GETTER(StatsAdjust_getter);
-    static NAN_SETTER(StatsAdjust_setter);
-//    static NAN_GETTER(DumpFile_getter);
-//    static NAN_SETTER(DumpFile_setter);
-    static NAN_METHOD(UnivType_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that with 2 parameters
-//    static NAN_METHOD(release);
-//    static void paint(const Nan::FunctionCallbackInfo<v8::Value>& info);
-//private:
-    static Nan::Persistent<v8::Function> constructor; //v8:: //TODO: Nan macro?
-//    void *data;
-};
-Nan::Persistent<v8::Function> SimplerCanvas_js::constructor;
-std::vector<SimplerCanvas_js*> SimplerCanvas_js::all;
-
-
-//export class to Javascript:
-//TODO: convert to Nan?
-//void GpuCanvas_js::Init(v8::Handle<v8::Object> exports)
-void SimplerCanvas_js::Init(v8::Local<v8::Object> exports)
-{
-    v8::Isolate* iso = exports->GetIsolate(); //~vm heap
-//??    Nan::HandleScope scope;
-
-//ctor:
-    v8::Local<v8::FunctionTemplate> ctor = /*Nan::New<*/v8::FunctionTemplate::New(iso, SimplerCanvas_js::New);
-//    v8::Local<v8::FunctionTemplate> ctor = Nan::New<v8::FunctionTemplate>(GpuCanvas_js::New);
-    ctor->InstanceTemplate()->SetInternalFieldCount(1);
-    ctor->SetClassName(JS_STR(iso, "SimplerCanvas"));
-//    ctor->SetClassName(Nan::New("GpuCanvas").ToLocalChecked());
-
-//prototype:
-//    Nan::SetPrototypeMethod(ctor, "paint", save);// NODE_SET_PROTOTYPE_METHOD(ctor, "save", save);
-    v8::Local<v8::ObjectTemplate> proto = ctor->PrototypeTemplate();
-//    Nan::SetPrototypeMethod(proto, "paint", paint);
-//    NODE_SET_PROTOTYPE_METHOD(ctor, "paint", GpuCanvas_js::paint);
-    Nan::SetPrototypeMethod(ctor, "paint", paint);
-    Nan::SetPrototypeMethod(ctor, "stats", stats);
-//    Nan::SetPrototypeMethod(ctor, "width", width_getter);
-//    Nan::SetPrototypeMethod(ctor, "height", height_getter);
-    Nan::SetAccessor(proto, JS_STR(iso, "width"), width_getter);
-    Nan::SetAccessor(proto, JS_STR(iso, "height"), height_getter);
-//TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
-//    Nan::SetPrototypeMethod(ctor, "pivot_tofix", pivot_tofix);
-    Nan::SetAccessor(proto, JS_STR(iso, "pivot"), pivot_getter, pivot_setter);
-    Nan::SetAccessor(proto, JS_STR(iso, "StatsAdjust"), StatsAdjust_getter, StatsAdjust_setter);
-//    Nan::SetAccessor(proto, JS_STR(iso, "DumpFile"), DumpFile_getter, DumpFile_setter);
-    Nan::SetPrototypeMethod(ctor, "UnivType_tofix", UnivType_tofix); //TODO: fix this
-//    Nan::SetPrototypeMethod(ctor, "release", GpuCanvas_js::release);
-//    Nan::SetAccessor(proto,JS_STR("width"), WidthGetter);
-//    Nan::SetAccessor(ctor, JS_STR(iso, "pivotprop"), GpuCanvas_js::getprop_pivot, GpuCanvas_js::setprop_pivot);
-//ambiguous:    Nan::SetAccessor(ctor, JS_STR(iso, "pivot"), GpuCanvas_js::get_pivot, GpuCanvas_js::set_pivot);
-//    ctor->SetAccessor(JS_STR(iso, "pivot"), GpuCanvas_js::get_pivot, GpuCanvas_js::set_pivot);
-//    Nan::SetAccessor(proto,JS_STR("height"), HeightGetter);
-//    Nan::SetAccessor(proto,JS_STR("pitch"), PitchGetter);
-//    Nan::SetAccessor(proto,JS_STR("src"), SrcGetter, SrcSetter);
-    constructor.Reset(/*iso,*/ ctor->GetFunction()); //?? v8::Isolate::GetCurrent(), ctor->GetFunction());
-//??    Nan::Set(exports, JS_STR("GpuCanvas"), ctor->GetFunction());
-    exports->Set(JS_STR(iso, "SimplerCanvas"), ctor->GetFunction());
-//    exports->Set(Nan::New("GpuCanvas").ToLocalChecked(), ctor->GetFunction());
-
-//  FreeImage_Initialise(true);
-//NO    GpuCanvas::Init(); //will be done by inner
-    node::AtExit(SimplerCanvas_js::Quit);
-}
-
-
-//instantiate new instance for Javascript:
-//TODO: convert to Nan?
-void SimplerCanvas_js::New(const v8::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::New) //defines "info"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-#if 0
-//int inval = To<int>(info[0]).FromJust();
-//v8::Local<v8::Array> results = New<v8::Array>(len);
-//    registerImage(image);
-#endif
-    if (info.IsConstructCall()) //Invoked as constructor: `new MyObject(...)`
-    {
-//    	if (info.Length() != 3) return_void(errjs(iso, "GpuCanvas.New: expected 3 params, got: %d", info.Length()));
-        v8::String::Utf8Value title(!info[0]->IsUndefined()? info[0]->ToString(): JS_STR(iso, ""));
-//        double value = args[0]->IsUndefined() ? 0 : args[0]->NumberValue();
-//	    int w = info[1].As<v8::Int32Value>->Value(); //args[0]->IsUndefined()
-	    int w = info[1]->IntegerValue(); //ToInt32()->Value(); //args[0]->IsUndefined()
-//myprintf(22, "int? %d, num? %d" ENDCOLOR, info[1]->IsInt32(), info[1]->IsNumber());
-//myprintf(22, "int %lld" ENDCOLOR, info[1]->IntegerValue());
-//myprintf(22, "int32 %d" ENDCOLOR, info[1]->Int32Value());
-//myprintf(22, "num %f" ENDCOLOR, info[1]->NumberValue());
-        int h = info[2]->IntegerValue(); //ToInt32()->Value(); //args[0]->IsUndefined()
-//        bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
-//        bool pivot = !info[3]->IsUndefined()? info[3]->BooleanValue(): true;
-//myprintf(22, "GpuCanvas_js('%s', %d, %d, %d)" ENDCOLOR, *title? *title: "(none)", w, h, pivot);
-        SimplerCanvas_js* canvas = new SimplerCanvas_js(*title? *title: NULL, w, h);
-        canvas->Wrap(info.This());
-//??        Nan::SetAccessor(*canvas, JS_STR(iso, "pivot"), GpuCanvas_js::get_pivot, GpuCanvas_js::set_pivot);
-        info.GetReturnValue().Set(info.This());
-    }
-    else //Invoked as plain function `MyObject(...)`, turn into constructor call.
-    {
-        const int argc = info.Length();
-//        v8::Local<v8::Value> argv[argc] = { info[0]};
-//myprintf(22, "ctor called as func with %d params" ENDCOLOR, argc);
-        std::vector<v8::Local<v8::Value>> argv; //TODO: can info be passed directly here?
-        for (int i = 0; i < argc; ++i) argv.push_back(info[i]);
-        v8::Local<v8::Context> context = iso->GetCurrentContext();
-        v8::Local<v8::Function> consobj = v8::Local<v8::Function>::New(iso, constructor);
-        v8::Local<v8::Object> result = consobj->NewInstance(context, argc, argv.data()).ToLocalChecked();
-        info.GetReturnValue().Set(result);
-    }
-}
-
-
-//get width:
-//void GpuCanvas_js::width_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
-NAN_GETTER(SimplerCanvas_js::width_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.This()); //Holder()); //info.This());
-
-    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.width()));
-}
-
-//get height:
-///void GpuCanvas_js::height_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
-NAN_GETTER(SimplerCanvas_js::height_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.This()); //Holder()); //info.This());
-
-    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.height()));
-}
-
-//get/set pivot flag:
-//void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
-NAN_GETTER(SimplerCanvas_js::pivot_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.This()); //Holder()); //info.This());
-
-    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
-//    if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue(); //set new value
-//if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
-//else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
-}
-NAN_SETTER(SimplerCanvas_js::pivot_setter) //defines "info" and "value"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.This()); //Holder()); //info.This());
-
-//    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
-    if (!value->IsUndefined()) canvas->inner.WantPivot = value->BooleanValue();
-}
-
-
-//get/set stats adjust:
-//void GpuCanvas_js::pivot_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
-NAN_GETTER(SimplerCanvas_js::StatsAdjust_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.This()); //Holder()); //info.This());
-
-    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.StatsAdjust)); //return old value
-//    if (!info[0]->IsUndefined()) canvas->inner.WantPivot = info[0]->BooleanValue(); //set new value
-//if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
-//else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
-}
-NAN_SETTER(SimplerCanvas_js::StatsAdjust_setter) //defines "info" and "value"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.This()); //Holder()); //info.This());
-
-//    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
-    if (!value->IsUndefined()) canvas->inner.StatsAdjust = value->IntegerValue();
-}
-
-
-//get/set univ types:
-//void GpuCanvas_js::UnivType_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
-NAN_METHOD(SimplerCanvas_js::UnivType_tofix) //defines "info"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.Holder()); //info.This());
-    int inx = info[0]->IntegerValue();
-    if ((inx < 0) || (inx >= canvas->inner.width())) return_void(errjs(iso, "GpuCanvas.UnivType: invalid inx %d (expected 0..%d)", inx, canvas->inner.width()));
-
-//myprintf(1, "set univ type[%d] to %d? %d" ENDCOLOR, inx, !info[1]->IsUndefined()? (GpuCanvas::UniverseTypes)info[1]->IntegerValue(): GpuCanvas::UniverseTypes::INVALID, !info[1]->IsUndefined());
-    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.UnivType(inx, !info[1]->IsUndefined()? (SimplerCanvas::UniverseTypes)info[1]->IntegerValue(): SimplerCanvas::UniverseTypes::INVALID))); //return old type, optionally set new type
-//    if (!info[1]->IsUndefined()) canvas->inner.UnivType[inx] = (GpuCanvas::UniverseTypes)info[1]->IntegerValue();
-//if (!info[0]->IsUndefined()) myprintf(1, "set pivot value %d %d %d => %d" ENDCOLOR, info[3]->BooleanValue(), info[3]->IntegerValue(), info[3]->Uint32Value(), canvas->inner.WantPivot);
-//else myprintf(1, "get pivot value %d" ENDCOLOR, canvas->inner.WantPivot);
-}
-
-
-//xfr/xfm Javascript array to GPU:
-//void GpuCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
-NAN_METHOD(SimplerCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-//    if (info.Length() != 1) return_void(errjs(iso, "GpuCanvas.paint: expected 1 param, got %d", info.Length()));
-	if (info.Length() && !info[0]->IsUint32Array()) return_void(errjs(iso, "GpuCanvas.paint: missing uint32 array param"));
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.Holder()); //info.This());
-//void* p = handle->GetAlignedPointerFromInternalField(0); 
-
-//https://stackoverflow.com/questions/28585387/node-c-addon-how-do-i-access-a-typed-array-float32array-when-its-beenn-pa
-#if 0
-//    Local<Array> input = Local<Array>::Cast(args[0]);
-//    unsigned int num_locations = input->Length();
-//    for (unsigned int i = 0; i < num_locations; i++) {
-//      locations.push_back(
-//        unpack_location(isolate, Local<Object>::Cast(input->Get(i)))
-  void *buffer = node::Buffer::Data(info[1]);
-	v8::Local<v8::Array> new_pixels = v8::Local<v8::Array>::Cast(args[0]);
-	if (new_pixels->Length() != pixels.cast->w * pixels.cast->h) return_void(noderr("Paint: pixel array wrong length: %d (should be %d)", new_pixels->Length(), pixels.cast->w * pixels.cast->h));
-  Local<ArrayBuffer> buffer = ArrayBuffer::New(Isolate::GetCurrent(), size);
-  Local<Uint8ClampedArray> clampedArray = Uint8ClampedArray::New(buffer, 0, size);
- void *ptr= JSTypedArrayGetDataPtr(array);
-    size_t length = JSTypedArrayGetLength(array);
-    glBufferData(GL_ARRAY_BUFFER, length, ptr, GL_STATIC_DRAW);    
-#endif
-//    v8::Local<v8::Uint32Array> ary = args[0].As<Uint32Array>();
-//    Nan::TypedArrayContents<uint32_t> pixels(info[0].As<v8::Uint32Array>());
-//https://github.com/casualjavascript/blog/issues/12
-    uint32_t* pixels = 0;
-    if (info.Length())
-    {
-        v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
-        if (aryp->Length() < canvas->inner.width() * canvas->inner.height()) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->Length(), canvas->inner.width() * canvas->inner.height()));
-        void *data = aryp->Buffer()->GetContents().Data();
-        pixels = static_cast<uint32_t*>(data);
-    }
-myprintf(32, "js paint(0x%x) %d arg(s): pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, info.Length(), pixels[0], pixels[1], pixels[2]);
-    if (!canvas->inner.Paint(pixels)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
-    info.GetReturnValue().Set(0); //TODO: what value to return?
-}
-
-
-//show performance stats:
-void SimplerCanvas_js::stats(const Nan::FunctionCallbackInfo<v8::Value>& info)
-//NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
-{
-    v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    SimplerCanvas_js* canvas = Nan::ObjectWrap::Unwrap<SimplerCanvas_js>(info.Holder()); //info.This());
-    if (!canvas->inner.stats()) return_void(errjs(iso, "GpuCanvas.stats: failed"));
-    info.GetReturnValue().Set(0); //TODO: what value to return?
-}
-
-
-void SimplerCanvas_js::Quit(void* ignored)
-{
-//    GpuCanvas::Quit();
-    myprintf(22, BLUE_LT "js cleanup: %d instances to destroy" ENDCOLOR, all.size());
-    while (all.size()) { delete all.back(); } //dtor will remove self from list
-}
-
-
 //#define CONST_INT(name, value)  
 #define CONST_thing(name, value)  \
   Nan::ForceSet(target, Nan::New(name).ToLocalChecked(), Nan::New(value), static_cast<v8::PropertyAttribute>(v8::ReadOnly | v8::DontDelete))
@@ -3177,12 +3117,14 @@ NAN_MODULE_INIT(exports_js) //defines target
 //                 Nan::New<v8::FunctionTemplate>(shmatt_entpt)->GetFunction());
     Nan::Export(target, "AtomicAdd", AtomicAdd_js);
     Nan::Export(target, "shmbuf", shmbuf_js);
+    Nan::Export(target, "rwlock", rwlock_js);
+    Nan::SetAccessor(target, JS_STR(iso, "RwlockOps"), RwlockOps_js);
     Nan::Export(target, "usleep", usleep_js);
     Nan::SetAccessor(target, JS_STR(iso, "UnivTypes"), UnivTypes_js);
 #endif
 //    target->SetAccessor(JS_STR(iso, "Screen"), Screen_js);
     GpuCanvas_js::Init(target);
-    SimplerCanvas_js::Init(target);
+//    SimplerCanvas_js::Init(target);
 //  Nan::SetAccessor(proto, Nan::New("fillColor").ToLocalChecked(), GetFillColor);
 //    NAN_GETTER(Screen_js);
 //    Nan::SetAccessor(exports, Nan::New("Screen").ToLocalChecked(), Screen_js);

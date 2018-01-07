@@ -85,7 +85,8 @@
     "cluster": "^0.7.7",
     "colors": "git+https://github.com/djulien/colors.js.git",
     "framebuffer": "git+https://github.com/djulien/node-framebuffer.git",
-    "glob": "^7.1.1"
+    "glob": "^7.1.1",
+    "pngjs": "^3.3.1"
   },
   "old-devDependencies": {
     "blocking-style": "^1.0.0",

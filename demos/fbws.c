@@ -1,6 +1,6 @@
 //WS281X test using Linux framebuffer:
 //build:  gcc fbws.c -o fbws
-//run:  sudo  fbws
+//run:  [sudo]  fbws
 
 #include <unistd.h>
 #include <stdio.h>
@@ -15,7 +15,7 @@
 
 
 // 'global' variables to store screen info
-char *fbp = 0;
+char* fbp = 0;
 struct fb_var_screeninfo vinfo;
 struct fb_fix_screeninfo finfo;
 
@@ -153,44 +153,40 @@ void old_draw() {
 // application entry point
 int main(int argc, char* argv[])
 {
-
-    int fbfd = 0;
     struct fb_var_screeninfo orig_vinfo;
     long int screensize = 0;
+    int fbfd = 0;
 
-   system("cat /dev/fb0 > before.dat");
+    system("cat /dev/fb0 > before.dat");
 
     // Open the file for reading and writing
     fbfd = open("/dev/fb0", O_RDWR);
-    if (!fbfd || ((int)fbfd == -1)) {
+    if (!fbfd || ((int)fbfd == -1))
+    {
       printf("Error: cannot open framebuffer device.\n");
       return(1);
     }
     printf("The framebuffer device was opened successfully.\n");
 
+    // Get fixed screen information
+    if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo)) 
+      printf("Error reading fixed information.\n");
+
     // Get variable screen information
-    if (ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo)) {
+    if (ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo)) 
       printf("Error reading variable information.\n");
-    }
-    printf("Original %dx%d, %dbpp, %d linelen\n", vinfo.xres, vinfo.yres, 
-       vinfo.bits_per_pixel, finfo.line_length);
+    if (!vinfo.pixclock) vinfo.pixclock = -1;
+    printf("Original %dx%d, %d bpp, linelen %d, pxclk %d, lrul marg %d %d %d %d, sync len h %d v %d, fps %f\n", 
+       vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, finfo.line_length, vinfo.pixclock,
+       vinfo.left_margin, vinfo.right_margin, vinfo.upper_margin, vinfo.lower_margin, vinfo.hsync_len, vinfo.vsync_len,
+       (double)(vinfo.xres + vinfo.left_margin + vinfo.hsync_len + vinfo.right_margin) * (vinfo.yres + vinfo.upper_margin + vinfo.vsync_len + vinfo.lower_margin ) / vinfo.pixclock);
 
     // Store for reset (copy vinfo to vinfo_orig)
-    memcpy(&orig_vinfo, &vinfo, sizeof(struct fb_var_screeninfo));
-
-    // Get fixed screen information
-    if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo)) {
-      printf("Error reading fixed information.\n");
-    }
+    memcpy(&orig_vinfo, &vinfo, sizeof(vinfo)); //struct fb_var_screeninfo));
 
     // map fb to user mem 
     screensize = vinfo.xres * vinfo.yres * vinfo.bits_per_pixel / 8;
-    fbp = (char*)mmap(0, 
-              screensize, 
-              PROT_READ | PROT_WRITE, 
-              MAP_SHARED, 
-              fbfd, 
-              0);
+    fbp = (char*)mmap(0, screensize, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
 
     if (!fbfd || (fbp == (char*)-1))
         printf("Failed to mmap.\n");
@@ -202,13 +198,11 @@ int main(int argc, char* argv[])
 
     // cleanup
     munmap(fbp, screensize);
-    if (ioctl(fbfd, FBIOPUT_VSCREENINFO, &orig_vinfo)) {
+    if (ioctl(fbfd, FBIOPUT_VSCREENINFO, &orig_vinfo))
         printf("Error re-setting variable information.\n");
-    }
     close(fbfd);
 
    system("cat /dev/fb0 > after.dat");
-  printf("done\n");
-    return 0;
-  
+   printf("done\n");
+   return 0; 
 }
