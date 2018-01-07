@@ -1812,6 +1812,8 @@ public:
         }
         SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
         delta = now() - times.previous; times.render += delta; times.previous += delta;
+        if (render_timestamp) frame_rate += times.previous - render_timestamp; //now - previous timestamp
+        render_timestamp = times.previous; //now
         return true;
     }
     bool stats()

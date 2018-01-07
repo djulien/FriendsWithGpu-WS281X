@@ -51,6 +51,7 @@ Object.defineProperty(module.exports, "Screen",
 //  vsync_len: ref.types.uint32,
 //        const Screen = vinfo; //{};
         Screen.bits_per_pixel = vinfo.bits_per_pixel || 32;
+        if (vinfo.pixclock == 0xffffffff) vinfo.pixclock = 0; //kludge: fix bad value
         Screen.pixclock = vinfo.pixclock || 50000000;
         Screen.hblank = (vinfo.left_margin + vinfo.hsync_len + vinfo.right_margin) || Math.floor(Screen.width / 23.25);
         Screen.vblank = (vinfo.upper_margin + vinfo.vsync_len + vinfo.lower_margin) || Math.floor(Screen.height / 23.25);
@@ -320,6 +321,7 @@ function render_stats_method(start)
     {
         var num = this.render_count - this.save.count;
         var den = (Date.now() - this.save.sttime) / 1000; //sec
+        this.StatsAdjust = -den;
 //console.log("render.stats", num, den, num / den);
         return num / den;
     }

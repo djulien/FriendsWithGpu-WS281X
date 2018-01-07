@@ -25,8 +25,9 @@ const NUM_UNIV = cluster.isWorker? +process.env.NUM_UNIV: 24;
 const UNIV_LEN = cluster.isWorker? +process.env.UNIV_LEN: Screen.gpio? Screen.height: 24; //60; //Screen.height; //Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
 const NUM_WKER = 0; //os.cpus().length - 1; //+3; //leave 1 core for render, audio, ui
 const WKER_UNIV = NUM_WKER? Math.ceil(NUM_UNIV / NUM_WKER): NUM_UNIV; //#univ rendered by each bkg wker
-const FPS = cluster.isWorker? +process.env.FPS: Screen.fps; //1000000 / ((UNIV_LEN + 4) * 30);
-    const DURATION = 2;
+const FPS = cluster.isWorker? +process.env.FPS: Screen.fps; //1000000 / ((UNIV_LEN + 4) * 30); //NOTE: estimated
+const DURATION = 5;
+//process.exit(0);
 
 const EPOCH = cluster.isWorker? +process.env.EPOCH: elapsed(); //use master for shared time base
 const WKER_CFG = cluster.isWorker? JSON.parse(process.env.WKER_CFG): {};
@@ -138,14 +139,15 @@ return;
 //    setTimeout(() => { child.kill('SIGINT') }, 10000);
     var started = now_sec();
     canvas.render_stats(true);
-    for (var frnum = 0; frnum < DURATION * FPS; ++frnum)
+    for (var frnum = 0; now_sec() - started < DURATION /*frnum < DURATION * FPS*/; ++frnum)
     {
 //debug(`master render[${frnum}]`.blue_lt);
         render(frnum);
 //debug(`master paint[${frnum}]`.blue_lt);
         paint();
     }
-    debug(`render stats: target ${trunc(FPS, 10)} fps, actual %d fps, #render/sec %d`.cyan_lt, trunc(DURATION * FPS / (now_sec() - started), 10), trunc(canvas.render_stats(), 10));
+    started = now_sec() - started;
+    debug(`render stats: elapsed ${trunc(started, 1e3)} sec, #fr ${frnum}, expected ${trunc(FPS, 10)} fps, actual ${trunc(frnum / started, 10)} fps, #render/sec ${trunc(canvas.render_stats(), 10)}`.cyan_lt);
     canvas.stats();
     quit();
 }
