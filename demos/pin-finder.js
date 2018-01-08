@@ -170,6 +170,8 @@ step(function*()
 {
     var render_time = 0, idle_time = 0;
     debug("begin: startup took %d sec, now run fx for %d sec".green_lt, trunc(process.uptime(), 10), DURATION);
+//    for (var i = 0; i < 100; ++i)
+//        models.forEach((model) => { model.render(i); });
 
 //    var started = now_sec();
     canvas.elapsed = 0;
@@ -223,6 +225,7 @@ step(function*()
     render_time = 1000 * render_time / frnum; //(DURATION * FPS);
     var frtime = 1000 * canvas.elapsed / frnum;
     idle_time = 1000 * idle_time / frnum;
+    if (wait.overdue) debug(`overdue frames: ${wait.overdue} (${trunc(100 * wait.overdue / frnum, 10)}%)`.red_lt);
     debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: ${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle: ${trunc(idle_time, 10)} msec (${trunc(100 * idle_time / frtime, 10)}%), ${frnum} frames`.blue_lt);
     debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
     yield wait(PAUSE); //pause to show screen stats longer
@@ -258,7 +261,8 @@ try{
 function wait(delay)
 {
     delay *= 1000; //sec -> msec
-    debug("wait %d msec".blue_lt, trunc(delay, 10));
+    if (delay <= 1) if (isNaN(++wait.overdue)) wait.overdue = 1;
+    debug("wait %d msec"[(delay > 1)? "blue_lt": "red_lt"], trunc(delay, 10));
     return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
 }
 
