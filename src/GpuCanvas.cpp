@@ -1363,6 +1363,7 @@ public:
 //    std::string DumpFile;
 //    std::atomic<double> PresentTime; //presentation timestamp (set by bkg rendering thread)
     double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
+    void ResetElapsed(double elaps = 0) { started = now() - elaps * SDL_TickFreq(); }
     int StatsAdjust; //allow caller to tweak stats
 //CAUTION: must match firmware
 //        unsigned unused: 5; //lsb
@@ -1837,10 +1838,10 @@ public:
 //        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
 //        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
         myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec (%2.1f fps)" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000, (double)numfr_cpy * SDL_TickFreq() / frrate_cpy);
-        myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: caller %2.3f + encode %2.3f + update %2.3f + render %2.3f, %2.1f%% idle" ENDCOLOR, 
+        myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: caller %2.3f + encode %2.3f + update %2.3f + render %2.3f" ENDCOLOR, //, %2.1f%% idle" ENDCOLOR, 
             numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
-            avg_ms(times.caller), avg_ms(times.encode), avg_ms(times.update), avg_ms(times.render), 
-            (double)100 * idle_time / (now() - started));
+            avg_ms(times.caller), avg_ms(times.encode), avg_ms(times.update), avg_ms(times.render));
+//            (double)100 * idle_time / (now() - started));
         myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, caller %s, update %s, encode %s, render %s" ENDCOLOR, 
             commas(now() - started), commas(SDL_TickFreq()), 
             commas(times.caller), commas(times.update), commas(times.encode), commas(times.render));
@@ -2778,6 +2779,7 @@ private:
     static NAN_GETTER(width_getter);
     static NAN_GETTER(height_getter);
     static NAN_GETTER(elapsed_getter);
+    static NAN_SETTER(elapsed_setter);
 //    static NAN_METHOD(devmode_tofix);
     static NAN_GETTER(devmode_getter);
     static NAN_SETTER(devmode_setter);
@@ -2822,7 +2824,7 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 //    Nan::SetPrototypeMethod(ctor, "height", height_getter);
     Nan::SetAccessor(proto, JS_STR(iso, "width"), width_getter);
     Nan::SetAccessor(proto, JS_STR(iso, "height"), height_getter);
-    Nan::SetAccessor(proto, JS_STR(iso, "elapsed"), elapsed_getter);
+    Nan::SetAccessor(proto, JS_STR(iso, "elapsed"), elapsed_getter, elapsed_setter);
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
 //    Nan::SetPrototypeMethod(ctor, "devmode_tofix", devmode_tofix);
     Nan::SetAccessor(proto, JS_STR(iso, "devmode"), devmode_getter, devmode_setter);
@@ -2970,6 +2972,14 @@ NAN_GETTER(GpuCanvas_js::elapsed_getter) //defines "info"; implicit HandleScope 
     GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
 
     info.GetReturnValue().Set(JS_FLOAT(iso, canvas->inner.PresentTime()));
+}
+
+NAN_SETTER(GpuCanvas_js::elapsed_setter) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
+
+    if (!value->IsUndefined()) canvas->inner.ResetElapsed(value->NumberValue());
 }
 
 //get/set pivot flag:

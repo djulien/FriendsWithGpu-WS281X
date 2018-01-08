@@ -168,7 +168,7 @@ for (var x = 0; x < NUM_UNIV; ++x)
 //const TRACE = true;
 step(function*()
 {
-    var render_time = 0;
+    var render_time = 0, idle_time = 0;
     debug("begin: startup took %d sec, now run fx for %d sec".green_lt, trunc(process.uptime(), 10), DURATION);
 
 //    var started = now_sec();
@@ -212,7 +212,9 @@ step(function*()
                 }
 */
 //        yield wait(started + (t + 1) / FPS - now_sec()); //avoid cumulative timing errors
+        idle_time -= canvas.elapsed; //exclude non-waiting time
         yield wait((frnum + 1) / FPS - canvas.elapsed); //throttle to target frame rate; avoid cumulative timing errors
+        idle_time += canvas.elapsed;
         canvas.paint();
 //        yield wait(1);
 //        ++canvas.elapsed; //update progress bar
@@ -220,7 +222,7 @@ step(function*()
 //    debug("heap diff:", JSON.stringify(hd.end(), null, 2));
     render_time = 1000 * render_time / frnum; //(DURATION * FPS);
     var frtime = 1000 * canvas.elapsed / frnum;
-    debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: (${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), ${frnum} frames`.blue_lt);
+    debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: (${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle ${trunc(idle_time / frnum, 10)} (${trunc(idle_time / canvas.elapsed, 10)}%), ${frnum} frames`.blue_lt);
     debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
     yield wait(PAUSE); //pause to show screen stats longer
     canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
