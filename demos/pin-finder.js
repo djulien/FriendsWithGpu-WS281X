@@ -222,7 +222,8 @@ step(function*()
 //    debug("heap diff:", JSON.stringify(hd.end(), null, 2));
     render_time = 1000 * render_time / frnum; //(DURATION * FPS);
     var frtime = 1000 * canvas.elapsed / frnum;
-    debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: (${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle ${trunc(idle_time / frnum, 10)} (${trunc(idle_time / canvas.elapsed, 10)}%), ${frnum} frames`.blue_lt);
+    idle_time = 1000 * idle_time / frnum;
+    debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: ${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle: ${trunc(idle_time, 10)} msec (${trunc(100 * idle_time / frtime, 10)}%), ${frnum} frames`.blue_lt);
     debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
     yield wait(PAUSE); //pause to show screen stats longer
     canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
