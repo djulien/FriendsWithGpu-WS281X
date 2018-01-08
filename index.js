@@ -2,7 +2,8 @@
 //Javascript wrapper to expose GpuCanvas class and Screen config object
 
 "use strict"; //find bugs easier
-var fs = require('fs');
+const fs = require('fs');
+const os = require('os');
 const glob = require('glob');
 const {PNG} = require('pngjs');
 const pathlib = require('path');
@@ -25,15 +26,15 @@ Object.defineProperty(module.exports, "Screen",
         Screen.gpio = toGPIO();
         Screen.isRPi = isRPi();
 //adapted from node-framebuffer:
-        const ioctl = require('ioctl');
-        const fbstruct = require('framebuffer/lib/structs');
-        const fbconst = require('framebuffer/lib/constants');
+//        const ioctl = require('ioctl');
+//        const fbstruct = require('framebuffer/lib/structs');
+//        const fbconst = require('framebuffer/lib/constants');
 
-        const vinfo = new fbstruct.Vinfo(); //variable display info struct
-        var fbfd = fs.openSync("/dev/fb0", 'r');
-        var ret = ioctl(fbfd, fbconst.FBIOGET_VSCREENINFO, vinfo.ref());
-        fs.closeSync(fbfd);
-        if (ret) throw new Error("ioctl error".red_lt);
+//        const vinfo = new fbstruct.Vinfo(); //variable display info struct
+//        var fbfd = fs.openSync("/dev/fb0", 'r');
+//        var ret = ioctl(fbfd, fbconst.FBIOGET_VSCREENINFO, vinfo.ref());
+//        fs.closeSync(fbfd);
+//        if (ret) throw new Error("ioctl error".red_lt);
 //  xres: ref.types.uint32,
 //  yres: ref.types.uint32,
 //  xres_virtual: ref.types.uint32,
@@ -50,15 +51,15 @@ Object.defineProperty(module.exports, "Screen",
 //  hsync_len: ref.types.uint32,
 //  vsync_len: ref.types.uint32,
 //        const Screen = vinfo; //{};
-        Screen.bits_per_pixel = vinfo.bits_per_pixel || 32;
-        if (vinfo.pixclock == 0xffffffff) vinfo.pixclock = 0; //kludge: fix bad value
-        Screen.pixclock = vinfo.pixclock || 50000000;
-        Screen.hblank = (vinfo.left_margin + vinfo.hsync_len + vinfo.right_margin) || Math.floor(Screen.width / 23.25);
-        Screen.vblank = (vinfo.upper_margin + vinfo.vsync_len + vinfo.lower_margin) || Math.floor(Screen.height / 23.25);
-        Screen.rowtime = (Screen.width + Screen.hblank) / Screen.pixclock; //must be ~ 30 usec for WS281X
-        Screen.frametime = (Screen.height + Screen.vblank) * Screen.rowtime;
-        Screen.fps = 1 / Screen.frametime;
-        Object.defineProperty(module.exports, "Screen", Screen); //info won't change; reuse it next time
+//        Screen.bits_per_pixel = vinfo.bits_per_pixel || 32;
+//        if (vinfo.pixclock == 0xffffffff) vinfo.pixclock = 0; //kludge: fix bad value
+//        Screen.pixclock = vinfo.pixclock || 50000000;
+//        Screen.hblank = (vinfo.left_margin + vinfo.hsync_len + vinfo.right_margin) || Math.floor(Screen.width / 23.25);
+//        Screen.vblank = (vinfo.upper_margin + vinfo.vsync_len + vinfo.lower_margin) || Math.floor(Screen.height / 23.25);
+//        Screen.rowtime = (Screen.width + Screen.hblank) / Screen.pixclock; //must be ~ 30 usec for WS281X
+//        Screen.frametime = (Screen.height + Screen.vblank) * Screen.rowtime;
+//        Screen.fps = 1 / Screen.frametime;
+//        Object.defineProperty(module.exports, "Screen", Screen); //info won't change; reuse it next time
 debug("Screen info %s".blue_lt, JSON.stringify(Screen, null, 2));
         return Screen;
     },
@@ -137,6 +138,7 @@ const OPTS =
     SHMKEY: [LIVEOK, 0xface], //makes it easier to find in shm (for debug)
     EXTRA_LEN: [LIVEOK, 0], //caller-requrested extra space for frame#, #wkers, timestamp, etc
     TITLE: [DEVONLY, "GpuCanvas"], //only displayed in dev mode
+    NUM_WKERS: [LIVEOK, os.cpus().length], //create 1 bkg wker for each core
 };
 
 
@@ -149,15 +151,16 @@ const WHITE = 0xffffffff;
 //proxy wrapper adds shared semantics (underlying SimplerCanvas is not thread-aware)
 //proxy also allows methods and props to be intercepted
 //for proxy info see: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy
-const SharedCanvas =
-module.exports.SharedCanvas =
+//const GpuCanvas =
+module.exports.GpuCanvas =
 //function SharedCanvas(width, height, opts)
 //class SharedCanvas extends SimplerCanvas
 new Proxy(function(){},
 {
-    construct: function SharedCanvas(target, args, newTarget) //ctor args: width, height, opts
+    construct: function GpuCanvas_ctor(target, args, newTarget) //ctor args: width, height, opts
     {
 //    if (!(this instanceof GpuCanvas_shim)) return new GpuCanvas_shim(title, width, height, opts); //convert factory call to class
+//console.log("args", JSON.stringify(args));
         const [width, height, opts] = args;
 //console.log("proxy ctor", width, height, opts);
         opts_check(opts);
@@ -212,7 +215,8 @@ new Proxy(function(){},
 
 //    const super_paint = this.paint.bind(this);
 //SharedCanvas.prototype.paint =
-        THIS.paint = paint_method;
+        const want_progress = (opts || {}).SHOW_PROGRESS || OPTS.SHOW_PROGRESS[1];
+        THIS.paint = want_progress? paint_progress_method: paint_method;
 
 //SharedCanvas.prototype.render_stats =
         THIS.render_stats = render_stats_method;
@@ -294,23 +298,32 @@ function load_img_method(path)
 
 
 //send pixel data on screen:
-function paint_method(alt_pixels)
+function paint_method() //alt_pixels)
 {
 //        if (WANT_SHARED && !cluster.isMaster) return process.send({done: true});
 //console.log(`paint: ${this.width} x ${this.height}, progress? ${this.SHOW_PROGRESS}, elapsed ${this.elapsed || 0}, duration ${this.duration}, x-limit %d %d`, this.width * (this.elapsed || 0) / this.duration, Math.round(this.width * (this.elapsed || 0) / this.duration));
 //        if (!alt_pixels) //don't mess up caller's data
-//        if (this.SHOW_PROGRESS && this.duration) //kludge: use last row of pixels to display progress bar
-//            for (var x = 0; x < Math.round(this.width * (this.elapsed || 0) / this.duration); ++x)
-//                this.pixels[(x + 1) * this.height -1] = WHITE;
+//    if (this.SHOW_PROGRESS && this.duration) //kludge: use last row of pixels to display progress bar
+//        for (var x = 0; x < Math.round(this.width * (this.elapsed || 0) / this.duration); ++x)
+//            this.pixels[(x + 1) * this.height -1] = WHITE;
 //        return Object.getPrototypeOf(this).
 //        super_paint(pixels); //CAUTION: blocks a few msec for bkg renderer
 //        super.paint(alt_pixels || this.pixels); //CAUTION: blocks a few msec for bkg renderer
-    if (arguments.length) GpuCanvas.prototype.paint.call(this, alt_pixels); //CAUTION: blocks a few msec for bkg renderer
-    else GpuCanvas.prototype.paint.call(this); //CAUTION: blocks a few msec for bkg renderer
+//    if (arguments.length) GpuCanvas.prototype.paint.call(this, alt_pixels); //CAUTION: blocks a few msec for bkg renderer
+//    else GpuCanvas.prototype.paint.call(this); //CAUTION: blocks a few msec for bkg renderer
+    GpuCanvas.prototype.paint.call(this, this.pixels); //CAUTION: blocks a few msec for bkg renderer
     if (isNaN(++this.render_count)) this.render_count = 1;
-    debug(`paint# ${this.render_count}, ${arguments.length} arg(s)`.blue_lt);
+//    debug(`paint# ${this.render_count}, ${arguments.length} arg(s)`.blue_lt);
     return this; //fluent
 } //.bind(this);
+function paint_progress_method() //alt_pixels)
+{
+//debug("paint[%d @%d]: prog 0..%d/%d", this.render_count || 0, this.elapsed, (this.width * (this.elapsed || 0) / this.duration), this.width);
+    if (/*this.SHOW_PROGRESS &&*/ this.duration) //kludge: use last row of pixels to display progress bar
+        for (var x = 0, xofs = x * this.height; x < Math.round(this.width * (this.elapsed || 0) / this.duration); ++x, xofs += this.height)
+            this.pixels[xofs + this.height -1] = WHITE;
+    return paint_method.call(this);
+}
 
 
 //give render stats to caller for debug / performance analysis:
@@ -331,9 +344,12 @@ function render_stats_method(start)
 //validate ctor opts:
 function opts_check(opts)
 {
+//console.log("chk opts", JSON.stringify(opts));
     Object.keys(opts || {}).forEach((key, inx, all) =>
     {
         if (!(key in OPTS)) throw `GpuCanvas: option '${key}' not supported until maybe later`.red_lt;
+//        const info = OPTS[key];
+//console.log("info", key, inx, JSON.stringify(info));
         const [opt_mode, def_val] = OPTS[key];
         if (opts.DEV_MODE) return; //all options okay in dev mode
         if (opt_mode != DEVONLY) return; //option okay in live mode

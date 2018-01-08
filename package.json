@@ -22,7 +22,7 @@
   "scripts": {
     "help": "use 'npm run' to run these scripts",
     "preinstall": "scripts/setup.sh pre",
-    "install": "node-gyp rebuild",
+    "x-install": "node-gyp rebuild",
     "postinstall": "scripts/setup.sh post",
     "TODO-test": "node-gyp rebuild && mocha --reporter spec",
     "refresh": "git fetch --all; git reset --hard origin/master",
@@ -72,9 +72,10 @@
     "shm-typed-array": "0.0.10",
     "memwatch-next": "^0.3.0",
     "debug": "^2.2.0",
-    "nan": "^2.6.1",
+    "framebuffer": "git+https://github.com/djulien/node-framebuffer.git",
     "node-gyp": "^3.6.0",
     "require-rebuild": "^1.2.8",
+    "os": "^0.1.1",
     "through2": "^2.0.3"
   },
   "dependencies": {
@@ -84,8 +85,8 @@
     "circular-json": "^0.5.1",
     "cluster": "^0.7.7",
     "colors": "git+https://github.com/djulien/colors.js.git",
-    "framebuffer": "git+https://github.com/djulien/node-framebuffer.git",
     "glob": "^7.1.1",
+    "nan": "^2.6.1",
     "pngjs": "^3.3.1"
   },
   "old-devDependencies": {

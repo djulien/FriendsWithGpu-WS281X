@@ -96,6 +96,8 @@
 #include <sys/shm.h> //shmatt, shmget, shmctl
 //?? #define _MULTI_THREADED
 #include <pthread.h> //rwlock
+#include <linux/fb.h> //fb_var_screeninfo, fb_fix_screeninfo
+#include <sys/ioctl.h> //ioctl
 //#include <byteswap.h> //bswap_32(x)
 //#include <iostream> //std::cin
 //using std::cin;
@@ -464,6 +466,7 @@ inline const char* ThreadName(const SDL_Thread* thr = THIS_THREAD)
 
 //augmented data types:
 //allow inited libs or locked objects to be treated like other allocated SDL objects:
+//typedef struct { int fd; } File;
 //typedef struct { /*int dummy;*/ } SDL_lib;
 typedef struct { /*uint32_t evtid*/; } SDL_lib;
 //typedef struct { int dummy; } IMG_lib;
@@ -509,6 +512,7 @@ inline const char* TypeName(const SDL_Thread*) { return "SDL_Thread"; }
 //TODO: remove printf
 #define debug(ptr)  myprintf(28, YELLOW_LT "dealloc %s 0x%x" ENDCOLOR, TypeName(ptr), toint(ptr))
 #define NOdebug(ptr)
+inline int Release(FILE* that) { return fclose(that); }
 inline int Release(/*const*/ SDL_lib* that) { debug(that); SDL_Quit(); return SDL_Success; }
 //inline int Release(IMG_lib* that) { IMG_Quit(); return SDL_Success; }
 inline int Release(/*const*/ SDL_Window* that) { debug(that); SDL_DestroyWindow(that); return SDL_Success; }
@@ -1339,7 +1343,7 @@ private:
 //    static auto_ptr<SDL_lib> sdl;
 //    static int count;
 //performance stats:
-    uint64_t started; //doesn't need to be atomic; won't be modified after fg thread wakes
+    uint64_t started, reported; //doesn't need to be atomic; won't be modified after fg thread wakes
     uint64_t render_timestamp, frame_rate;
 #ifdef MULTI_THREADED
     std::atomic<uint32_t> numfr, numerr, num_dirty; //could be updated by another thread
@@ -1476,7 +1480,7 @@ public:
         this->wait(); //wait for bkg thread to init
 #endif
         myprintf(22, BLUE_LT "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
-#else
+#else //def MULTI_THREADED
 	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); //NOTE: PRESENTVSYNC syncs with V refresh rate (typically 60 Hz)
         if (!renderer) return_void(err(RED_LT "Create renderer failed" ENDCOLOR));
         debug_info(renderer);
@@ -1489,14 +1493,14 @@ public:
 
         myprintf(8, MAGENTA_LT "canvas startup took %2.1f msec" ENDCOLOR, elapsed(started));
         times.caller = times.encode = times.update = times.render = numfr = numerr = num_dirty = 0;
-        started = times.previous = now();
+        started = reported = times.previous = now();
         render_timestamp = frame_rate = 0;
 #endif //def MULTI_THREADED
     }
     ~GpuCanvas()
     {
 //        myprintf(22, BLUE_LT "GpuCanvas dtor" ENDCOLOR);
-        stats();
+        if (reported != times.previous) stats();
 #ifdef MULTI_THREADED
         this->done = true;
         this->wake(); //eof; tell bkg thread to quit (if it's waiting)
@@ -1814,6 +1818,9 @@ public:
         delta = now() - times.previous; times.render += delta; times.previous += delta;
         if (render_timestamp) frame_rate += times.previous - render_timestamp; //now - previous timestamp
         render_timestamp = times.previous; //now
+//        if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec @60 FPS
+        ++numfr;
+        if (elapsed(reported) >= 10) stats(); //show stats every 10 sec
         return true;
     }
     bool stats()
@@ -1829,7 +1836,7 @@ public:
         uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
 //        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
 //        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
-        myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000);
+        myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec (%2.1f fps)" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000, (double)numfr_cpy * SDL_TickFreq() / frrate_cpy);
         myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: caller %2.3f + encode %2.3f + update %2.3f + render %2.3f, %2.1f%% idle" ENDCOLOR, 
             numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
             avg_ms(times.caller), avg_ms(times.encode), avg_ms(times.update), avg_ms(times.render), 
@@ -1838,6 +1845,7 @@ public:
             commas(now() - started), commas(SDL_TickFreq()), 
             commas(times.caller), commas(times.update), commas(times.encode), commas(times.render));
 //        myprintf(22, "raw-raw: elapsed %ld, freq %ld" ENDCOLOR, now() - started, SDL_TickFreq());
+        reported = times.previous;
         return true;
     }
 #endif //def MULTI_THREADED
@@ -2482,6 +2490,41 @@ NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 //    myprintf(3, "screen: %d x %d" ENDCOLOR, wh.w, wh.h);
 //    Nan::Set(retval, w_name, Nan::New<v8::Number>(wh.w));
 //    Nan::Set(retval, h_name, Nan::New<v8::Number>(wh.h));
+
+//screen info:
+    struct fb_var_screeninfo vinfo;
+    struct fb_fix_screeninfo finfo;
+
+//http://www.uruk.org/projects/cvt/
+    auto_ptr<FILE> fb = fopen("/dev/fb0", "r"); //O_RDONLY);
+    if (!fb) return_void(errjs(iso, "Screen: can't open frame buffer: %s (errno %d)", strerror(errno), errno));
+    if (ioctl(fileno(fb), FBIOGET_FSCREENINFO, &finfo)) return_void(errjs(iso, "Screen: can't get fixed screen info: %s (errno %d)", strerror(errno), errno));
+    if (ioctl(fileno(fb), FBIOGET_VSCREENINFO, &vinfo)) return_void(errjs(iso, "Screen: can't get variable screen info: %s (errno %d)", strerror(errno), errno));
+
+    if (!vinfo.pixclock) vinfo.pixclock = 1;
+    int hblank = vinfo.left_margin + vinfo.hsync_len + vinfo.right_margin;
+    int vblank = vinfo.upper_margin + vinfo.vsync_len + vinfo.lower_margin;
+    double rowtime = (vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
+    double frametime = (vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
+
+    myprintf(28, BLUE_LT "Screen ioctl: %d x %d, %d bpp, linelen %d, pxclk %d, margins lrtb %d %d %d %d, sync len h %d v %d, row time %2.1f usec, frame time %2.1f msec, fps %2.1f" ENDCOLOR,
+       vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, finfo.line_length, vinfo.pixclock,
+       vinfo.left_margin, vinfo.right_margin, vinfo.upper_margin, vinfo.lower_margin, vinfo.hsync_len, vinfo.vsync_len,
+       1000000 * rowtime, 1000 * frametime, 1 / frametime);
+//    close(fbfd);
+    retval->Set(JS_STR(iso, "xres"), JS_INT(iso, vinfo.xres));
+    retval->Set(JS_STR(iso, "yres"), JS_INT(iso, vinfo.yres));
+    retval->Set(JS_STR(iso, "bpp"), JS_INT(iso, vinfo.bits_per_pixel));
+    retval->Set(JS_STR(iso, "linelen"), JS_INT(iso, finfo.line_length));
+    retval->Set(JS_STR(iso, "pixclock"), JS_INT(iso, vinfo.pixclock));
+
+//       vinfo.left_margin, vinfo.right_margin, vinfo.upper_margin, vinfo.lower_margin, vinfo.hsync_len, vinfo.vsync_len,
+    retval->Set(JS_STR(iso, "hblank"), JS_INT(iso, hblank));
+    retval->Set(JS_STR(iso, "vblank"), JS_INT(iso, vblank));
+    retval->Set(JS_STR(iso, "rowtime"), JS_FLOAT(iso, 1000000 * rowtime));
+    retval->Set(JS_STR(iso, "frametime"), JS_FLOAT(iso, 1000 * frametime));
+    retval->Set(JS_STR(iso, "fps"), JS_FLOAT(iso, 1 / frametime));
+
     info.GetReturnValue().Set(retval);
 }
 #endif
@@ -3025,7 +3068,7 @@ NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 sta
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
 //    if (info.Length() != 1) return_void(errjs(iso, "GpuCanvas.paint: expected 1 param, got %d", info.Length()));
-	if (info.Length() && !info[0]->IsUint32Array()) return_void(errjs(iso, "GpuCanvas.paint: missing uint32 array param"));
+	if ((info.Length() < 1) || !info[0]->IsUint32Array()) return_void(errjs(iso, "GpuCanvas.paint: missing uint32 array param"));
     GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
 //void* p = handle->GetAlignedPointerFromInternalField(0); 
 
