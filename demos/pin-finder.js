@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 //Pin finder RGB patterns: tests GPU config, GPIO pins, and WS281X connections
 //Sends out a different pattern on each GPIO pin to make them easier to identify.
-//Copyright (c) 2016-2017 Don Julien
+//Copyright (c) 2016-2018 Don Julien
 //Can be used for non-commercial purposes.
 //
 //History:
@@ -22,7 +22,8 @@ const {debug} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
 const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
-
+console.log(JSON.stringify(Screen));
+process.exit();
 
 ////////////////////////////////////////////////////////////////////////////////
 ////

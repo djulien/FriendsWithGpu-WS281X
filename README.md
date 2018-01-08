@@ -26,6 +26,9 @@ So we should be able to divide PLL by between 10 and 2550.
 So highest pixel clock is 240MHz (300MHz with overclock)
 And lowest pixel clock is 0.235MHz
 
+some examples shown t https://askubuntu.com/questions/147580/how-to-see-change-screen-refresh-rate-or-monitor-frequency
+** https://ubuntuforums.org/archive/index.php/t-779038.html
+
 http://www.techmind.org/lcd/phasexplan.html
 
 Node.js tuning:

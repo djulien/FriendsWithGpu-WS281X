@@ -21,6 +21,31 @@
 #            'dependencies': [ 'deps/mpg123/mpg123.gyp:output' ],
 #            "dependencies": [ "<!(node -p \"require('node-addon-api').gyp\")" ],
             'libraries': [" <!(sdl2-config --libs)"],
+            'conditions':
+            [
+                [
+#                    'OS=="linux-rpi"',
+#                    '<!@(uname -p)=="armv7l"', #RPi 2
+                    'target_arch=="arm"', #RPi 2
+                    {
+                        'defines': ["RPI_NO_X"] #don't want X Windows client
+#                        'libraries+': ["-L/opt/vc/lib", "-lbcm_host"],
+#                        'include_dirs+':
+#                        [
+#                            "/opt/vc/include",
+#                            "/opt/vc/include/interface/vcos/pthreads",
+#                            "/opt/vc/include/interface/vmcs_host/linux"
+#                        ]
+                    },
+#                    'OS=="linux-pc"', #else
+                    {
+#                        "xcode_settings": {
+#                        'defines': ["UNIV_LEN=32"], #for dev/testing
+#                        'defines': ["SHADER_DEBUG"], #for dev/testing
+                        'libraries': ["-lX11"]
+                    }
+                ]
+            ]
         }
     ]
 }

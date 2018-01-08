@@ -13,8 +13,42 @@ const cluster = require('cluster');
 const bindings = require('bindings');
 const {debug} = require('./demos/shared/debug');
 const {/*Screen,*/ GpuCanvas, UnivTypes, shmbuf, /*AtomicAdd, usleep,*/ RwlockOps, rwlock} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
-//lazy-load Screen to avoid extraneous SDL inits:
-//module.exports.Screen = Screen;
+//lazy-load Screen props to avoid unneeded SDL inits:
+//module.exports.Screen = {};
+//Object.defineProperties(module.exports.Screen,
+module.exports.Screen =
+new Proxy(function(){},
+{
+    get: function(target, propkey, rcvr)
+    {
+        debug("get Screen.%s, cached? %d", propkey, typeof target[propkey]);
+        if (typeof target[propkey] != "undefined") return target[propkey]; //use cached value, screen won't change
+        switch (propkey)
+        {
+            case "gpio":
+                return target[propkey] = toGPIO();
+            case "isRPi":
+                return target[propkey] = isRPi();
+            default:
+                if (!target._inner) target._inner = bindings("gpu-canvas").Screen; //calls SDL_Init()
+                if (propkey == "toJSON") return function() { return target._inner; }; //kludge; see https://github.com/tvcutsem/harmony-reflect/issues/38
+//                return target._inner[prop];
+                return Reflect.get(target._inner, propkey, rcvr);
+        }
+    },
+/*
+    has: function(target, prop)
+    {
+        debug("has Screen.%s? %d", prop, typeof target[prop] != "undefined");
+        return typeof target[prop] != "undefined";
+    },
+    ownKeys: function(target)
+    {
+        debug("own keys");
+    },
+*/
+});
+/*
 Object.defineProperty(module.exports, "Screen",
 {
 //define getter so Screen can be lazy-loaded (to avoid extraneous SDL_init):
@@ -65,6 +99,7 @@ debug("Screen info %s".blue_lt, JSON.stringify(Screen, null, 2));
     },
     configurable: true, //allow modify/delete by caller
 });
+*/
 //module.exports.shmbuf = shmbuf;
 module.exports.UnivTypes = UnivTypes;
 //module.exports.AtomicAdd = AtomicAdd;
