@@ -163,7 +163,7 @@ const OPTS =
 //    SHOW_SHSRC: true, //show shader source code
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
-    WANT_SHARED: [LIVEOK, true], //share same canvas with child processes/threads
+//    WANT_SHARED: [LIVEOK, true], //share same canvas with child processes/threads
     SHOW_PROGRESS: [DEVONLY, true], //show progress bar at bottom of screen
     UNIV_TYPE: [LIVEOK, UnivTypes.WS281X], //set default univ type
 //    WS281X_FMT: [LIVEOK, true], //force WS281X formatting on screen
@@ -200,9 +200,9 @@ new Proxy(function(){},
 //console.log("proxy ctor", width, height, opts);
         opts_check(opts);
         const title = (opts || {}).TITLE || OPTS.TITLE[1];
-        const want_shared = (opts || {}).WANT_SHARED || OPTS.WANT_SHARED[1];
+        const num_wkers = (opts || {}).NUM_WKERS || OPTS.NUM_WKERS[1];
 //        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
-        const THIS = (cluster.isMaster || !want_shared)? new GpuCanvas(title, width, height): {title, width, height}; //initialize base class; dummy wrapper for wker procs
+        const THIS = cluster.isMaster /*|| !num_wkers)*/? new GpuCanvas(title, width, height): {title, width, height}; //initialize base class; dummy wrapper for wker procs
 //        pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
 //console.log("initial props:", THIS.WS281X_FMT, THIS.SHOW_PROGRESS, opts.UNIV_TYPE);
 //if (opts.UNIV_TYPE) console.log("set all unv type to", opts.UNIV_TYPE);
@@ -220,14 +220,20 @@ new Proxy(function(){},
 //var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
         const shmkey = (opts || {}).SHMKEY || OPTS.SHMKEY[1];
         const extralen = (opts || {}).EXTRA_LEN || OPTS.EXTRA_LEN[1]; //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
-        const alloc = want_shared? shmbuf: function(ignored, len) { return new Buffer(len); }
+        const alloc = num_wkers? shmbuf: function(ignored, len) { return new Buffer(len); }
         THIS.shmbuf = new Uint32Array(alloc(shmkey, (THIS.width * THIS.height + RwlockOps.SIZE32 + extralen) * Uint32Array.BYTES_PER_ELEMENT, cluster.isMaster));
         if (extralen) THIS.extra = THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen);
         THIS.pixels = THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen);
-        debug(`GpuCanvas: master? ${cluster.isMaster}, shared? ${want_shared}, alloc ${THIS.shmbuf.byteLength} bytes, ${THIS.pixels.byteLength} for pixels, ${RwlockOps.SIZE32 * Uint32Array.BYTES_PER_ELEMENT} for rwlock, ${extralen * Uint32Array.BYTES_PER_ELEMENT} for extra data`.blue_lt);
-        if (cluster.isMaster || !want_shared) THIS.pixels.fill(BLACK); //start with all pixels dark
-        var errstr = rwlock(THIS.shmbuf, 0, RwlockOps.INIT); //use shm to allow access by multiple procs
+        debug(`GpuCanvas: master? ${cluster.isMaster}, #bkg wkers ${num_wkers}, alloc ${THIS.shmbuf.byteLength} bytes, ${THIS.pixels.byteLength} for pixels, ${RwlockOps.SIZE32 * Uint32Array.BYTES_PER_ELEMENT} for rwlock, ${extralen * Uint32Array.BYTES_PER_ELEMENT} for extra data`.blue_lt);
+        if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
+        var errstr = num_wkers? rwlock(THIS.shmbuf, 0, RwlockOps.INIT): false; //use shm to allow access by multiple procs
         if (errstr) throw `GpuCanvas: can't create lock: ${errstr}`.red_lt;
+//        if (cluster.isMaster)
+        for (var w = 0; w < num_wkers; ++w) cluster.fork({WKER_ID: w});
+        THIS.WKER_ID = cluster.isWorker? +process.env.WKER_ID: -1; //which wker thread is this
+        THIS.isMaster = cluster.isMaster; //(THIS.WKER_ID == -1);
+        THIS.isWorker = cluster.isWorker; //(THIS.WKER_ID != -1);
+        debug(cluster.isMaster? `GpuCanvas: forked ${cluster.workers.length}/${num_wkers} bkg wkers`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
 //NOTE: lock is left in shm; no destroy (not sure when to call it)
 //        THIS.epoch = Date.now();
 //        return THIS;

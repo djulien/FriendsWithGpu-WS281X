@@ -15,15 +15,18 @@
 
 'use strict'; //find bugs easier
 require('colors'); //for console output
-const os = require('os');
+//const os = require('os');
 //const pathlib = require('path');
 //const {blocking, wait} = require('blocking-style');
+//const cluster = require('cluster');
+//const JSON = require('circular-json'); //CAUTION: replace std JSON with circular-safe version
 const {debug} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
-const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
+const {Screen, GpuCanvas/*, cluster*/} = require('gpu-friends-ws281x');
 //console.log(JSON.stringify(Screen));
 //process.exit();
+
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
@@ -32,7 +35,7 @@ const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
 
 const DURATION = 30; //10; //60; //how long to run (sec)
 const PAUSE = 5; //how long to pause at end
-const FPS = 30; //2; //animation speed
+const FPS = 30; //2; //animation speed (max depends on screen settings)
 
 
 //display settings:
@@ -48,7 +51,10 @@ const OPTS =
 //    UNIV_TYPE: UnivTypes.CHPLEX_SSR,
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
     TITLE: "PinFinder",
-    NUM_WKERS: os.cpus().length - 1, //1 bkg wker for each core, leave 1 core free for evt loop
+//choose one of below options for performance tuning:
+    NUM_WKERS: 0, //whole-house fg render
+//    NUM_WKERS: 1, //whole-house bg render
+//    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
 };
 if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
 
@@ -58,10 +64,10 @@ if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
 //const FPS = 30; //estimated animation speed
 const NUM_UNIV = 24; //#universes; can't exceed #VGA output pins (24) without external mux
 const UNIV_LEN = Screen.gpio? Screen.height: 30; //universe length; can't exceed #display lines; show larger pixels in dev mode
-debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
+const WKER_UNIV = OPTS.NUM_WKERS? Math.ceil(NUM_UNIV / OPT.NUM_WKERS): NUM_UNIV; //#univ to render by each bkg wker
+debug("Screen %d x %d, refresh %d hz, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio, Screen.fps);
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
-const models = [];
 const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 
 
@@ -69,6 +75,17 @@ const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 ////
 /// Models/effects rendering:
 //
+
+const models = []; //list of models/effects to be rendered by *this* thread
+
+//TODO: use WKER_UNIV here
+if (OPTS.NUM_WKERs > 1) //split up models across multiple bkg threads
+    for (var u = 0; u < NUM_UNIV; ++u)
+        models.push((canvas.WKER_ID == u >> 3)? new PinFinder({univ_num: u}): canvas.isMaster? new BkgWker(u >> 3): null);
+else //whole-house on main or bkg thread
+    models.push((!OPTS.NUM_WKERS || canvas.isWorker)? new PinFinder(): new BkgWker(0));
+debug(`${canvas.isMaster? "master": "wker"} ${canvas.WKER_ID} has ${models.length} model(s) to render`.blue_lt);
+
 
 //ARGB primary colors:
 const RED = 0xffff0000;
@@ -91,21 +108,29 @@ const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
 //    univ_num = universe# (screen column); 0..23; also determines pattern repeat factor
 //    univ_len = universe length (screen height)
 //    color = RGB color to use for this universe (column)
-class PinFinderModel
+class PinFinder
 {
-    constructor(univ_num, univ_len, color)
+    constructor(opts) //{univ_num}
     {
+        const whole_house = (typeof (opts || {}).univ_num == "undefined");
 //        this.univ_num = univ_num; //stofs = univ_num * univ_len; //0..23 * screen height (screen column)
-        this.pixels = canvas.pixels.slice(univ_num * univlen, univlen); //universe pixels (screen column)
-        this.repeat = 9 - (univ & 7); //patterm repeat factor; 9..2
-        this.height = univ_len; //universe length (screen height)
-        this.color = color;
+        this.begin_univ = !whole_house? opts.univ_num: 0;
+        this.end_univ = !whole_house? opts.univ_num + 1: canvas.width; //single univ vs. whole-house
+//        this.pixels = canvas.pixels.slice(begin_univ * UNIV_LEN, end_univ * UNIV_LEN); //pixels for this/these universe(s) (screen column(s))
+//        this.repeat = 9 - (univ & 7); //patterm repeat factor; 9..2
+//        this.height = univ_len; //universe length (screen height)
+//        this.color = (opts || {}).color || WHITE;
+//        this.frnum = 0; //frame# (1 animation step per frame)
     }
 
     render(frnum)
     {
 //        if (isNaN(++this.frnum)) this.frnum = 0; //frame# (1 animation step per frame)
-        for (var y = 0; y < this.height; ++y)
+        for (var u = this.begin_univ, uofs = u * canvas.height; u < this.end_univ; ++u, uofs += canvas.height)
+        {
+            var color = [RED, GREEN, BLUE][u >> 3]; //Math.floor(x / 8)];
+            var repeat = 9 - (u & 7); //(x % 8);
+            for (var n = 0, c = -frnum % repeat; n < canvas.height; ++n, ++c)
 //, csel = -this.count++ % this.repeat
 //            if (csel >= this.repeat) csel = 0;
 //if ((t < 3) && !x && (y < 10)) console.log(t, typeof c, c);
@@ -113,51 +138,41 @@ class PinFinderModel
 //                    var repeat = 9 - (x % 8);
 //                    canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
 //                    canvas.pixel(x, y, c? BLACK: color);
-//                    canvas.pixels[xofs + y] = ((y - t) % repeat)? BLACK: color;
-//            canvas.pixels[univ_ofs + y] = csel? BLACK: this.color;
-            this.pixels[y] = ((y - frnum) % this.repeat)? BLACK: this.color;
-    }
-};
-
-
-//as above, but for all universes:
-class WholeHouseModel
-{
-    render(frnum)
-    {
-        for (var x = 0, xofs = 0; x < canvas.width; ++x, xofs += canvas.height)
-        {
-            var color = [RED, GREEN, BLUE][x >> 3]; //Math.floor(x / 8)];
-            var repeat = 9 - (x & 7); //(x % 8);
-            for (var y = 0, c = -frnum % repeat; y < canvas.height; ++y, ++c)
-            {
-                if (c >= repeat) c = 0;
-//if ((t < 3) && !x && (y < 10)) console.log(t, typeof c, c);
-//                    var color = [RED, GREEN, BLUE][Math.floor(x / 8)];
-//                    var repeat = 9 - (x % 8);
-//                    canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
-//                    canvas.pixel(x, y, c? BLACK: color);
-//                    canvas.pixels[xofs + y] = ((y - t) % repeat)? BLACK: color;
-                canvas.pixels[xofs + y] = c? BLACK: color;
-            }
+                canvas.pixels[uofs + n] = ((n - frnum) % repeat)? BLACK: color;
+//                canvas.pixels[uofs + n] = csel? BLACK: this.color;
+//            this.pixels[y] = ((y - frnum) % this.repeat)? BLACK: this.color;
         }
     }
 };
 
 
-//model/effect rendering:
-//use only one of below options
+//bkg wker:
+//treated as a pseudo-model by main thread
+class BkgWker
+{
+    constructor(id)
+    {
+        if (all.id) return null; //already have this wker
+        all.push(id);
+    }
 
-//whole-house on main thread:
-models.push(new WholeHouseModel());
-//whole-house on bkg thread:
-if (false)
-models.push(BkgWker(new WholeHouseModel()));
-//split up and assign models to multiple bkg threads:
-//assign models (effects) to be rendered:
-if (false)
-for (var x = 0; x < NUM_UNIV; ++x)
-    models.push(BkgWker(new MyModel(x, Screen.height, [RED, GREEN, BLUE][x >> 3])));
+    render(frnum)
+    {
+        models.forEach((model) => { model.render(frnum); });
+    }
+
+    render(frnum)
+    {
+        all.forEach(wker => wker.render_req(frnum));
+        all.forEach(wker => wker.render_wait());
+    }
+}
+if (canvas.isWorker)
+{
+    wait for req;
+    models.forEach((model) => { model.render(frnum); });
+    reply;
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -182,7 +197,8 @@ step(function*()
     for (var frnum = 0; canvas.elapsed <= DURATION; ++frnum)
     {
         render_time -= canvas.elapsed; //exclude non-rendering (paint + V-sync wait) time
-        models.forEach((model) => { model.render(frnum); });
+        models.renderAll(frnum); //forEach((model) => { model.render(frnum); });
+        render(frnum);
 //        yield canvas.render(frnum);
         render_time += canvas.elapsed;
 //NOTE: pixel (0, 0) is upper left on screen
@@ -238,6 +254,7 @@ step(function*()
 //NOTE: only steps generator function 1 step; subsequent events must also caller step to finish executing generator
 function step(gen)
 {
+    if (canvas.isWorker) return; //stepper not needed by bkg threads
 try{
 //console.log("step");
 //    if (step.done) throw "Generator function is already done.";
