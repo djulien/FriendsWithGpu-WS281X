@@ -22,8 +22,8 @@ const {debug} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
 const {Screen, GpuCanvas} = require('gpu-friends-ws281x');
-console.log(JSON.stringify(Screen));
-process.exit();
+//console.log(JSON.stringify(Screen));
+//process.exit();
 
 ////////////////////////////////////////////////////////////////////////////////
 ////

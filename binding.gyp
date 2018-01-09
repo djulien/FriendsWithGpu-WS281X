@@ -42,7 +42,7 @@
 #                        "xcode_settings": {
 #                        'defines': ["UNIV_LEN=32"], #for dev/testing
 #                        'defines': ["SHADER_DEBUG"], #for dev/testing
-                        'libraries': ["-lX11"] #, "-lXext"] #, "-lXxF86vm"]
+                        'libraries': ["-lX11", "-lXxf86vm"] #, "-lXext", "-lXxF86vm"]
                     }
                 ]
             ]

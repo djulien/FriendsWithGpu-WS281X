@@ -1,3 +1,9 @@
+//to check symbols:
+//nm -gC yourLib.so
+//readelf -Ws lib.so
+//ldd lib.so
+
+
 ////////////////////////////////////////////////////////////////////////////////
 ////
 /// GpuCanvas
@@ -39,6 +45,7 @@
 //??   sudo apt-get install freeglut3-dev
 //reinstall: sudo apt-get install (pkg-name) --reinstall
 //OR sudo apt-get remove (pkg)  then install again
+
 
 //(from src, newer):
 
@@ -2462,7 +2469,7 @@ private:
 //xvidtune-show
 //"1366x768"     69.30   1366 1414 1446 1480        768  770  775  780         -hsync -vsync
 //             pxclk MHz                h_field_len                v_field_len    
-        if (!::XF86VidModeGetModeLine(display/*.cast*/, i, &scfg.dot_clock, &scfg.mode_line)) continue; //&mode_line)); //continue; //return FALSE;
+        if (!XF86VidModeGetModeLine(display/*.cast*/, i, &scfg.dot_clock, &scfg.mode_line)) continue; //&mode_line)); //continue; //return FALSE;
 //        myprintf(28, BLUE_LT "X-screen[%d/%d]: %d x %d, clock %d" ENDCOLOR, i, num_screens, WidthOfScreen(screen), HeightOfScreen(screen), dot_clock); //->width, ->height, screen->);
 
 //    AppRes.field[HDisplay].val = mode_line.hdisplay;
