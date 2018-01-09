@@ -1005,8 +1005,8 @@ void debug_info(CONST SDL_Surface*, int where);
 //capture line# for easier debug:
 //NOTE: cpp avoids recursion so macro names can match actual function names here
 #define debug_info(...)  debug_info(__VA_ARGS__, __LINE__)
-WH ScreenInfo();
-WH MaxFit();
+WH ScreenInfo(void);
+WH MaxFit(void);
 uint32_t limit(uint32_t color);
 uint32_t hsv2rgb(float h, float s, float v);
 //uint32_t ARGB2ABGR(uint32_t color);
@@ -1260,6 +1260,7 @@ bool isRPi()
 }
 
 
+#if 0 //moved later
 //get screen width, height:
 //wrapped in a function so it can be used as initializer (optional)
 //screen height determines max universe size
@@ -1302,6 +1303,7 @@ WH ScreenInfo()
     }
     return wh;
 }
+#endif
 
 
 //#define RENDER_THREAD
@@ -2425,12 +2427,139 @@ private:
 
  #ifdef RPI_NO_X
 //  #include "bcm_host.h"
- #else
+  #error "TODO"
+ #else //def RPI_NO_X
   #include <X11/Xlib.h>
   #include <X11/extensions/xf86vmode.h> //XF86VidModeGetModeLine
   #define XScreen  Screen //avoid confusion
   #define XDisplay  Display //avoid confusion
- #endif
+
+  typedef struct { int dot_clock; XF86VidModeModeLine mode_line; } ScreenConfig;
+
+//inline int Release(FILE* that) { return fclose(that); }
+  inline int Release(XDisplay* that) { return XCloseDisplay(that); }
+//inline int Release(_XDisplay*& that) { return XCloseDisplay(that); }
+//inline XDisplay* XOpenDisplay_fixup(const char* name) { return XOpenDisplay(name); }
+
+//see https://stackoverflow.com/questions/1829706/how-to-query-x11-display-resolution
+//see https://tronche.com/gui/x/xlib/display/information.html#display
+//or use cli xrandr or xwininfo
+  const ScreenConfig* getScreenConfig() //ScreenConfig* scfg) //XF86VidModeGetModeLine* mode_line)
+  {
+//BROKEN    auto_ptr<XDisplay> display = XOpenDisplay(NULL);
+      static ScreenConfig scfg = {0};
+    if (scfg.dot_clock) return &scfg; //return cached data; screen info won't change
+//    memset(&scfg, 0, sizeof(*scfg));
+//    bool ok = false;
+    XDisplay* display = XOpenDisplay(NULL);
+    int num_screens = display? ScreenCount(display/*.cast*/): 0;
+    for (int i = 0; i < num_screens; ++i)
+    {
+//        int dot_clock, mode_flags;
+//        XF86VidModeModeLine mode_line = {0};
+//        XScreen screen = ScreenOfDisplay(display.cast, i);
+//see https://ubuntuforums.org/archive/index.php/t-779038.html
+//xvidtune-show
+//"1366x768"     69.30   1366 1414 1446 1480        768  770  775  780         -hsync -vsync
+//             pxclk MHz                h_field_len                v_field_len    
+        if (!::XF86VidModeGetModeLine(display/*.cast*/, i, &scfg.dot_clock, &scfg.mode_line)) continue; //&mode_line)); //continue; //return FALSE;
+//        myprintf(28, BLUE_LT "X-screen[%d/%d]: %d x %d, clock %d" ENDCOLOR, i, num_screens, WidthOfScreen(screen), HeightOfScreen(screen), dot_clock); //->width, ->height, screen->);
+
+//    AppRes.field[HDisplay].val = mode_line.hdisplay;
+//    AppRes.field[HSyncStart].val = mode_line.hsyncstart;
+//    AppRes.field[HSyncEnd].val = mode_line.hsyncend;
+//    AppRes.field[HTotal].val = mode_line.htotal;
+//    AppRes.field[VDisplay].val = mode_line.vdisplay;
+//    AppRes.field[VSyncStart].val = mode_line.vsyncstart;
+//    AppRes.field[VSyncEnd].val = mode_line.vsyncend;
+//    AppRes.field[VTotal].val = mode_line.vtotal;
+//    sprintf(tmpbuf, "\"%dx%d\"",
+//         AppRes.field[HDisplay].val, AppRes.field[VDisplay].val);
+//    sprintf(modebuf, "%-11s   %6.2f   %4d %4d %4d %4d   %4d %4d %4d %4d",
+//         tmpbuf, (float)dot_clock/1000.0,
+//         AppRes.field[HDisplay].val,
+//         AppRes.field[HSyncStart].val,
+//         AppRes.field[HSyncEnd].val,
+//         AppRes.field[HTotal].val,
+//         AppRes.field[VDisplay].val,
+//         AppRes.field[VSyncStart].val,
+//         AppRes.field[VSyncEnd].val,
+//         AppRes.field[VTotal].val);
+
+//       vinfo.left_margin, vinfo.right_margin, vinfo.upper_margin, vinfo.lower_margin, vinfo.hsync_len, vinfo.vsync_len,
+
+        int hblank = scfg.mode_line.htotal - scfg.mode_line.hdisplay; //vinfo.left_margin + vinfo.hsync_len + vinfo.right_margin;
+        int vblank = scfg.mode_line.vtotal - scfg.mode_line.vdisplay; //vinfo.upper_margin + vinfo.vsync_len + vinfo.lower_margin;
+        double rowtime = (double)scfg.mode_line.htotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
+        double frametime = (double)scfg.mode_line.htotal * scfg.mode_line.vtotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
+
+        myprintf(28, BLUE_LT "Screen[%d/%d]: %d x %d, %d bpp, pxclk %d, hblank %d+%d+%d = %d, vblank = %d+%d+%d = %d, row time %2.1f usec, frame time %2.1f msec, fps %2.1f" ENDCOLOR, i, num_screens,
+            scfg.mode_line.hdisplay, scfg.mode_line.vdisplay, 0, scfg.dot_clock, //vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, vinfo.pixclock,
+            scfg.mode_line.hsyncstart - scfg.mode_line.hdisplay, scfg.mode_line.hsyncend - scfg.mode_line.hsyncstart, scfg.mode_line.htotal - scfg.mode_line.hsyncend, scfg.mode_line.htotal - scfg.mode_line.hdisplay, //vinfo.left_margin, vinfo.right_margin, vinfo.hsync_len, 
+            scfg.mode_line.vsyncstart - scfg.mode_line.vdisplay, scfg.mode_line.vsyncend - scfg.mode_line.vsyncstart, scfg.mode_line.vtotal - scfg.mode_line.vsyncend, scfg.mode_line.vtotal - scfg.mode_line.vdisplay, //vinfo.upper_margin, vinfo.lower_margin, vinfo.vsync_len,
+            1000000 * rowtime, 1000 * frametime, 1 / frametime);
+//    close(fbfd);
+//        ok = true;
+        Release(display); //XCloseDisplay(display);
+        return &scfg;
+    }
+    if (display) Release(display); //XCloseDisplay(display);
+    return NULL;
+  }
+ #endif //def RPI_NO_X
+
+
+//get screen width, height:
+//wrapped in a function so it can be used as initializer (optional)
+//screen height determines max universe size
+//screen width should be configured according to desired data rate (DATA_BITS per node)
+WH ScreenInfo()
+{
+//NOTE: mutex not needed here, but std::atomic complains about deleted function
+//main thread will call first, so race conditions won't occur (benign anyway)
+//    static std::atomic<int> w = 0, h = {0};
+    static WH wh = {0};
+    static std::mutex protect;
+    std::lock_guard<std::mutex> lock(protect); //not really needed (low freq api), but just in case
+
+    if (!wh.w || !wh.h)
+    {
+        const ScreenConfig* scfg = getScreenConfig();
+//        if (!scfg) //return_void(errjs(iso, "Screen: can't get screen info"));
+        if (!scfg) /*throw std::runtime_error*/ exc(RED_LT "Can't get screen size" ENDCOLOR);
+        wh.w = scfg->mode_line.hdisplay;
+        wh.h = scfg->mode_line.vdisplay;
+#if 0
+//        auto_ptr<SDL_lib> sdl(SDL_INIT(SDL_INIT_VIDEO)); //for access to video info; do this in case not already done
+        if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
+
+        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get screen info before SDL_Init" ENDCOLOR);
+//        if (!sdl && !(sdl = SDL_INIT(SDL_INIT_VIDEO))) err(RED_LT "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
+        myprintf(22, BLUE_LT "%d display(s):" ENDCOLOR, SDL_GetNumVideoDisplays());
+        for (int i = 0; i < SDL_GetNumVideoDisplays(); ++i)
+        {
+            SDL_DisplayMode mode = {0};
+            if (!OK(SDL_GetCurrentDisplayMode(i, &mode))) //NOTE: SDL_GetDesktopDisplayMode returns previous mode if full screen mode
+                err(RED_LT "Can't get display[%d/%d]" ENDCOLOR, i, SDL_GetNumVideoDisplays());
+            else myprintf(22, BLUE_LT "Display[%d/%d]: %d x %d px @%dHz, %i bbp %s" ENDCOLOR, i, SDL_GetNumVideoDisplays(), mode.w, mode.h, mode.refresh_rate, SDL_BITSPERPIXEL(mode.format), SDL_PixelFormatShortName(mode.format));
+            if (!wh.w || !wh.h) { wh.w = mode.w; wh.h = mode.h; } //take first one, continue (for debug)
+//            break; //TODO: take first one or last one?
+        }
+#endif
+    }
+
+#if 0
+//set reasonable values if can't get info:
+    if (!wh.w || !wh.h)
+    {
+        /*throw std::runtime_error*/ exc(RED_LT "Can't get screen size" ENDCOLOR);
+        wh.w = 1536;
+        wh.h = wh.w * 3 / 4; //4:3 aspect ratio
+        myprintf(22, YELLOW_LT "Using dummy display mode %dx%d" ENDCOLOR, wh.w, wh.h);
+    }
+#endif
+    return wh;
+}
 
 
 namespace NodeAddon //namespace wrapper for Node.js functions; TODO: is this needed?
@@ -2479,11 +2608,6 @@ NAN_GETTER(isRPi_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 }
 
 
-//inline int Release(FILE* that) { return fclose(that); }
-inline int Release(XDisplay* that) { return XCloseDisplay(that); }
-//inline int Release(_XDisplay*& that) { return XCloseDisplay(that); }
-//inline XDisplay* XOpenDisplay_fixup(const char* name) { return XOpenDisplay(name); }
-
 //void Screen_js(v8::Local<v8::String>& name, const Nan::PropertyCallbackInfo<v8::Value>& info)
 //int Screen_js() {}
 //void Screen_js(v8::Local<const v8::FunctionCallbackInfo<v8::Value>& info)
@@ -2500,83 +2624,29 @@ NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 //    v8::Local<v8::String> w_name = Nan::New<v8::String>("width").ToLocalChecked();
 //    v8::Local<v8::String> h_name = Nan::New<v8::String>("height").ToLocalChecked();
 //    v8::Local<v8::Number> retval = v8::Number::New(iso, ScreenWidth());
-//    retval->Set(v8::String::NewFromUtf8(iso, "width"), v8::Number::New(iso, wh.w));    
-//    retval->Set(v8::String::NewFromUtf8(iso, "height"), v8::Number::New(iso, wh.h));
-    retval->Set(JS_STR(iso, "width"), JS_INT(iso, wh.w));
-    retval->Set(JS_STR(iso, "height"), JS_INT(iso, wh.h));
+    retval->Set(v8::String::NewFromUtf8(iso, "width"), v8::Number::New(iso, wh.w));    
+    retval->Set(v8::String::NewFromUtf8(iso, "height"), v8::Number::New(iso, wh.h));
+//    retval->Set(JS_STR(iso, "width"), JS_INT(iso, wh.w));
+//    retval->Set(JS_STR(iso, "height"), JS_INT(iso, wh.h));
 //    myprintf(3, "screen: %d x %d" ENDCOLOR, wh.w, wh.h);
 //    Nan::Set(retval, w_name, Nan::New<v8::Number>(wh.w));
 //    Nan::Set(retval, h_name, Nan::New<v8::Number>(wh.h));
 
-#ifdef RPI_NO_X
- #error "TODO"
-#else
-//see https://stackoverflow.com/questions/1829706/how-to-query-x11-display-resolution
-//see https://tronche.com/gui/x/xlib/display/information.html#display
-//or use cli xrandr or xwininfo
-//BROKEN    auto_ptr<XDisplay> display = XOpenDisplay(NULL);
-    XDisplay* display = XOpenDisplay(NULL);
-    int num_screens = display? ScreenCount(display/*.cast*/): 0;
-    for (int i = 0; i < num_screens; ++i)
-    {
-        int dot_clock, mode_flags;
-        XF86VidModeModeLine mode_line = {0};
-//        XScreen screen = ScreenOfDisplay(display.cast, i);
-//see https://ubuntuforums.org/archive/index.php/t-779038.html
-//xvidtune-show
-//"1366x768"     69.30   1366 1414 1446 1480        768  770  775  780         -hsync -vsync
-//             pxclk MHz                h_field_len                v_field_len    
-        if (!XF86VidModeGetModeLine(display/*.cast*/, i, &dot_clock, &mode_line)); //continue; //return FALSE;
-//        myprintf(28, BLUE_LT "X-screen[%d/%d]: %d x %d, clock %d" ENDCOLOR, i, num_screens, WidthOfScreen(screen), HeightOfScreen(screen), dot_clock); //->width, ->height, screen->);
-
-//    AppRes.field[HDisplay].val = mode_line.hdisplay;
-//    AppRes.field[HSyncStart].val = mode_line.hsyncstart;
-//    AppRes.field[HSyncEnd].val = mode_line.hsyncend;
-//    AppRes.field[HTotal].val = mode_line.htotal;
-//    AppRes.field[VDisplay].val = mode_line.vdisplay;
-//    AppRes.field[VSyncStart].val = mode_line.vsyncstart;
-//    AppRes.field[VSyncEnd].val = mode_line.vsyncend;
-//    AppRes.field[VTotal].val = mode_line.vtotal;
-//    sprintf(tmpbuf, "\"%dx%d\"",
-//         AppRes.field[HDisplay].val, AppRes.field[VDisplay].val);
-//    sprintf(modebuf, "%-11s   %6.2f   %4d %4d %4d %4d   %4d %4d %4d %4d",
-//         tmpbuf, (float)dot_clock/1000.0,
-//         AppRes.field[HDisplay].val,
-//         AppRes.field[HSyncStart].val,
-//         AppRes.field[HSyncEnd].val,
-//         AppRes.field[HTotal].val,
-//         AppRes.field[VDisplay].val,
-//         AppRes.field[VSyncStart].val,
-//         AppRes.field[VSyncEnd].val,
-//         AppRes.field[VTotal].val);
-
-//       vinfo.left_margin, vinfo.right_margin, vinfo.upper_margin, vinfo.lower_margin, vinfo.hsync_len, vinfo.vsync_len,
-
-        int hblank = mode_line.htotal - mode_line.hdisplay; //vinfo.left_margin + vinfo.hsync_len + vinfo.right_margin;
-        int vblank = mode_line.vtotal - mode_line.vdisplay; //vinfo.upper_margin + vinfo.vsync_len + vinfo.lower_margin;
-        double rowtime = mode_line.htotal / dot_clock / 1000; //(vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
-        double frametime = mode_line.htotal * mode_line.vtotal / dot_clock / 1000; //(vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
-
-        myprintf(28, BLUE_LT "Screen[%d/%d]: %d x %d, %d bpp, pxclk %d, hblank %d+%d+%d = %d, vblank = %d+%d+%d = %d, row time %2.1f usec, frame time %2.1f msec, fps %2.1f" ENDCOLOR, i, num_screens,
-            mode_line.hdisplay, mode_line.vdisplay, 0, dot_clock, //vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, vinfo.pixclock,
-            mode_line.hsyncstart - mode_line.hdisplay, mode_line.hsyncend - mode_line.hsyncstart, mode_line.htotal - mode_line.hsyncend, mode_line.htotal - mode_line.hdisplay, //vinfo.left_margin, vinfo.right_margin, vinfo.hsync_len, 
-            mode_line.vsyncstart - mode_line.vdisplay, mode_line.vsyncend - mode_line.vsyncstart, mode_line.vtotal - mode_line.vdisplay, //vinfo.upper_margin, vinfo.lower_margin, vinfo.vsync_len,
-            1000000 * rowtime, 1000 * frametime, 1 / frametime);
-//    close(fbfd);
-        retval->Set(JS_STR(iso, "xres"), JS_INT(iso, mode_line.hdisplay)); //vinfo.xres));
-        retval->Set(JS_STR(iso, "yres"), JS_INT(iso, mode_line.vdisplay)); //vinfo.yres));
+    const ScreenConfig* scfg = getScreenConfig();
+    if (!scfg) return_void(errjs(iso, "Screen: can't get screen info"));
+    double rowtime = (double)scfg->mode_line.htotal / scfg->dot_clock / 1000; //(vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
+    double frametime = (double)scfg->mode_line.htotal * scfg->mode_line.vtotal / scfg->dot_clock / 1000; //(vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
+    retval->Set(JS_STR(iso, "xres"), JS_INT(iso, scfg->mode_line.hdisplay)); //vinfo.xres));
+    retval->Set(JS_STR(iso, "yres"), JS_INT(iso, scfg->mode_line.vdisplay)); //vinfo.yres));
 //??        retval->Set(JS_STR(iso, "bpp"), JS_INT(iso, vinfo.bits_per_pixel));
 //        retval->Set(JS_STR(iso, "linelen"), JS_INT(iso, finfo.line_length));
-        retval->Set(JS_STR(iso, "pixclock"), JS_FLOAT(iso, (double)dot_clock / 1000)); //MHz //vinfo.pixclock));
+    retval->Set(JS_STR(iso, "pixclock"), JS_FLOAT(iso, (double)scfg->dot_clock / 1000)); //MHz //vinfo.pixclock));
 
-        retval->Set(JS_STR(iso, "hblank"), JS_INT(iso, mode_line.htotal - mode_line.hdisplay)); //hblank));
-        retval->Set(JS_STR(iso, "vblank"), JS_INT(iso, mode_line.vtotal - mode_line.vdisplay)); //vblank));
-        retval->Set(JS_STR(iso, "rowtime"), JS_FLOAT(iso, 1000000 * rowtime));
-        retval->Set(JS_STR(iso, "frametime"), JS_FLOAT(iso, 1000 * frametime));
-        retval->Set(JS_STR(iso, "fps"), JS_FLOAT(iso, 1 / frametime));
-    }
-    if (display) Release(display); //XCloseDisplay(display);
-#endif //def RPI_NO_X
+    retval->Set(JS_STR(iso, "hblank"), JS_INT(iso, scfg->mode_line.htotal - scfg->mode_line.hdisplay)); //hblank));
+    retval->Set(JS_STR(iso, "vblank"), JS_INT(iso, scfg->mode_line.vtotal - scfg->mode_line.vdisplay)); //vblank));
+    retval->Set(JS_STR(iso, "rowtime"), JS_FLOAT(iso, 1000000 * rowtime));
+    retval->Set(JS_STR(iso, "frametime"), JS_FLOAT(iso, 1000 * frametime));
+    retval->Set(JS_STR(iso, "fps"), JS_FLOAT(iso, 1 / frametime));
 #if 0
 //screen info:
     struct fb_var_screeninfo vinfo;
