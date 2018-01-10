@@ -12,7 +12,7 @@ const cluster = require('cluster');
 //const {inherits} = require('util');
 const bindings = require('bindings');
 const {debug} = require('./demos/shared/debug');
-const {/*Screen,*/ GpuCanvas, UnivTypes, shmbuf, /*AtomicAdd, usleep,*/ RwlockOps, rwlock} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
+const {/*Screen,*/ GpuCanvas, UnivTypes, shmbuf, AtomicAdd, usleep, RwlockOps, rwlock} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
 //lazy-load Screen props to avoid unneeded SDL inits:
 //module.exports.Screen = {};
 //Object.defineProperties(module.exports.Screen,
@@ -100,12 +100,13 @@ debug("Screen info %s".blue_lt, JSON.stringify(Screen, null, 2));
     configurable: true, //allow modify/delete by caller
 });
 */
-//module.exports.shmbuf = shmbuf;
 module.exports.UnivTypes = UnivTypes;
-//module.exports.AtomicAdd = AtomicAdd;
-//module.exports.rwlock = rwlock;
+//also expose these in case caller wants to use them:
+module.exports.shmbuf = shmbuf;
+module.exports.AtomicAdd = AtomicAdd;
+module.exports.rwlock = rwlock;
 //module.exports.RWLOCK_SIZE32 = RWLOCK_SIZE32;
-//module.exports.usleep = usleep;
+module.exports.usleep = usleep;
 //attach config info as properties:
 //no need for callable functions (config won't change until reboot)
 //module.exports.Screen.gpio = toGPIO();
@@ -221,7 +222,8 @@ new Proxy(function(){},
         const shmkey = (opts || {}).SHMKEY || OPTS.SHMKEY[1];
         const extralen = (opts || {}).EXTRA_LEN || OPTS.EXTRA_LEN[1]; //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
         const alloc = num_wkers? shmbuf: function(ignored, len) { return new Buffer(len); }
-        THIS.shmbuf = new Uint32Array(alloc(shmkey, (THIS.width * THIS.height + RwlockOps.SIZE32 + extralen) * Uint32Array.BYTES_PER_ELEMENT, cluster.isMaster));
+//debug(`smh alloc: key 0x${shmkey.toString(16)} retry?`,  typeof cluster.isMaster, cluster.isMaster, typeof cluster.isWorker, cluster.isWorker);
+        THIS.shmbuf = new Uint32Array(alloc(shmkey, (THIS.width * THIS.height + RwlockOps.SIZE32 + extralen) * Uint32Array.BYTES_PER_ELEMENT, true)); //cluster.isMaster));
         if (extralen) THIS.extra = THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen);
         THIS.pixels = THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen);
         debug(`GpuCanvas: master? ${cluster.isMaster}, #bkg wkers ${num_wkers}, alloc ${commas(THIS.shmbuf.byteLength)} bytes, ${commas(THIS.pixels.byteLength)} for pixels, ${commas(RwlockOps.SIZE32 * Uint32Array.BYTES_PER_ELEMENT)} for rwlock, ${commas(extralen * Uint32Array.BYTES_PER_ELEMENT)} for extra data`.blue_lt);
@@ -235,7 +237,7 @@ new Proxy(function(){},
         THIS.isWorker = cluster.isWorker; //(THIS.WKER_ID != -1);
         THIS.prtype = cluster.isMaster? "master": "worker";
 //        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
-        debug(`GpuCanvas: ${THIS.prtype} '${process.pid}' is %s ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
+        debug(`GpuCanvas: ${THIS.prtype} '${process.pid}' is wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
 //NOTE: lock is left in shm; no destroy (not sure when to call it)
 //        THIS.epoch = Date.now();
 //        return THIS;

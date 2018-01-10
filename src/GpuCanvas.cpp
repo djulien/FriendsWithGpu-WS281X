@@ -2716,14 +2716,17 @@ NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 	if (/*(size < 1) ||*/ (size >= 10000000)) return_void(errjs(iso, "shmbuf: size %d out of range 1..10M", size));
 
     int shmid = shmget(key, (size > 0)? size: 1, (size > 0)? IPC_CREAT | 0666: 0666);
-    if ((shmid < 0) && (size > 0) && (errno == EINVAL) && !info[2]->IsUndefined() && info[2]->BooleanValue()) //retry
-    {
-        myprintf(22, YELLOW_LT "retry shmget" ENDCOLOR);
-        if ((shmid = shmget(key, 1, 0666)) >= 0)
-            if (!shmctl(shmid, IPC_RMID, NULL /*ignored*/)) //try deleting shm seg first
-                shmid = shmget(key, size, IPC_CREAT | 0666);
-    }
-    if (shmid < 0) return_void(errjs(iso, "shmbuf: can't alloc(%d) shmem: %d (errno %d %s)", size, shmid, errno, strerror(errno)));
+    if ((shmid < 0) && (size > 0) && (errno == EINVAL))
+        if (!info[2]->IsUndefined() && info[2]->BooleanValue()) //retry
+        {
+            myprintf(22, YELLOW_LT "retry shmget, want size %d for key 0x%x" ENDCOLOR, size, key);
+            if ((shmid = shmget(key, 1, 0666)) >= 0)
+                if (!shmctl(shmid, IPC_RMID, NULL /*ignored*/)) //try deleting shm seg first
+                    shmid = shmget(key, size, IPC_CREAT | 0666);
+        }
+        else myprintf(22, RED_LT "no retry shmget: #args %d, undef? %d, bool val %d" ENDCOLOR, info.Length(), info[2]->IsUndefined(), !info[2]->IsUndefined()? info[2]->BooleanValue(): -1);
+    if (shmid < 0) return_void(errjs(iso, "shmbuf: can't alloc(%d) shmem: %d (errno %d %s)", size, shmid, errno, strerror(errno)))
+    else myprintf(22, BLUE_LT "shmget key 0x%x, size %d okay: 0x%x" ENDCOLOR, key, size, shmid);
 //if (!data) //don't attach again
 //TODO: need Detach and delete: if (shmdt(data) == -1) fprintf(stderr, "shmdt failed\n");
     uint8_t* data = (size > 0)? (uint8_t*)shmat(shmid, NULL, 0): (uint8_t*)shmctl(shmid, IPC_RMID, NULL);

@@ -23,7 +23,7 @@ const cluster = require('cluster');
 const {debug} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
-const {Screen, GpuCanvas/*, cluster*/} = require('gpu-friends-ws281x');
+const {Screen, GpuCanvas/*, cluster*/, AtomicAdd} = require('gpu-friends-ws281x');
 //console.log(JSON.stringify(Screen));
 //process.exit();
 
@@ -51,6 +51,7 @@ const OPTS =
 //    UNIV_TYPE: UnivTypes.CHPLEX_SSR,
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
     TITLE: "PinFinder",
+    EXTRA_LEN: 1,
 //choose one of options below for performance tuning:
 //    NUM_WKERS: 0, //whole-house fg render
     NUM_WKERS: 1, //whole-house bg render
@@ -71,6 +72,7 @@ debug("Screen %d x %d, refresh %d Hz, is RPi? %d, GPIO? %d".cyan_lt, Screen.widt
 //GPU canvas:
 //global to reduce parameter passing (only one needed)
 //NOTE: must occur before creating models and bkg wkers (sets up shm, etc)
+//debug(`pid '${process.pid}' master? ${cluster.isMaster}, wker? ${cluster.isWorker}`.cyan_lt);
 const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 
 
@@ -171,7 +173,7 @@ function BkgWker(opts)
 //    if (all.id) return null; //already have this wker
 //    BkgWker.all.push(this);
 //    cluster.on('message', (wker, msg, handle) =>
-    this.wker.on('message', (msg) =>
+    this.wker.on('message', (msg) => //TODO: not needed?
     {
 //        debug(`got reply ${JSON.stringify(msg)} from bkg wker`.blue_lt);
 //no                step(); //wake fg thread
@@ -179,15 +181,18 @@ function BkgWker(opts)
 //            if (msg.mp3done) done_cb.apply(null, msg.mp3done);
 //            if (msg.mp3progess) progress_cb.apply(null, msg.mp3progress);
         console.log(`${canvas.prtype} '${process.pid}' got msg ${JSON.stringify(msg)}`.red_lt);
-        step.retval = msg;
-        if (AtomicAdd(canvas.extra, 0, -1) == 1) step(); //wake up caller after all outstanding render req completed
+//        if (AtomicAdd(canvas.extra, 0, -1) != 1) return; //more wkers yet to respond
+//        step.retval = msg;
+//        step(); //wake up caller after all outstanding render req completed
+        throw `Unhandled msg: ${JSON.stringify(msg)}`.red_lt;
     });
 //    cluster.on('exit', (wker, code, signal) =>
     this.wker.on('exit', (code, signal) =>
     {
-        console.log(`${canvas.prtype} '${process.pid}' died (${code || signal || "unknown"})`.red_lt);
-        step.retval = {died: process.pid};
-        step();
+        console.log(`${canvas.prtype} '${process.pid}' died (${code || signal || "unknown reason"})`.red_lt);
+//        step.retval = {died: process.pid};
+//        step();
+//TODO: restart proc? state will be gone, might be problematic
     });
 }
 //ipc render async
@@ -199,10 +204,18 @@ function render(frnum)
 //        all.forEach(wker => wker.render_wait());
 //if (canvas.isWorker)
 //    Object.keys(cluster.workers).forEach(wkid =>
-    AtomicAdd(canvas.extra, 0, 1); //#outstanding render req
-    wker.send({render: true, frnum});
+    AtomicAdd(canvas.extra, 0, 1); //keep track of #outstanding render req
+    this.wker.send({render: true, frnum});
 //    var reply = yield;
 //    debug(`got reply ${JSON.stringify(reply)} from bkg wker`.blue_lt);
+}
+BkgWker.wait =
+function wait_bkgwker(frnum)
+{
+    if (!canvas.isWorker) return;
+    AtomicAdd(canvas.extra, 0, -1); //update #outstanding render req
+    wait.frnum = frnum; //safety check: remember which frame is next
+//    return; //main thread will send wakeup msg
 }
 BkgWker.closeAll = 
 function closeAll()
@@ -226,17 +239,19 @@ if (canvas.isWorker)
 //    debug(`Worker ${process.pid} started`);
     process.on('message', function(msg)
     {
-        debug(`Wker ${process.pid} rcv msg ${JSON.stringify(msg)}`.blue_lt);
+        debug(`${canvas.prtype} '${process.pid}' rcv msg ${JSON.stringify(msg)}`.blue_lt);
         if (msg.render)
         {
-            debug(`Wker ${process.pid} render ${models.length} models`.blue_lt);
-            models.renderAll(msg.frnum);
-            process.send({reply: frnum});
+            debug(`BkgWker '${process.pid}' render ${models.length} models`.blue_lt);
+//            models.renderAll(msg.frnum);
+//            process.send({reply: frnum});
+            if (msg.frnum != (wait.frnum || 0)) throw `BkgWker '${process.pid}': out of sync: at frame# ${wait.frnum}, but main thread wants frame# ${msg.frnum}`.red_lt;
+            step();
             return;
         }
         if (msg.quit)
         {
-            debug(`Wker ${process.pid} quit`.blue_lt);
+            debug(`BkgWker '${process.pid}' quit`.blue_lt);
   //          process.send({quite: true});
             process.exit(0);
             return;
@@ -304,10 +319,10 @@ step(function*() //onexit)
 */
 //        yield wait(started + (t + 1) / FPS - now_sec()); //avoid cumulative timing errors
         idle_time -= canvas.elapsed; //exclude non-waiting time
-//TODO: bkg wker: set reply status for main (atomic dec); main thread: sync wait and check all ipc reply rcvd
-        yield wait((frnum + 1) / FPS - canvas.elapsed); //throttle to target frame rate; avoid cumulative timing errors
+//bkg wker: set reply status for main (atomic dec); main thread: sync wait and check all ipc reply rcvd
+        yield wait((frnum + 1) / FPS - canvas.elapsed, frnum + 1); //throttle to target frame rate; avoid cumulative timing errors
         idle_time += canvas.elapsed;
-//TODO: bkg wker: wait for ipc req (rdlock?); main thread: gpu update
+//bkg wker: noop - already waited for ipc req (rdlock?); main thread: gpu update
         canvas.paint();
 //        yield wait(1);
 //        ++canvas.elapsed; //update progress bar
@@ -330,6 +345,11 @@ function step(gen)
 {
 //    if (canvas.isWorker) return; //stepper not needed by bkg threads
 try{
+    if (canvas.isMaster) //all wkers should have finished before main thread starts next frame
+    {
+        var remaining = AtomicAdd(canvas.extra, 0, 0);
+        if (remaining) throw `step: ${remaining} render req still outstanding`.red_lt;
+    }
 //console.log("step");
 //    if (step.done) throw "Generator function is already done.";
 //	if (typeof gen == "function") gen = gen(); //invoke generator if not already
@@ -346,15 +366,14 @@ try{
     if (typeof value == "function") value = value(); //execute caller code before returning
     if (done /*&& step.onexit*/) BkgWker.closeAll(); //step.onexit(); //do after value()
     return step.retval = value; //return value to caller and to next yield
-} catch(exc) { console.log(`step EXC: ${exc}`.red_lt); gen.throw(exc); } //CAUTION: without this function gen might quit without telling anyone
+} catch(exc) { console.log(`step EXC: ${exc}`.red_lt); /*gen.*/throw(exc); } //CAUTION: without this, func gen might quit without telling anyone
 }
 
 
 //delay next step:
-function wait(delay)
+function wait(delay, frnum)
 {
-    if (canvas.isWorker) return; //main thread will send wakeup msg
-
+    if (canvas.isWorker) return BkgWker.wait(frnum);
     delay *= 1000; //sec -> msec
     const overdue = (delay <= 1); //1 msec is too close for comfort; treat it as overdue
 //    if (isNaN(++wait.counts[overdue])) wait.counts = [!overdue, overdue];
