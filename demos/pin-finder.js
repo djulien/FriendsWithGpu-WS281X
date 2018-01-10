@@ -14,11 +14,11 @@
 
 
 'use strict'; //find bugs easier
-require('colors'); //for console output
+require('colors').enabled = true; //for console output (all threads)
 //const os = require('os');
 //const pathlib = require('path');
 //const {blocking, wait} = require('blocking-style');
-//const cluster = require('cluster');
+const cluster = require('cluster');
 //const JSON = require('circular-json'); //CAUTION: replace std JSON with circular-safe version
 const {debug} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
@@ -33,13 +33,13 @@ const {Screen, GpuCanvas/*, cluster*/} = require('gpu-friends-ws281x');
 /// Config settings:
 //
 
-const DURATION = 30; //10; //60; //how long to run (sec)
+const DURATION = 5; //30; //10; //60; //how long to run (sec)
 const PAUSE = 5; //how long to pause at end
 const FPS = 30; //2; //animation speed (max depends on screen settings)
 
 
 //display settings:
-//NOTE: most of these only apply when GPIO pins are *not* presenting VGA signals (otherwise interferes with WS281X signal timing)
+//NOTE: most of these only apply when GPIO pins are *not* presenting VGA signals (ie, dev mode); otherwise, they interfere with WS281X signal fmt
 const OPTS =
 {
 //    SHOW_SHSRC: true, //show shader source code
@@ -51,9 +51,9 @@ const OPTS =
 //    UNIV_TYPE: UnivTypes.CHPLEX_SSR,
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
     TITLE: "PinFinder",
-//choose one of below options for performance tuning:
-    NUM_WKERS: 0, //whole-house fg render
-//    NUM_WKERS: 1, //whole-house bg render
+//choose one of options below for performance tuning:
+//    NUM_WKERS: 0, //whole-house fg render
+    NUM_WKERS: 1, //whole-house bg render
 //    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
 };
 if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
@@ -64,10 +64,13 @@ if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
 //const FPS = 30; //estimated animation speed
 const NUM_UNIV = 24; //#universes; can't exceed #VGA output pins (24) without external mux
 const UNIV_LEN = Screen.gpio? Screen.height: 30; //universe length; can't exceed #display lines; show larger pixels in dev mode
-const WKER_UNIV = OPTS.NUM_WKERS? Math.ceil(NUM_UNIV / OPT.NUM_WKERS): NUM_UNIV; //#univ to render by each bkg wker
-debug("Screen %d x %d, refresh %d hz, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio, Screen.fps);
+const WKER_UNIV = OPTS.NUM_WKERS? Math.ceil(NUM_UNIV / OPTS.NUM_WKERS): NUM_UNIV; //#univ to render by each bkg wker
+debug("Screen %d x %d, refresh %d Hz, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, trunc(Screen.fps, 10), Screen.isRPi, Screen.gpio);
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
+//GPU canvas:
+//global to reduce parameter passing (only one needed)
+//NOTE: must occur before creating models and bkg wkers (sets up shm, etc)
 const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 
 
@@ -76,6 +79,7 @@ const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 /// Models/effects rendering:
 //
 
+
 const models = []; //list of models/effects to be rendered by *this* thread
 
 //TODO: use WKER_UNIV here
@@ -83,8 +87,9 @@ if (OPTS.NUM_WKERs > 1) //split up models across multiple bkg threads
     for (var u = 0; u < NUM_UNIV; ++u)
         models.push((canvas.WKER_ID == u >> 3)? new PinFinder({univ_num: u}): canvas.isMaster? new BkgWker(u >> 3): null);
 else //whole-house on main or bkg thread
-    models.push((!OPTS.NUM_WKERS || canvas.isWorker)? new PinFinder(): new BkgWker(0));
-debug(`${canvas.isMaster? "master": "wker"} ${canvas.WKER_ID} has ${models.length} model(s) to render`.blue_lt);
+    models.push(/*new*/ BkgWker(/*new*/ PinFinder()));
+//    models.push((!OPTS.NUM_WKERS || canvas.isWorker)? new PinFinder(): new BkgWker());
+debug(`${canvas.prtype}# ${canvas.WKER_ID} '${process.pid}' has ${models.length} model(s) to render`.blue_lt);
 
 
 //ARGB primary colors:
@@ -108,29 +113,34 @@ const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
 //    univ_num = universe# (screen column); 0..23; also determines pattern repeat factor
 //    univ_len = universe length (screen height)
 //    color = RGB color to use for this universe (column)
-class PinFinder
+//NOTE: use function ctor instead of ES6 class syntax to allow hoisting
+function PinFinder(opts)
 {
-    constructor(opts) //{univ_num}
+    if (!(this instanceof PinFinder))
     {
-        const whole_house = (typeof (opts || {}).univ_num == "undefined");
+        if (OPTS.NUM_WKERS && canvas.isMaster) return opts; //don't need real model; return placeholder
+        return new PinFinder(opts); //{univ_num}
+    }
+    const whole_house = (typeof (opts || {}).univ_num == "undefined");
 //        this.univ_num = univ_num; //stofs = univ_num * univ_len; //0..23 * screen height (screen column)
-        this.begin_univ = !whole_house? opts.univ_num: 0;
-        this.end_univ = !whole_house? opts.univ_num + 1: canvas.width; //single univ vs. whole-house
+    this.begin_univ = !whole_house? opts.univ_num: 0;
+    this.end_univ = !whole_house? opts.univ_num + 1: canvas.width; //single univ vs. whole-house
 //        this.pixels = canvas.pixels.slice(begin_univ * UNIV_LEN, end_univ * UNIV_LEN); //pixels for this/these universe(s) (screen column(s))
 //        this.repeat = 9 - (univ & 7); //patterm repeat factor; 9..2
 //        this.height = univ_len; //universe length (screen height)
 //        this.color = (opts || {}).color || WHITE;
 //        this.frnum = 0; //frame# (1 animation step per frame)
-    }
-
-    render(frnum)
-    {
+}
+//synchronous render:
+PinFinder.prototype.render =
+function render(frnum)
+{
 //        if (isNaN(++this.frnum)) this.frnum = 0; //frame# (1 animation step per frame)
-        for (var u = this.begin_univ, uofs = u * canvas.height; u < this.end_univ; ++u, uofs += canvas.height)
-        {
-            var color = [RED, GREEN, BLUE][u >> 3]; //Math.floor(x / 8)];
-            var repeat = 9 - (u & 7); //(x % 8);
-            for (var n = 0, c = -frnum % repeat; n < canvas.height; ++n, ++c)
+    for (var u = this.begin_univ, uofs = u * canvas.height; u < this.end_univ; ++u, uofs += canvas.height)
+    {
+        var color = [RED, GREEN, BLUE][u >> 3]; //Math.floor(x / 8)];
+        var repeat = 9 - (u & 7); //(x % 8);
+        for (var n = 0, c = -frnum % repeat; n < canvas.height; ++n, ++c)
 //, csel = -this.count++ % this.repeat
 //            if (csel >= this.repeat) csel = 0;
 //if ((t < 3) && !x && (y < 10)) console.log(t, typeof c, c);
@@ -138,40 +148,101 @@ class PinFinder
 //                    var repeat = 9 - (x % 8);
 //                    canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
 //                    canvas.pixel(x, y, c? BLACK: color);
-                canvas.pixels[uofs + n] = ((n - frnum) % repeat)? BLACK: color;
+            canvas.pixels[uofs + n] = ((n - frnum) % repeat)? BLACK: color;
 //                canvas.pixels[uofs + n] = csel? BLACK: this.color;
 //            this.pixels[y] = ((y - frnum) % this.repeat)? BLACK: this.color;
-        }
-    }
-};
-
-
-//bkg wker:
-//treated as a pseudo-model by main thread
-class BkgWker
-{
-    constructor(id)
-    {
-        if (all.id) return null; //already have this wker
-        all.push(id);
-    }
-
-    render(frnum)
-    {
-        models.forEach((model) => { model.render(frnum); });
-    }
-
-    render(frnum)
-    {
-        all.forEach(wker => wker.render_req(frnum));
-        all.forEach(wker => wker.render_wait());
     }
 }
+
+
+////////////////////////////TODO: move to index.js
+//bkg wker:
+//treated as a pseudo-model by main thread
+//NOTE: use function ctor instead of ES6 class syntax to allow hoisting
+function BkgWker(opts)
+{
+    if (!(this instanceof BkgWker))
+    {
+        if (OPTS.NUM_WKERS && canvas.isMaster) return new BkgWker(opts);
+        return opts; //don't need bkg wker; use model as-is
+    }
+//    if (!BkgWker.all) BkgWker.all = [];
+    this.wker = cluster.fork({WKER_ID: Object.keys(cluster.workers).length}); //BkgWker.all.length});
+//    if (all.id) return null; //already have this wker
+//    BkgWker.all.push(this);
+//    cluster.on('message', (wker, msg, handle) =>
+    this.wker.on('message', (msg) =>
+    {
+//        debug(`got reply ${JSON.stringify(msg)} from bkg wker`.blue_lt);
+//no                step(); //wake fg thread
+//send msgs back to caller:
+//            if (msg.mp3done) done_cb.apply(null, msg.mp3done);
+//            if (msg.mp3progess) progress_cb.apply(null, msg.mp3progress);
+        console.log(`${canvas.prtype} '${process.pid}' got msg ${JSON.stringify(msg)}`.red_lt);
+        step.retval = msg;
+        if (AtomicAdd(canvas.extra, 0, -1) == 1) step(); //wake up caller after all outstanding render req completed
+    });
+//    cluster.on('exit', (wker, code, signal) =>
+    this.wker.on('exit', (code, signal) =>
+    {
+        console.log(`${canvas.prtype} '${process.pid}' died (${code || signal || "unknown"})`.red_lt);
+        step.retval = {died: process.pid};
+        step();
+    });
+}
+//ipc render async
+BkgWker.prototype.render =
+function render(frnum)
+{
+//    models.forEach((model) => { model.render(frnum); });
+//        all.forEach(wker => wker.render_req(frnum));
+//        all.forEach(wker => wker.render_wait());
+//if (canvas.isWorker)
+//    Object.keys(cluster.workers).forEach(wkid =>
+    AtomicAdd(canvas.extra, 0, 1); //#outstanding render req
+    wker.send({render: true, frnum});
+//    var reply = yield;
+//    debug(`got reply ${JSON.stringify(reply)} from bkg wker`.blue_lt);
+}
+BkgWker.closeAll = 
+function closeAll()
+{
+    if (!canvas.isMaster) return;
+    for (var w in cluster.workers)
+        cluster.workers[w].send({quit: true});
+//    for (var w in cluster.workers)
+//        yield;
+}
+
+
 if (canvas.isWorker)
 {
+/*
     wait for req;
     models.forEach((model) => { model.render(frnum); });
     reply;
+*/
+//    throw "TODO".red_lt;
+//    debug(`Worker ${process.pid} started`);
+    process.on('message', function(msg)
+    {
+        debug(`Wker ${process.pid} rcv msg ${JSON.stringify(msg)}`.blue_lt);
+        if (msg.render)
+        {
+            debug(`Wker ${process.pid} render ${models.length} models`.blue_lt);
+            models.renderAll(msg.frnum);
+            process.send({reply: frnum});
+            return;
+        }
+        if (msg.quit)
+        {
+            debug(`Wker ${process.pid} quit`.blue_lt);
+  //          process.send({quite: true});
+            process.exit(0);
+            return;
+        }
+        throw `unknown msg type: ${JSON.stringify(msg)}`.red_lt;
+  });
 }
 
 
@@ -180,12 +251,11 @@ if (canvas.isWorker)
 /// Main logic (synchronous coding style to simplify timing logic):
 //
 
-//blocking(function*()
-//const TRACE = true;
-step(function*()
+step(function*() //onexit)
 {
+    debug(`begin: ${canvas.prtype} '${process.pid}' startup took %d sec, now run fx for %d sec`.green_lt, trunc(process.uptime(), 10), DURATION);
     var render_time = 0, idle_time = 0;
-    debug("begin: startup took %d sec, now run fx for %d sec".green_lt, trunc(process.uptime(), 10), DURATION);
+//    onexit(BkgWker.closeAll);
 //    for (var i = 0; i < 100; ++i)
 //        models.forEach((model) => { model.render(i); });
 
@@ -197,8 +267,10 @@ step(function*()
     for (var frnum = 0; canvas.elapsed <= DURATION; ++frnum)
     {
         render_time -= canvas.elapsed; //exclude non-rendering (paint + V-sync wait) time
-        models.renderAll(frnum); //forEach((model) => { model.render(frnum); });
-        render(frnum);
+//        models.renderAll(canvas, frnum); //forEach((model) => { model.render(frnum); });
+//render all models (synchronous):
+        models.forEach(model => { model.render(frnum); }); //bkg wker: sync render; main thread: sync render or async ipc
+//        render(frnum);
 //        yield canvas.render(frnum);
         render_time += canvas.elapsed;
 //NOTE: pixel (0, 0) is upper left on screen
@@ -232,8 +304,10 @@ step(function*()
 */
 //        yield wait(started + (t + 1) / FPS - now_sec()); //avoid cumulative timing errors
         idle_time -= canvas.elapsed; //exclude non-waiting time
+//TODO: bkg wker: set reply status for main (atomic dec); main thread: sync wait and check all ipc reply rcvd
         yield wait((frnum + 1) / FPS - canvas.elapsed); //throttle to target frame rate; avoid cumulative timing errors
         idle_time += canvas.elapsed;
+//TODO: bkg wker: wait for ipc req (rdlock?); main thread: gpu update
         canvas.paint();
 //        yield wait(1);
 //        ++canvas.elapsed; //update progress bar
@@ -242,9 +316,9 @@ step(function*()
     render_time = 1000 * render_time / frnum; //(DURATION * FPS);
     var frtime = 1000 * canvas.elapsed / frnum;
     idle_time = 1000 * idle_time / frnum;
-    if (wait.overdue) debug(`overdue frames: ${wait.overdue} (${trunc(100 * wait.overdue / frnum, 10)}%)`.red_lt);
+    if (wait.stats) wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
     debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: ${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle: ${trunc(idle_time, 10)} msec (${trunc(100 * idle_time / frtime, 10)}%), ${frnum} frames`.blue_lt);
-    debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
+    debug(`end: ${canvas.prtype} '${process.pid}' ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
     yield wait(PAUSE); //pause to show screen stats longer
     canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
 });
@@ -254,12 +328,12 @@ step(function*()
 //NOTE: only steps generator function 1 step; subsequent events must also caller step to finish executing generator
 function step(gen)
 {
-    if (canvas.isWorker) return; //stepper not needed by bkg threads
+//    if (canvas.isWorker) return; //stepper not needed by bkg threads
 try{
 //console.log("step");
 //    if (step.done) throw "Generator function is already done.";
 //	if (typeof gen == "function") gen = gen(); //invoke generator if not already
-	if (typeof gen == "function") { setImmediate(function() { step(gen()); }); return; } //invoke generator if not already
+	if (typeof gen == "function") { setImmediate(function() { step(gen(/*function(cb) { step.onexit = cb; }*/)); }); return; } //invoke generator if not already
 //        return setImmediate(function() { step(gen()); }); //avoid hoist errors
     if (gen) step.svgen = gen; //save generator for subsequent steps
 //console.log("step:", typeof gen, JSON.stringify_tidy(gen));
@@ -268,8 +342,9 @@ try{
 //    Object.assign(step, step.svgen.next(step.retval)); //send previous value to generator
 //console.log("step: got value %s %s, done? %d", typeof value, value, done);
 //    step.done = done; //prevent overrun
-    if (done) step.svgen = null; //prevent overrun
+    if (done) step.svgen = null; //prevent overrun; do bedore value()
     if (typeof value == "function") value = value(); //execute caller code before returning
+    if (done /*&& step.onexit*/) BkgWker.closeAll(); //step.onexit(); //do after value()
     return step.retval = value; //return value to caller and to next yield
 } catch(exc) { console.log(`step EXC: ${exc}`.red_lt); gen.throw(exc); } //CAUTION: without this function gen might quit without telling anyone
 }
@@ -278,17 +353,59 @@ try{
 //delay next step:
 function wait(delay)
 {
+    if (canvas.isWorker) return; //main thread will send wakeup msg
+
     delay *= 1000; //sec -> msec
-    if (delay <= 1) if (isNaN(++wait.overdue)) wait.overdue = 1;
-    debug("wait %d msec"[(delay > 1)? "blue_lt": "red_lt"], trunc(delay, 10));
-    return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
+    const overdue = (delay <= 1); //1 msec is too close for comfort; treat it as overdue
+//    if (isNaN(++wait.counts[overdue])) wait.counts = [!overdue, overdue];
+//    if (overdue) if (isNaN(++wait.overdue_count)) wait.overdue_count = 1;
+    if (wait.stats)
+    {
+        wait.stats.total_delay += Math.max(delay, 0);
+        if (delay > wait.stats.max_delay) { wait.stats.max_delay = delay; wait.stats.max_when = wait.stats.false + wait.stats.true; }
+        if (delay < wait.stats.min_delay) { wait.stats.min_delay = delay; wait.stats.min_when = wait.stats.false + wait.stats.true; }
+    }
+    else wait.stats =
+    {
+        false: 0, //non-overdue count
+        true: 0, //overdue count
+        total_delay: Math.max(delay, 0),
+        max_delay: delay,
+        max_when: 0,
+        min_delay: delay,
+        min_when: 0,
+        get count() { return this.false + this.true; },
+        report: function() { debug(`overdue frames: ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), avg delay ${trunc(this.total_delay / this.count, 10)} msec, min delay[${this.min_when}] ${trunc(this.min_delay, 10)} msec, max delay[${this.max_when}] ${trunc(this.max_delay, 10)} msec`[this.true? "red_lt": "green_lt"]); },
+    }; //{[overdue]: 1, [!overdue]: 0}; //false: 0, true: 1]: [1, 0]; //[!overdue, overdue];
+    if ((wait.stats[overdue]++ < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
+//    {
+        debug("wait[%d] %d msec"[overdue? "red_lt": "blue_lt"], wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
+//        if (isNaN(++wait.counts[overdue])) wait.counts = [!overdue, overdue];
+//    }
+    return !overdue? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
 }
+//const x = {};
+//if ((++x.y || 0) < 10) console.log("yes-1");
+//else console.log("no-1");
+//if (++x.z > 10) console.log("yes-2");
+//else console.log("no-2");
+//process.exit();
 
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
 /// Helpers:
 //
+
+
+//display commas for readability (debug):
+//NOTE: need to use string, otherwise JSON.stringify will remove commas again
+function commas(val)
+{
+//number.toLocaleString('en-US', {minimumFractionDigits: 2})
+    return val.toLocaleString();
+}
+
 
 //truncate decimal places:
 function trunc(val, digits)

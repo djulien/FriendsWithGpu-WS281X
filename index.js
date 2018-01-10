@@ -21,7 +21,7 @@ new Proxy(function(){},
 {
     get: function(target, propkey, rcvr)
     {
-        debug("get Screen.%s, cached? %d", propkey, typeof target[propkey]);
+//        debug("get Screen.%s, cached? %s".blue_lt, propkey, typeof target[propkey]);
         if (typeof target[propkey] != "undefined") return target[propkey]; //use cached value, screen won't change
         switch (propkey)
         {
@@ -200,7 +200,7 @@ new Proxy(function(){},
 //console.log("proxy ctor", width, height, opts);
         opts_check(opts);
         const title = (opts || {}).TITLE || OPTS.TITLE[1];
-        const num_wkers = (opts || {}).NUM_WKERS || OPTS.NUM_WKERS[1];
+        const num_wkers = [(opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0].reduce(firstOf);
 //        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
         const THIS = cluster.isMaster /*|| !num_wkers)*/? new GpuCanvas(title, width, height): {title, width, height}; //initialize base class; dummy wrapper for wker procs
 //        pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
@@ -224,16 +224,18 @@ new Proxy(function(){},
         THIS.shmbuf = new Uint32Array(alloc(shmkey, (THIS.width * THIS.height + RwlockOps.SIZE32 + extralen) * Uint32Array.BYTES_PER_ELEMENT, cluster.isMaster));
         if (extralen) THIS.extra = THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen);
         THIS.pixels = THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen);
-        debug(`GpuCanvas: master? ${cluster.isMaster}, #bkg wkers ${num_wkers}, alloc ${THIS.shmbuf.byteLength} bytes, ${THIS.pixels.byteLength} for pixels, ${RwlockOps.SIZE32 * Uint32Array.BYTES_PER_ELEMENT} for rwlock, ${extralen * Uint32Array.BYTES_PER_ELEMENT} for extra data`.blue_lt);
+        debug(`GpuCanvas: master? ${cluster.isMaster}, #bkg wkers ${num_wkers}, alloc ${commas(THIS.shmbuf.byteLength)} bytes, ${commas(THIS.pixels.byteLength)} for pixels, ${commas(RwlockOps.SIZE32 * Uint32Array.BYTES_PER_ELEMENT)} for rwlock, ${commas(extralen * Uint32Array.BYTES_PER_ELEMENT)} for extra data`.blue_lt);
         if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
-        var errstr = num_wkers? rwlock(THIS.shmbuf, 0, RwlockOps.INIT): false; //use shm to allow access by multiple procs
+        var errstr = (num_wkers && cluster.isMaster)? rwlock(THIS.shmbuf, 0, RwlockOps.INIT): false; //use shm to allow access by multiple procs
         if (errstr) throw `GpuCanvas: can't create lock: ${errstr}`.red_lt;
 //        if (cluster.isMaster)
-        for (var w = 0; w < num_wkers; ++w) cluster.fork({WKER_ID: w});
+//        for (var w = 0; w < num_wkers; ++w) cluster.fork({WKER_ID: w});
         THIS.WKER_ID = cluster.isWorker? +process.env.WKER_ID: -1; //which wker thread is this
         THIS.isMaster = cluster.isMaster; //(THIS.WKER_ID == -1);
         THIS.isWorker = cluster.isWorker; //(THIS.WKER_ID != -1);
-        debug(cluster.isMaster? `GpuCanvas: forked ${cluster.workers.length}/${num_wkers} bkg wkers`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
+        THIS.prtype = cluster.isMaster? "master": "worker";
+//        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
+        debug(`GpuCanvas: ${THIS.prtype} '${process.pid}' is %s ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
 //NOTE: lock is left in shm; no destroy (not sure when to call it)
 //        THIS.epoch = Date.now();
 //        return THIS;
@@ -403,6 +405,23 @@ function opts_check(opts)
 //        if (opts.WS281X_FMT) delete opts.SHOW_PROGRESS; //don't show progress bar in live mode (interferes with LED output)
 //        if (opts.WS281X_FMT) opts = {WS281X_FMT: opts.WS281X_FMT, UNIV_TYPE: opts.UNIV_TYPE}; //don't show other stuff in live mode (interferes with LED output)
 //        this.opts = opts; //save opts for access by other methods; TODO: hide from caller
+}
+
+
+//return first non-empty value of an array:
+//for use with Array.reduce()
+function firstOf(prevval, curval) //, curinx, all)
+{
+    return (typeof prevval != "undefined")? prevval: curval;
+}
+
+
+//display commas for readability (debug):
+//NOTE: need to use string, otherwise JSON.stringify will remove commas again
+function commas(val)
+{
+//number.toLocaleString('en-US', {minimumFractionDigits: 2})
+    return val.toLocaleString();
 }
 
 

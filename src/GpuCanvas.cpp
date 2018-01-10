@@ -2500,8 +2500,8 @@ private:
         double rowtime = (double)scfg.mode_line.htotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
         double frametime = (double)scfg.mode_line.htotal * scfg.mode_line.vtotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
 
-        myprintf(28, BLUE_LT "Screen[%d/%d]: %d x %d, %d bpp, pxclk %d, hblank %d+%d+%d = %d, vblank = %d+%d+%d = %d, row time %2.1f usec, frame time %2.1f msec, fps %2.1f" ENDCOLOR, i, num_screens,
-            scfg.mode_line.hdisplay, scfg.mode_line.vdisplay, 0, scfg.dot_clock, //vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, vinfo.pixclock,
+        myprintf(28, BLUE_LT "Screen[%d/%d]: %d x %d, %d bpp, pxclk %2.1f MHz, hblank %d+%d+%d = %d, vblank = %d+%d+%d = %d, row time %2.1f usec, frame time %2.1f msec (fps %2.1f)" ENDCOLOR, i, num_screens,
+            scfg.mode_line.hdisplay, scfg.mode_line.vdisplay, 0, (double)scfg.dot_clock / 1000, //vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, vinfo.pixclock,
             scfg.mode_line.hsyncstart - scfg.mode_line.hdisplay, scfg.mode_line.hsyncend - scfg.mode_line.hsyncstart, scfg.mode_line.htotal - scfg.mode_line.hsyncend, scfg.mode_line.htotal - scfg.mode_line.hdisplay, //vinfo.left_margin, vinfo.right_margin, vinfo.hsync_len, 
             scfg.mode_line.vsyncstart - scfg.mode_line.vdisplay, scfg.mode_line.vsyncend - scfg.mode_line.vsyncstart, scfg.mode_line.vtotal - scfg.mode_line.vsyncend, scfg.mode_line.vtotal - scfg.mode_line.vdisplay, //vinfo.upper_margin, vinfo.lower_margin, vinfo.vsync_len,
             1000000 * rowtime, 1000 * frametime, 1 / frametime);
@@ -2647,12 +2647,12 @@ NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
     retval->Set(JS_STR(iso, "yres"), JS_INT(iso, scfg->mode_line.vdisplay)); //vinfo.yres));
 //??        retval->Set(JS_STR(iso, "bpp"), JS_INT(iso, vinfo.bits_per_pixel));
 //        retval->Set(JS_STR(iso, "linelen"), JS_INT(iso, finfo.line_length));
-    retval->Set(JS_STR(iso, "pixclock"), JS_FLOAT(iso, (double)scfg->dot_clock / 1000)); //MHz //vinfo.pixclock));
+    retval->Set(JS_STR(iso, "pixclock_MHz"), JS_FLOAT(iso, (double)scfg->dot_clock / 1000)); //MHz //vinfo.pixclock));
 
     retval->Set(JS_STR(iso, "hblank"), JS_INT(iso, scfg->mode_line.htotal - scfg->mode_line.hdisplay)); //hblank));
     retval->Set(JS_STR(iso, "vblank"), JS_INT(iso, scfg->mode_line.vtotal - scfg->mode_line.vdisplay)); //vblank));
-    retval->Set(JS_STR(iso, "rowtime"), JS_FLOAT(iso, 1000000 * rowtime));
-    retval->Set(JS_STR(iso, "frametime"), JS_FLOAT(iso, 1000 * frametime));
+    retval->Set(JS_STR(iso, "rowtime_usec"), JS_FLOAT(iso, 1000000 * rowtime));
+    retval->Set(JS_STR(iso, "frametime_msec"), JS_FLOAT(iso, 1000 * frametime));
     retval->Set(JS_STR(iso, "fps"), JS_FLOAT(iso, 1 / frametime));
 #if 0
 //screen info:
