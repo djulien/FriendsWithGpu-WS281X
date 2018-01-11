@@ -23,7 +23,7 @@ function milli(sec)
 module.exports.elapsed =
 function elapsed(new_epoch)
 {
-    if (arguments.length) epoch = now_sec() - new_epoch; //set new epoch if passed; 0 == now; < 0 == past; > 0 == future
+    if (arguments.length) epoch = now_sec() - (new_epoch || 0); //set new epoch if passed; 0 == now; < 0 == past; > 0 == future
     return now_sec() - epoch;
 }
 

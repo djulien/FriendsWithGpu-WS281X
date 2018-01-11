@@ -37,6 +37,12 @@ https://blog.jayway.com/2015/04/13/600k-concurrent-websocket-connections-on-aws-
 - –nouse-idle-notification
 - –expose-gc + call gc every ~ 30 sec
 
+Beawares:
+SHM:
+tools ipcs, ipcrm, chshm
+leaves dangling
+if run as root and then inc size, need to sudo, ipcrm or chshm to adjust shm size
+
 
 TODO:
 - fix npm install (quits, nan absent, requires 2x)

@@ -204,6 +204,12 @@ new Proxy(function(){},
         const num_wkers = [(opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0].reduce(firstOf);
 //        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
         const THIS = cluster.isMaster /*|| !num_wkers)*/? new GpuCanvas(title, width, height): {title, width, height}; //initialize base class; dummy wrapper for wker procs
+        THIS.WKER_ID = cluster.isWorker? +process.env.WKER_ID: -1; //which wker thread is this
+        THIS.isMaster = cluster.isMaster; //(THIS.WKER_ID == -1);
+        THIS.isWorker = cluster.isWorker; //(THIS.WKER_ID != -1);
+        THIS.prtype = cluster.isMaster? "master": "worker";
+//        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
+        debug(`GpuCanvas: ${THIS.prtype} '${process.pid}' is wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
 //        pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
 //console.log("initial props:", THIS.WS281X_FMT, THIS.SHOW_PROGRESS, opts.UNIV_TYPE);
 //if (opts.UNIV_TYPE) console.log("set all unv type to", opts.UNIV_TYPE);
@@ -220,24 +226,43 @@ new Proxy(function(){},
 //to delete:  ipcrm -M key
 //var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
         const shmkey = (opts || {}).SHMKEY || OPTS.SHMKEY[1];
-        const extralen = (opts || {}).EXTRA_LEN || OPTS.EXTRA_LEN[1]; //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
+        var extralen = (opts || {}).EXTRA_LEN || OPTS.EXTRA_LEN[1]; //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
+extralen += 10;
         const alloc = num_wkers? shmbuf: function(ignored, len) { return new Buffer(len); }
 //debug(`smh alloc: key 0x${shmkey.toString(16)} retry?`,  typeof cluster.isMaster, cluster.isMaster, typeof cluster.isWorker, cluster.isWorker);
         THIS.shmbuf = new Uint32Array(alloc(shmkey, (THIS.width * THIS.height + RwlockOps.SIZE32 + extralen) * Uint32Array.BYTES_PER_ELEMENT, true)); //cluster.isMaster));
         if (extralen) THIS.extra = THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen);
         THIS.pixels = THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen);
-        debug(`GpuCanvas: master? ${cluster.isMaster}, #bkg wkers ${num_wkers}, alloc ${commas(THIS.shmbuf.byteLength)} bytes, ${commas(THIS.pixels.byteLength)} for pixels, ${commas(RwlockOps.SIZE32 * Uint32Array.BYTES_PER_ELEMENT)} for rwlock, ${commas(extralen * Uint32Array.BYTES_PER_ELEMENT)} for extra data`.blue_lt);
+        debug(`GpuCanvas: ${THIS.prtype}, #bkg wkers ${num_wkers}, alloc ${commas(THIS.shmbuf.byteLength)} bytes, ${commas(THIS.pixels.byteLength)} for pixels, ${commas(RwlockOps.SIZE32 * Uint32Array.BYTES_PER_ELEMENT)} for rwlock, ${commas(THIS.extra? THIS.extra.byteLength: 0)} for extra data`.blue_lt);
+//shm paranoid check:
+        if (cluster.isMaster)
+        {
+            THIS.shmbuf.fill(0x12345678);
+//debug("shmbuf fill-1: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
+            THIS.shmbuf[RwlockOps.SIZE32 + 0] = 0xdead - 1;
+            THIS.shmbuf[RwlockOps.SIZE32 + 9] = 0xbeef + 1;
+//debug("shmbuf fill-2: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
+debug("shmbuf fill-2: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16));
+            AtomicAdd(THIS.extra, 0, 1);
+            AtomicAdd(THIS.extra, 9, -1);
+debug("shmbuf fill-3: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16));
+        }
+//var buf = [];
+//for (var i = 0; i < THIS.shmbuf.length; ++i) if ((i == 56) || (i == 65) || (THIS.shmbuf[i] != 0x12345678)) buf.push(`${i} = 0x${THIS.shmbuf[i].toString(16)}`);
+//for (var i = 0; i < extralen; ++i) if (THIS.extra[i] != 0x12345678) buf.push(`${i} = 0x${THIS.extra[i].toString(16)}`);
+//debug(`smh check: ${THIS.prtype} ` + (!buf.length? `all ${THIS.extra.length} ok`: `wrong at(${buf.length}): ` + buf.join(", ")));
+        if ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef)) throw `${THIS.prtype} '${process.pid}' shm bad: 0x${THIS.extra[0].toString(16)} 0x${THIS.extra[9].toString(16)}`.red_lt;
+
         if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
-        var errstr = (num_wkers && cluster.isMaster)? rwlock(THIS.shmbuf, 0, RwlockOps.INIT): false; //use shm to allow access by multiple procs
-        if (errstr) throw `GpuCanvas: can't create lock: ${errstr}`.red_lt;
+//TODO: rwlock might not be needed
+//        var errstr = (num_wkers && cluster.isMaster)? rwlock(THIS.shmbuf, 0, RwlockOps.INIT): false; //use shm to allow access by multiple procs
+//        if (errstr) throw `GpuCanvas: can't create lock: ${errstr}`.red_lt;
+//        if (cluster.isMaster) { THIS.shmbuf[0] = 0xdead; THIS.shmbuf[1] = 0xbeef; }
+//        else if ((THIS.shmbuf[0] != 0xdead) || (THIS.shmbuf[1] != 0xbeef)) throw `shm bad: 0x${THIS.shmbuf[0].toString(16)} 0x${THIS.shmbuf[1].toString(16)}`.red_lt;
+//        if (cluster.isMaster) { THIS.pixels[0] = 0xdead; THIS.pixels[1] = 0xbeef; }
+//        else if ((THIS.pixels[0] != 0xdead) || (THIS.pixels[1] != 0xbeef)) throw `shm bad: 0x${THIS.pixels[0].toString(16)} 0x${THIS.pixels[1].toString(16)}`.red_lt;
 //        if (cluster.isMaster)
 //        for (var w = 0; w < num_wkers; ++w) cluster.fork({WKER_ID: w});
-        THIS.WKER_ID = cluster.isWorker? +process.env.WKER_ID: -1; //which wker thread is this
-        THIS.isMaster = cluster.isMaster; //(THIS.WKER_ID == -1);
-        THIS.isWorker = cluster.isWorker; //(THIS.WKER_ID != -1);
-        THIS.prtype = cluster.isMaster? "master": "worker";
-//        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
-        debug(`GpuCanvas: ${THIS.prtype} '${process.pid}' is wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
 //NOTE: lock is left in shm; no destroy (not sure when to call it)
 //        THIS.epoch = Date.now();
 //        return THIS;

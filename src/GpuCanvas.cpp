@@ -2728,6 +2728,7 @@ NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
     if (size < 1) { info.GetReturnValue().SetUndefined(); return; } //.Set(0); return; }
 
 //Create ArrayBuffer:
+//NOTE (from v8 docs): The created array buffer is immediately in externalized state. The memory block will not be reclaimed when a created ArrayBuffer is garbage-collected.
     v8::Local<v8::ArrayBuffer> buffer = v8::ArrayBuffer::New(iso, (void*)data, size);
     info.GetReturnValue().Set(buffer);
 //    info.GetReturnValue().Set(JS_INT(iso, canvas->inner.UnivType(inx, !info[1]->IsUndefined()? (GpuCanvas::UniverseTypes)info[1]->IntegerValue(): GpuCanvas::UniverseTypes::INVALID))); //return old type, optionally set new type
