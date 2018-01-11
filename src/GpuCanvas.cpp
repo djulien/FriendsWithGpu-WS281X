@@ -994,35 +994,6 @@ std::queue<const char*> Thread::msg_que;
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
-/// misc global defs
-//
-
-
-//SDL_Init must be called before most other SDL functions and only once, so put it at global scope:
-//*however*, RPi is sensitive to resource usage so don't init unless needed
-auto_ptr<SDL_lib> SDL; //don't initialize unless needed; //(SDL_INIT(SDL_INIT_VIDEO));
-
-typedef struct WH { uint16_t w, h; } WH; //pack width, height into single word for easy return from functions
-
-//fwd refs:
-void debug_info(CONST SDL_lib*, int where);
-void debug_info(CONST SDL_Window*, int where);
-void debug_info(CONST SDL_Renderer*, int where);
-void debug_info(CONST SDL_Surface*, int where);
-//capture line# for easier debug:
-//NOTE: cpp avoids recursion so macro names can match actual function names here
-#define debug_info(...)  debug_info(__VA_ARGS__, __LINE__)
-WH ScreenInfo(void);
-WH MaxFit(void);
-uint32_t limit(uint32_t color);
-uint32_t hsv2rgb(float h, float s, float v);
-//uint32_t ARGB2ABGR(uint32_t color);
-const char* commas(int64_t);
-bool exists(const char* path);
-
-
-////////////////////////////////////////////////////////////////////////////////
-////
 /// Charlieplexing/chipiplexing encoder
 //
 
@@ -1245,8 +1216,31 @@ inline int Release(/*const*/ ChplexEncoder<NUM_SSR>* that) { delete that; return
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
-/// GpuCanvas class, screen functions
+/// GpuCanvas class, screen functions, global defs
 //
+
+
+//SDL_Init must be called before most other SDL functions and only once, so put it at global scope:
+//*however*, RPi is sensitive to resource usage so don't init unless needed
+auto_ptr<SDL_lib> SDL; //don't initialize unless needed; //(SDL_INIT(SDL_INIT_VIDEO));
+
+typedef struct WH { uint16_t w, h; } WH; //pack width, height into single word for easy return from functions
+
+//fwd refs:
+void debug_info(CONST SDL_lib*, int where);
+void debug_info(CONST SDL_Window*, int where);
+void debug_info(CONST SDL_Renderer*, int where);
+void debug_info(CONST SDL_Surface*, int where);
+//capture line# for easier debug:
+//NOTE: cpp avoids recursion so macro names can match actual function names here
+#define debug_info(...)  debug_info(__VA_ARGS__, __LINE__)
+WH ScreenInfo(void);
+WH MaxFit(void);
+uint32_t limit(uint32_t color);
+uint32_t hsv2rgb(float h, float s, float v);
+//uint32_t ARGB2ABGR(uint32_t color);
+const char* commas(int64_t);
+bool exists(const char* path);
 
 
 //check for RPi:
