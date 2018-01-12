@@ -11,12 +11,13 @@ require('colors').enabled = true; //console output colors; allow bkg threads to 
 const cluster = require('cluster');
 const shm = require('shm-typed-array');
 //const {inherits} = require('util');
-const bindings = require('bindings');
+//const bindings = require('bindings');
 const {debug} = require('./demos/shared/debug');
-const {/*Screen,*/ GpuCanvas, UnivTypes, /*shmbuf, AtomicAdd,*/ usleep, RwlockOps, rwlock} = bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
+const {Screen, GpuCanvas, UnivTypes, /*shmbuf, AtomicAdd,*/ usleep, RwlockOps, rwlock} = require('./build/Release/gpu-canvas.node'); //bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
 //lazy-load Screen props to avoid unneeded SDL inits:
 //module.exports.Screen = {};
 //Object.defineProperties(module.exports.Screen,
+if (false) //not needed now that Screen doesn't call SDL_Init
 module.exports.Screen =
 new Proxy(function(){},
 {
@@ -101,6 +102,7 @@ debug("Screen info %s".blue_lt, JSON.stringify(Screen, null, 2));
     configurable: true, //allow modify/delete by caller
 });
 */
+module.exports.Screen = Screen;
 module.exports.UnivTypes = UnivTypes;
 //also expose these in case caller wants to use them:
 //module.exports.shmbuf = shmbuf;
@@ -243,9 +245,9 @@ extralen32 += 10;
         if (!shmbuf) throw `Can't create ${num_wkers? "shared": "private"} buf of size ${buflen32}`.red_lt;
 //        shmbuf.byteLength = shmbuf.length;
         /*if (num_wkers)*/ THIS.SHM_KEY = shmbuf.key;
-        THIS.shmbuf = new Uint32Array(shmbuf);
-        if (extralen32) THIS.extra = new Uint32Array(shmbuf, RwlockOps.SIZE32 * U32SIZE, (RwlockOps.SIZE32 + extralen32) * U32SIZE); //THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen32);
-        THIS.pixels = new Uint32Array(shmbuf, (RwlockOps.SIZE32 + extralen32) * U32SIZE); //THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen32);
+        THIS.shmbuf = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset, RwlockOps.SIZE32 + extralen32); //shmbuf.byteLength / U32SIZE); //CAUTION: need ofs + len if buf is < 4K (due to shared node.js bufs?)
+        if (extralen32) THIS.extra = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + RwlockOps.SIZE32 * U32SIZE, extralen32); //THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen32);
+        THIS.pixels = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32) * U32SIZE, THIS.width * THIS.height); //THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen32);
         debug(`GpuCanvas: ${THIS.prtype}, #bkg wkers ${num_wkers}, alloc ${commas(THIS.shmbuf.byteLength)} bytes, ${commas(THIS.pixels.byteLength)} for pixels, ${commas(RwlockOps.SIZE32 * U32SIZE)} for rwlock, ${commas(THIS.extra? THIS.extra.byteLength: 0)} for extra data`.blue_lt);
 //shm paranoid check:
         if (cluster.isMaster)
@@ -267,8 +269,11 @@ extralen32 += 10;
 const ok = ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef))? "bad": "good";
 debug("shmbuf fill-2: ", ok, THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16));
         if ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef)) throw `${THIS.prtype} '${process.pid}' shm bad: 0x${THIS.extra[0].toString(16)} 0x${THIS.extra[9].toString(16)}`.red_lt;
+debug(`${THIS.shmbuf[0].toString(16)} ${THIS.shmbuf[1].toString(16)} ${THIS.shmbuf[2].toString(16)} ${THIS.shmbuf[3].toString(16)}`)
+//debug(`${THIS.shmbuf[224 + 0].toString(16)} ${THIS.shmbuf[224 + 1].toString(16)} ${THIS.shmbuf[224 + 2].toString(16)} ${THIS.shmbuf[224 + 3].toString(16)}`)
 
         if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
+        if (cluster.isMaster) THIS.extra.fill(0);
 //TODO: rwlock might not be needed
         var errstr = (num_wkers && cluster.isMaster)? rwlock(THIS.shmbuf, 0, RwlockOps.INIT): false; //use shm to allow access by multiple procs
         if (errstr) throw `GpuCanvas: can't create lock: ${errstr}`.red_lt;
