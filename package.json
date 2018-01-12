@@ -69,7 +69,6 @@
     "colors": "git+https://github.com/djulien/colors.js.git",
     "mmap-io": "git+https://github.com/djulien/mmap-io.git",
     "posix-semaphore": "git+https://github.com/djulien/posix-semaphore.git",
-    "shm-typed-array": "0.0.10",
     "memwatch-next": "^0.3.0",
     "debug": "^2.2.0",
     "framebuffer": "git+https://github.com/djulien/node-framebuffer.git",
@@ -86,8 +85,9 @@
     "cluster": "^0.7.7",
     "colors": "git+https://github.com/djulien/colors.js.git",
     "glob": "^7.1.1",
-    "nan": "^2.6.1",
-    "pngjs": "^3.3.1"
+    "nan": "^2.8.0",
+    "pngjs": "^3.3.1",
+    "shm-typed-array": "0.0.10"
   },
   "old-devDependencies": {
     "blocking-style": "^1.0.0",

@@ -32,6 +32,7 @@ if [ "x$1" == "xpre" ]; then
       MISSING=1
     fi
   done
+  npm install nan  #kludge: avoid intermittent "Cannot find module 'nan'" errors
   if [ "$MISSING" == "0" ]; then
     echo -e  "${GREEN}Dependencies already installed.${NORMAL}"
   else

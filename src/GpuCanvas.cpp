@@ -2735,6 +2735,7 @@ NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 }
 
 
+#if 0 //don't use; no worky with node.js shared memory
 //atomic add:
 //usage: old_value = AtomicAdd(uint32array, offset, value_to_add)
 //allows multiple threads to safely read/write shared data
@@ -2767,6 +2768,7 @@ NAN_METHOD(AtomicAdd_js) //defines "info"; implicit HandleScope (~ v8 stack fram
 //    uint32_t& value = data[ofs];
     info.GetReturnValue().Set(JS_INT(iso, SDL_AtomicAdd((SDL_atomic_t*)&data[ofs], updval))); //return old value
 }
+#endif //0
 
 
 //rwlock consts:
@@ -2808,6 +2810,7 @@ NAN_METHOD(rwlock_js)
 //    pthread_rwlockattr_t attr;
     /*volatile*/ pthread_rwlock_t& rwlock = *(pthread_rwlock_t*)&data[ofs]; //CAUTION: can be up to 56 bytes long
     const int RETRIES = 10; //TODO: allow caller to set
+    const char* opname;
     int retval;
 
     switch (op)
@@ -2817,31 +2820,38 @@ NAN_METHOD(rwlock_js)
 //            pthread_rwlock_init(&data[ofs], &attr);
 //            pthread_rwlockattr_destroy(&attr);
             retval = pthread_rwlock_init(&rwlock, NULL); //equiv to: pthread_rwlock_t rwlock = PTHREAD_RWLOCK_INITIALIZER;
+            opname = "Init";
             break;
         case RwlockOps::RdLock: //read lock (blocking, recursive); succeeds if not locked for write
             retval = pthread_rwlock_rdlock(&rwlock);
+            opname = "RdLock";
             break;
         case RwlockOps::RdLockTry: //read lock (non-blocking)
             for (int retry = 0; retry < RETRIES; ++retry)
                 if ((retval = pthread_rwlock_tryrdlock(&rwlock)) != EBUSY) break;
+            opname = "RdLockTry";
             break;
         case RwlockOps::WrLock: //write lock (blocking); succeeds if no other locks
             retval = pthread_rwlock_wrlock(&rwlock);
+            opname = "WrLock";
             break;
         case RwlockOps::WrLockTry: //write lock (non-blocking)
             for (int retry = 0; retry < RETRIES; ++retry)
                 if ((retval = pthread_rwlock_trywrlock(&rwlock)) != EBUSY) break;
+            opname = "WrLockTry";
             break;
         case RwlockOps::Unlock: //unlock
             retval = pthread_rwlock_unlock(&rwlock);
+            opname = "Unlock";
             break;
         case RwlockOps::Destroy: //destroy
             retval = pthread_rwlock_destroy(&rwlock);
+            opname = "Destroy";
             break;
         default:
             return_void(errjs(iso, "rwlock: unknown op %d", op));
     }
-    myprintf(28, BLUE_LT "rwlock: op %d, result %d (%s)" ENDCOLOR, op, retval, strerror(retval));
+    myprintf(33, BLUE_LT "rwlock: %s (op %d), result %d (%s)" ENDCOLOR, opname, op, retval, strerror(retval));
     if (retval) info.GetReturnValue().Set(JS_STR(iso, strerror(retval)));
     else info.GetReturnValue().Set(JS_BOOL(iso, false)); //0 == success, !0 == errno
 //    info.GetReturnValue().SetUndefined();
@@ -3325,7 +3335,7 @@ NAN_MODULE_INIT(exports_js) //defines target
 //    NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 //	exports->Set(Nan::New("shmatt").ToLocalChecked(),
 //                 Nan::New<v8::FunctionTemplate>(shmatt_entpt)->GetFunction());
-    Nan::Export(target, "AtomicAdd", AtomicAdd_js);
+//    Nan::Export(target, "AtomicAdd", AtomicAdd_js);
     Nan::Export(target, "shmbuf", shmbuf_js);
     Nan::Export(target, "rwlock", rwlock_js);
     Nan::SetAccessor(target, JS_STR(iso, "RwlockOps"), RwlockOps_js);
