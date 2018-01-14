@@ -2749,7 +2749,7 @@ NAN_METHOD(AtomicAdd_js) //defines "info"; implicit HandleScope (~ v8 stack fram
     v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
     int ofs = info[1]->IntegerValue(), updval = info[2]->IntegerValue();
     if ((ofs < 0) || (ofs >= aryp->Length())) return_void(errjs(iso, "AtomicAdd: array ofs bad: is %d, should be 0..%d", ofs, aryp->Length()));
-    uint32_t* data = (uint32_t*)aryp->Buffer()->GetContents().Data();
+    uint32_t* data = (uint32_t*)aryp->Buffer()->GetContents().Data() + aryp->ByteOffset();
 //    std::atomic<uint32_t> value& = aryp[ofs];
 //    SDL_atomic_t value = aryp[ofs];
 //typedef struct { int value; } SDL_atomic_t;
@@ -2806,7 +2806,7 @@ NAN_METHOD(rwlock_js)
     v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
     int ofs = info[1]->IntegerValue(), op = info[2]->IntegerValue();
     if ((ofs < 0) || (ofs >= aryp->Length())) return_void(errjs(iso, "rwlock: array ofs bad: is %d, should be 0..%d", ofs, aryp->Length()));
-    uint32_t* data = (uint32_t*)aryp->Buffer()->GetContents().Data();
+    uint32_t* data = (uint32_t*)aryp->Buffer()->GetContents().Data() + aryp->ByteOffset(); //CAUTION: might be slice
 //    pthread_rwlockattr_t attr;
     /*volatile*/ pthread_rwlock_t& rwlock = *(pthread_rwlock_t*)&data[ofs]; //CAUTION: can be up to 56 bytes long
     const int RETRIES = 10; //TODO: allow caller to set
@@ -3268,12 +3268,13 @@ NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 sta
 //    v8::Local<v8::Uint32Array> ary = args[0].As<Uint32Array>();
 //    Nan::TypedArrayContents<uint32_t> pixels(info[0].As<v8::Uint32Array>());
 //https://github.com/casualjavascript/blog/issues/12
+//http://brendanashworth.github.io/v8-docs/classv8_1_1_typed_array.html
     uint32_t* pixels = 0;
     if (info.Length())
     {
         v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
-        if (aryp->Length() < canvas->inner.width() * canvas->inner.height()) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->Length(), canvas->inner.width() * canvas->inner.height()));
-        void *data = aryp->Buffer()->GetContents().Data();
+        if (aryp->ByteLength() < 4 * canvas->inner.width() * canvas->inner.height()) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->ByteLength(), 4 * canvas->inner.width() * canvas->inner.height()));
+        void* data = aryp->Buffer()->GetContents().Data() + aryp->ByteOffset(); //CAUTION: buf might be a slice; need to add ofs here
         pixels = static_cast<uint32_t*>(data);
     }
 myprintf(33, "js paint(0x%x) %d arg(s): pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, info.Length(), pixels[0], pixels[1], pixels[2]);

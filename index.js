@@ -232,7 +232,9 @@ new Proxy(function(){},
 //to see shm segs:  ipcs -a
 //to delete:  ipcrm -M key
 //var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
-        const shmkey = (opts || {}).SHM_KEY; //no default; //|| OPTS.SHM_KEY[1];
+        var shmkey = (opts || {}).SHM_KEY; //no default; //|| OPTS.SHM_KEY[1];
+        if (typeof shmkey != "undefined") shmkey = +shmkey;
+//console.log("shm key-1 %s 0x%s", typeof shmkey, (shmkey || -1).toString(16));
         var extralen32 = (opts || {}).EXTRA_LEN || OPTS.EXTRA_LEN[1] || 0; //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
 extralen32 += 10;
         const buflen32 = THIS.width * THIS.height + RwlockOps.SIZE32 + extralen32;
@@ -240,21 +242,23 @@ extralen32 += 10;
 //        const alloc = num_wkers? shmbuf: function(ignored, len) { return new Buffer(len); }
 //debug(`smh alloc: key 0x${shmkey.toString(16)} retry?`,  typeof cluster.isMaster, cluster.isMaster, typeof cluster.isWorker, cluster.isWorker);
 //        THIS.shmbuf = new Uint32Array(alloc(shmkey, (THIS.width * THIS.height + RwlockOps.SIZE32 + extralen) * Uint32Array.BYTES_PER_ELEMENT, true)); //cluster.isMaster));
-        const shmbuf = !num_wkers? new Buffer(buflen32 * U32SIZE): //Uint32Array(buflen32): //doesn't need to be shared
+//NOTE: TypedArray (Uint32Array) ref to Buffer using native byte order is reportedly a lot faster than DataView ref to Buffer using explicitly defined byte order
+        const shmbuf = !num_wkers? Buffer.allocUnsafe(buflen32 * U32SIZE): //NOTE: will initialize to non-0 values below, so don't init to 0 here; //new Buffer(buflen32 * U32SIZE): //Uint32Array(buflen32): //doesn't need to be shared
                       cluster.isMaster? shm.create(buflen32 * U32SIZE, "Buffer", shmkey): shm.get(shmkey, "Buffer");
         if (!shmbuf) throw `Can't create ${num_wkers? "shared": "private"} buf of size ${buflen32}`.red_lt;
 //        shmbuf.byteLength = shmbuf.length;
         /*if (num_wkers)*/ THIS.SHM_KEY = shmbuf.key;
+//console.log("shm key-2 0x%s", THIS.SHM_KEY.toString(16));
         THIS.shmbuf = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset, RwlockOps.SIZE32 + extralen32); //shmbuf.byteLength / U32SIZE); //CAUTION: need ofs + len if buf is < 4K (due to shared node.js bufs?)
         if (extralen32) THIS.extra = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + RwlockOps.SIZE32 * U32SIZE, extralen32); //THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen32);
         THIS.pixels = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32) * U32SIZE, THIS.width * THIS.height); //THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen32);
-        debug(`GpuCanvas: ${THIS.prtype}, #bkg wkers ${num_wkers}, alloc ${commas(THIS.shmbuf.byteLength)} bytes, ${commas(THIS.pixels.byteLength)} for pixels, ${commas(RwlockOps.SIZE32 * U32SIZE)} for rwlock, ${commas(THIS.extra? THIS.extra.byteLength: 0)} for extra data`.blue_lt);
+        debug(`GpuCanvas: ${THIS.prtype}, #bkg wkers ${num_wkers}, alloc ${commas(shmbuf.byteLength)} ofs ${shmbuf.byteOffset} bytes, ${commas(THIS.pixels.byteLength)} ofs ${shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32) * U32SIZE} for pixels, ${commas(RwlockOps.SIZE32 * U32SIZE)} ofs 0 for rwlock, ${commas(THIS.extra? THIS.extra.byteLength: 0)} ofs ${shmbuf.byteOffset + RwlockOps.SIZE32 * U32SIZE} for extra data`.blue_lt);
 //shm paranoid check:
         if (cluster.isMaster)
         {
             THIS.shmbuf.fill(0x12345678);
 //debug("shmbuf fill-1: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
-            THIS.shmbuf[RwlockOps.SIZE32 + 0] = 0xdead;
+            THIS.shmbuf[RwlockOps.SIZE32 + 1] = 0xdead;
             THIS.shmbuf[RwlockOps.SIZE32 + 9] = 0xbeef;
 //debug("shmbuf fill-2: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
 //debug("shmbuf fill-2: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0], THIS.shmbuf[RwlockOps.SIZE32 + 9]);
@@ -266,14 +270,16 @@ extralen32 += 10;
 //for (var i = 0; i < THIS.shmbuf.length; ++i) if ((i == 56) || (i == 65) || (THIS.shmbuf[i] != 0x12345678)) buf.push(`${i} = 0x${THIS.shmbuf[i].toString(16)}`);
 //for (var i = 0; i < extralen; ++i) if (THIS.extra[i] != 0x12345678) buf.push(`${i} = 0x${THIS.extra[i].toString(16)}`);
 //debug(`smh check: ${THIS.prtype} ` + (!buf.length? `all ${THIS.extra.length} ok`: `wrong at(${buf.length}): ` + buf.join(", ")));
-const ok = ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef))? "bad": "good";
-debug("shmbuf fill-2: ", ok, THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16));
-        if ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef)) throw `${THIS.prtype} '${process.pid}' shm bad: 0x${THIS.extra[0].toString(16)} 0x${THIS.extra[9].toString(16)}`.red_lt;
-debug(`${THIS.shmbuf[0].toString(16)} ${THIS.shmbuf[1].toString(16)} ${THIS.shmbuf[2].toString(16)} ${THIS.shmbuf[3].toString(16)}`)
+//debug(`${THIS.shmbuf[0].toString(16)} ${THIS.shmbuf[1].toString(16)} ${THIS.shmbuf[2].toString(16)} ${THIS.shmbuf[3].toString(16)}`)
+//const ok = ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef))? "bad": "good";
+//debug("shmbuf fill-2: ", ok, THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16));
+debug("here4", THIS.extra[1].toString(16), THIS.extra[9].toString(16), (THIS.extra[1] != 0xdead) || (THIS.extra[9] != 0xbeef));
+        if ((THIS.extra[1] != 0xdead) || (THIS.extra[9] != 0xbeef)) throw `${THIS.prtype} '${process.pid}' shm bad: 0x${THIS.extra[1].toString(16)} 0x${THIS.extra[9].toString(16)}`.red_lt;
 //debug(`${THIS.shmbuf[224 + 0].toString(16)} ${THIS.shmbuf[224 + 1].toString(16)} ${THIS.shmbuf[224 + 2].toString(16)} ${THIS.shmbuf[224 + 3].toString(16)}`)
 
         if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
         if (cluster.isMaster) THIS.extra.fill(0);
+debug("here5");
 //TODO: rwlock might not be needed
         var errstr = (num_wkers && cluster.isMaster)? rwlock(THIS.shmbuf, 0, RwlockOps.INIT): false; //use shm to allow access by multiple procs
         if (errstr) throw `GpuCanvas: can't create lock: ${errstr}`.red_lt;
@@ -293,7 +299,7 @@ debug(`${THIS.shmbuf[0].toString(16)} ${THIS.shmbuf[1].toString(16)} ${THIS.shmb
 
         THIS.atomic = atomic_method;
 
-        THIS.lock = lock_method;
+        THIS.lock = (num_wkers && cluster.isMaster)? lock_method: function(ignored) {};
 
 //SharedCanvas.prototype.pixel =
         THIS.pixel = pixel_method;
@@ -311,6 +317,8 @@ debug(`${THIS.shmbuf[0].toString(16)} ${THIS.shmbuf[1].toString(16)} ${THIS.shmb
 
 //SharedCanvas.prototype.render_stats =
         THIS.render_stats = render_stats_method;
+
+        THIS.close = function() { if (num_wkers && cluster.isMaster) rwlock(THIS.shmbuf, 0, RwlockOps.DESTROY); }
 
         return THIS;
     }
@@ -333,6 +341,10 @@ function lock_method(wr)
 {
     var errstr = rwlock(this.shmbuf, 0, (wr === true)? RwlockOps.WRLOCK: (wr === false)? RwlockOps.RDLOCK: RwlockOps.UNLOCK);
     if (errstr) throw `GpuCanvas: un/lock failed: ${errstr}`.red_lt;
+
+//    const {caller/*, calledfrom, shortname*/} = require("./demos/shared/caller");
+//    const from = caller(-2); //.replace("@pin-finder:", "");
+//    debug("lock(%d) from %s", wr, from);
 }
 
 

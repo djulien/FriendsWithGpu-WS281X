@@ -64,7 +64,7 @@ process.exit();
 
 const DURATION = 5; //30; //10; //60; //how long to run (sec)
 const PAUSE = 5; //how long to pause at end
-const FPS = 30; //2; //animation speed (max depends on screen settings)
+const FPS = 30/15; //2; //animation speed (max depends on screen settings)
 
 
 //display settings:
@@ -83,11 +83,11 @@ const OPTS =
     EXTRA_LEN: 1,
     SHM_KEY: process.env.SHM_KEY,
 //choose one of options below for performance tuning:
-    NUM_WKERS: 0, //whole-house fg render
-//    NUM_WKERS: 1, //whole-house bg render
+//    NUM_WKERS: 0, //whole-house fg render
+    NUM_WKERS: 1, //whole-house bg render
 //    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
 };
-if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
+//if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
 
 
 //canvas settings:
@@ -221,6 +221,7 @@ function BkgWker(opts)
     this.name = (opts || {}).name? opts.name + "-bkg": "BkgWker#" + BkgWker.count;
 //    if (!BkgWker.all) BkgWker.all = [];
     canvas.atomic(Pending, +1, "fork"); //keep track of #pending bkg wker acks
+//debug("fork: shm key 0x%s", canvas.SHM_KEY.toString(16))
     this.wker = cluster.fork({WKER_ID: Object.keys(cluster.workers).length, SHM_KEY: canvas.SHM_KEY, EPOCH, NODE_ENV: process.env.NODE_ENV}); //BkgWker.all.length});
 //    if (all.id) return null; //already have this wker
 //    BkgWker.all.push(this);
@@ -281,8 +282,10 @@ function sync_bkgwker()
     {
 //        var remaining = AtomicAdd(canvas.extra, 0, 0);
 //        debug(`step-gate: atomic get (${remaining} still pending)`.blue_lt);
+//console.log("here3");
         var remaining = canvas.atomic(Pending, 0, "step-gate");
 //        if (remaining) throw `step: ${remaining} render req still outstanding`.red_lt;
+//console.log("here4", remaining, !remaining);
         return !remaining;
     }
     if (sync_bkgwker.init) return true;
@@ -337,6 +340,21 @@ function close_bkgwker()
 //    for (var w in cluster.workers)
 //        yield;
 }
+
+
+/*
+//verify alignment of corners:
+function calibrate()
+{
+    canvas.pixels[0] = RED;
+    canvas.pixels[(NUM_UNIV - 1) * UNIV_LEN] = GREEN;
+    canvas.pixels[UNIV_LEN - 1] = RED | GREEN; //YELLOW;
+    canvas.pixels[NUM_UNIV * UNIV_LEN - 1] = BLUE;
+    canvas.paint();
+//yield wait(10);
+//return;
+}
+*/
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -447,6 +465,7 @@ try{
     if (done) step.svgen = null; //prevent overrun; do bedore value()
     if (typeof value == "function") value = value(); //execute caller code before returning
     if (done /*&& step.onexit*/) BkgWker.close(); //step.onexit(); //do after value()
+//console.log("here3");
     return step.retval = value; //return value to caller and to next yield
 } catch(exc) { console.log(`step EXC: ${exc}`.red_lt); /*gen.*/throw(exc); } //CAUTION: without this, func gen might quit without telling anyone
 }
