@@ -11,7 +11,7 @@
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output colors
 const path = require('path');
-const {elapsed, milli} = require('./elapsed');
+const {elapsed/*, milli*/} = require('./elapsed');
 const {caller/*, calledfrom, shortname*/} = require("./caller");
 
 const ColorCodes = /\x1b\[\d+(;\d+)?m/; //ANSI color escape codes
@@ -35,6 +35,8 @@ var enabled = {};
         enabled[name] = (remove == "-")? -1: level || Number.MAX_SAFE_INTEGER;
 });
 
+
+module.exports.elapsed = elapsed; //give caller access to my timebase
 
 const debug =
 module.exports.debug =
@@ -60,11 +62,16 @@ function debug(args)
 //    fmt = fmt.replace(ColorCodes, function(str) { svcolor.push(str); return ''; }); //strip color codes
 //    if (!svcolor.length) svcolor.push('');
     var ofs = (match && !match.index)? match[0].length: 0; //don't split leading color code
-    args[0] = fmt.substr(0, ofs) + `[${my_parent.slice(1)} @${milli(elapsed())}] ` + fmt.substr(ofs);
+    args[0] = fmt.substr(0, ofs) + `[${my_parent.slice(1)} @${trunc(elapsed(), 1e3)}] ` + fmt.substr(ofs);
 
     return console.error.apply(console, args); //send to stderr in case stdout is piped
 }
 debug.nested = 0; //allow caller to adjust stack level
 
+
+function trunc(val, digits) 
+{
+    return Math.round(val * digits) / digits;
+}
 
 //eof

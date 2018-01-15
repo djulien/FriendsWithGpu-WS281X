@@ -1,14 +1,24 @@
 //elapsed time (sec):
+//other processes will be synced (uses shared memory)
+//TODO: use cluster instead?
 
 'use strict'; //find bugs easier
-const HIGH = false; //true;
+//const cluster = require('cluster');
+const shm = require('shm-typed-array');
 //Date.now_usec = require("performance-now"); //override with hi-res version (usec)
 
-var epoch = 
-module.exports.epoch = now_sec();
+//default values:
+//caller can override these (lzay, but must be before first use)
+//const HIGH = false; //true;
+module.exports.hires = false;
+module.exports.shmkey = 0xc10c4; //default shm key; caller can change it, but must coordinate with other processes
 
-module.exports.now = now_sec;
+//var epoch = 
+//module.exports.epoch = now_sec();
+//module.exports.now = now_sec;
 
+/*
+const milli =
 module.exports.milli =
 function milli(sec)
 {
@@ -17,21 +27,28 @@ function milli(sec)
     if (str.length < 4) str = ("0000" + str).slice(-4);
     return str.replace(/(\d{3})$/, ".$1"); //.splice(-3, 0, ".");
 }
+*/
 
 
 //get time since epoch:
+const elapsed =
 module.exports.elapsed =
 function elapsed(new_epoch)
 {
-    if (arguments.length) epoch = now_sec() - (new_epoch || 0); //set new epoch if passed; 0 == now; < 0 == past; > 0 == future
-    return now_sec() - epoch;
+    if (module.exports.shmkey && !elapsed.shmbuf) //sync across processes
+        elapsed.shmbuf = shm.create(1, "Float64Array", module.exports.shmkey);
+//        elapsed.shmbuf[0] = 0; //caller needs to do this
+    if (arguments.length) elapsed.shmbuf[0] = now_sec() - (new_epoch || 0); //set new epoch if passed; 0 = now; < 0 for past; > 0 for future
+    return now_sec() - elapsed.shmbuf[0]; //(elapsed.epoch || 0);
 }
 
 
 //current time (sec):
+const now_sec =
+module.exports.now_sec =
 function now_sec()
 {
-    if (!HIGH) return Date.now() / 1e3;
+    if (!module.exports.hires) return Date.now() / 1e3;
     var parts = process.hrtime();
     return parts[0] + parts[1] / 1e9;
 }

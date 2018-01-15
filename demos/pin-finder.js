@@ -20,16 +20,33 @@ require('colors').enabled = true; //for console output (all threads)
 //const {blocking, wait} = require('blocking-style');
 const cluster = require('cluster');
 //const JSON = require('circular-json'); //CAUTION: replace std JSON with circular-safe version
-const {debug} = require('./shared/debug');
-const {elapsed} = require('./shared/elapsed');
+const {debug, elapsed} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
 const {Screen, GpuCanvas/*, cluster, AtomicAdd*/} = require('gpu-friends-ws281x');
-const EPOCH = cluster.isWorker? elapsed(+process.env.EPOCH): elapsed(); //use consistent time base for logging
-debug(`epoch ${EPOCH}, master? ${cluster.isMaster}`.blue_lt); //TODO: fix shared time base
+//const EPOCH = cluster.isWorker? elapsed(+process.env.EPOCH): elapsed(); //use consistent time base for logging
+//debug(`epoch ${EPOCH}, master? ${cluster.isMaster}`.blue_lt); //TODO: fix shared time base
 //console.log(JSON.stringify(Screen));
 //process.exit();
 
+var BkgWker = {sync: function() { return false; }, close: function(){}, };
+var canvas = {};
+
+console.log("elapsed-1", elapsed());
+step(function*()
+{
+    if (cluster.isMaster) elapsed(0);
+    wait(1);
+    console.log("elapsed-2", elapsed());
+    wait(2);
+    if (cluster.isMaster) cluster.fork();
+    wait(3);
+    console.log("elapsed-3", elapsed());
+    process.exit(0);
+});
+console.log("elapsed-4", elapsed());
+function ignore()
+{
 
 /*
 const {shmbuf} = require('gpu-friends-ws281x');
@@ -96,7 +113,7 @@ const OPTS =
 const NUM_UNIV = 24; //#universes; can't exceed #VGA output pins (24) without external mux
 const UNIV_LEN = Screen.gpio? Screen.height: 30; //universe length; can't exceed #display lines; show larger pixels in dev mode
 const WKER_UNIV = OPTS.NUM_WKERS? Math.ceil(NUM_UNIV / OPTS.NUM_WKERS): NUM_UNIV; //#univ to render by each bkg wker
-debug("Screen %d x %d, refresh %d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.width, Screen.height, trunc(Screen.fps, 10), Screen.isRPi, Screen.gpio, process.env.NODE_ENV || "dev?");
+debug("Screen %d x %d, refresh %d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.width, Screen.height, trunc(Screen.fps, 10), Screen.isRPi, Screen.gpio, process.env.NODE_ENV || "(dev)");
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //GPU canvas:
@@ -104,6 +121,12 @@ debug("Screen %d x %d, refresh %d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Scr
 //NOTE: must occur before creating models and bkg wkers (sets up shm, etc)
 //debug(`pid '${process.pid}' master? ${cluster.isMaster}, wker? ${cluster.isWorker}`.cyan_lt);
 const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
+
+//no worky:
+//process.on('uncaughtException', err => {
+//    console.error(err, 'Uncaught Exception thrown');
+//    process.exit(1);
+//  });
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -189,23 +212,6 @@ function render(frnum)
 }
 
 
-//atomic pending count update:
-function Pending(adj, desc)
-{
-    const {caller/*, calledfrom, shortname*/} = require("./shared/caller");
-    const from = caller(-2).replace("@pin-finder:", "");
-//    var pending = AtomicAdd(canvas.extra, 0, adj) + adj;
-    var pending = canvas.extra[0];
-    canvas.extra[0] += adj;
-    var newval = canvas.extra[0];
-//    var paranoid = AtomicAdd(canvas.extra, 0, 0); //NOTE: not guaranteed, but only a problem if other threads are updating at same time
-//    if (paranoid != pending) throw `atomic ${desc}: is ${paranoid}, should be ${pending}`.red_lt;
-    if ((pending < 0) || (newval < 0)) throw "lost track of a reply".red_lt;
-    debug(`${desc} (from ${from}): atomic (${pending} + ${adj} = ${newval} ${adj? "now": "still"} pending)`.blue_lt);
-    return pending;
-}
-
-
 ////////////////////////////TODO: move to index.js
 //bkg wker:
 //treated as a pseudo-model by main thread
@@ -218,11 +224,11 @@ function BkgWker(opts)
         return opts; //don't need bkg wker; use model as-is
     }
     if (isNaN(++BkgWker.count)) BkgWker.count = 1;
-    this.name = (opts || {}).name? opts.name + "-bkg": "BkgWker#" + BkgWker.count;
+    this.name = "BkgWker" + ((opts || {}).name? `-${opts.name}`: `#${BkgWker.count}`);
 //    if (!BkgWker.all) BkgWker.all = [];
     canvas.atomic(Pending, +1, "fork"); //keep track of #pending bkg wker acks
 //debug("fork: shm key 0x%s", canvas.SHM_KEY.toString(16))
-    this.wker = cluster.fork({WKER_ID: Object.keys(cluster.workers).length, SHM_KEY: canvas.SHM_KEY, EPOCH, NODE_ENV: process.env.NODE_ENV}); //BkgWker.all.length});
+    this.wker = cluster.fork({WKER_ID: Object.keys(cluster.workers).length, SHM_KEY: canvas.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV}); //BkgWker.all.length});
 //    if (all.id) return null; //already have this wker
 //    BkgWker.all.push(this);
 //    cluster.on('message', (wker, msg, handle) =>
@@ -300,7 +306,7 @@ function sync_bkgwker()
         debug(`${canvas.prtype} '${process.pid}' rcv msg ${JSON.stringify(msg)}, atomic chk ${remaining} still pending`.blue_lt);
         if (msg.render)
         {
-            debug(`BkgWker '${process.pid}' render req fr$ {msg.frnum}, ${models.length} model(s)`.blue_lt);
+            debug(`BkgWker '${process.pid}' render req fr# ${msg.frnum}, ${models.length} model(s)`.blue_lt);
 //            models.renderAll(msg.frnum);
 //            process.send({reply: frnum});
             if (msg.frnum != (wait_bkgwker.frnum || 0)) throw `BkgWker '${process.pid}': out of sync: at frame# ${wait.frnum}, but main thread wants frame# ${msg.frnum}`.red_lt;
@@ -339,6 +345,24 @@ function close_bkgwker()
         cluster.workers[w].send({quit: true});
 //    for (var w in cluster.workers)
 //        yield;
+}
+
+
+//update pending count:
+//NOTE: this is atomic (thread-safe)
+function Pending(adj, desc)
+{
+    const {caller/*, calledfrom, shortname*/} = require("./shared/caller");
+    const from = caller(-2).replace("@pin-finder:", "");
+//    var pending = AtomicAdd(canvas.extra, 0, adj) + adj;
+    var pending = canvas.extra[0];
+    canvas.extra[0] += adj;
+    var newval = canvas.extra[0];
+//    var paranoid = AtomicAdd(canvas.extra, 0, 0); //NOTE: not guaranteed, but only a problem if other threads are updating at same time
+//    if (paranoid != pending) throw `atomic ${desc}: is ${paranoid}, should be ${pending}`.red_lt;
+    if ((pending < 0) || (newval < 0)) throw "underflow: lost track of pending count".red_lt;
+    debug(`${canvas.prtype} ${desc} (from ${from}): atomic pending ${adj? "now": "still"} = ${pending} + ${adj} = ${newval}`.blue_lt);
+    return pending; //old value
 }
 
 
@@ -431,12 +455,13 @@ step(function*() //onexit)
     if (wait.stats) wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
     debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: ${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle: ${trunc(idle_time, 10)} msec (${trunc(100 * idle_time / frtime, 10)}%), ${frnum} frames`.blue_lt);
     cpu = process.cpuUsage(cpu);
-    debug(`cpu usage: ${JSON.stringify(cpu)}, accounts for ${trunc((cpu.user + cpu.system) / canvas.elapsed, 10)}% of elapsed`.blue_lt);
+    debug(`cpu usage: ${JSON.stringify(cpu)} usec, accounts for ${trunc((cpu.user + cpu.system) / 1e4 / canvas.elapsed, 10)}% of elapsed`.blue_lt);
     debug(`end: ${canvas.prtype} '${process.pid}' ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
     yield wait(PAUSE); //pause to show screen stats longer
     canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
-    canvas.close();
+//    canvas.close();
 });
+}//HERE
 
 
 //stepper function:
@@ -495,7 +520,7 @@ function wait(delay, nxtfr)
         min_delay: delay,
         min_when: 0,
         get count() { return this.false + this.true; },
-        report: function() { debug(`overdue frames: ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), avg delay ${trunc(this.total_delay / this.count, 10)} msec, min delay[${this.min_when}] ${trunc(this.min_delay, 10)} msec, max delay[${this.max_when}] ${trunc(this.max_delay, 10)} msec`[this.true? "red_lt": "green_lt"]); },
+        report: function() { debug(`waiting: overdue frames ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), avg wait ${trunc(this.total_delay / this.count, 10)} msec, min wait[${this.min_when}] ${trunc(this.min_delay, 10)} msec, max wait[${this.max_when}] ${trunc(this.max_delay, 10)} msec`[this.true? "red_lt": "green_lt"]); },
     }; //{[overdue]: 1, [!overdue]: 0}; //false: 0, true: 1]: [1, 0]; //[!overdue, overdue];
     if ((wait.stats[overdue]++ < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
 //    {

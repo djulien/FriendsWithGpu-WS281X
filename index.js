@@ -14,9 +14,11 @@ const shm = require('shm-typed-array');
 //const bindings = require('bindings');
 const {debug} = require('./demos/shared/debug');
 const {Screen, GpuCanvas, UnivTypes, /*shmbuf, AtomicAdd,*/ usleep, RwlockOps, rwlock} = require('./build/Release/gpu-canvas.node'); //bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
+debug("TODO: retry DIY shm".red_lt);
 //lazy-load Screen props to avoid unneeded SDL inits:
 //module.exports.Screen = {};
 //Object.defineProperties(module.exports.Screen,
+/*
 if (false) //not needed now that Screen doesn't call SDL_Init
 module.exports.Screen =
 new Proxy(function(){},
@@ -38,18 +40,17 @@ new Proxy(function(){},
                 return Reflect.get(target._inner, propkey, rcvr);
         }
     },
-/*
-    has: function(target, prop)
-    {
-        debug("has Screen.%s? %d", prop, typeof target[prop] != "undefined");
-        return typeof target[prop] != "undefined";
-    },
-    ownKeys: function(target)
-    {
-        debug("own keys");
-    },
-*/
+//    has: function(target, prop)
+//    {
+//        debug("has Screen.%s? %d", prop, typeof target[prop] != "undefined");
+//        return typeof target[prop] != "undefined";
+//    },
+//    ownKeys: function(target)
+//    {
+//        debug("own keys");
+//    },
 });
+*/
 /*
 Object.defineProperty(module.exports, "Screen",
 {
@@ -112,8 +113,8 @@ module.exports.UnivTypes = UnivTypes;
 module.exports.usleep = usleep;
 //attach config info as properties:
 //no need for callable functions (config won't change until reboot)
-//module.exports.Screen.gpio = toGPIO();
-//module.exports.Screen.isRPi = isRPi();
+module.exports.Screen.gpio = toGPIO();
+module.exports.Screen.isRPi = isRPi();
 //module.exports.GpuCanvas = GpuCanvas_shim;
 
 //module.exports.atomic =
@@ -200,8 +201,9 @@ module.exports.GpuCanvas =
 //class SharedCanvas extends SimplerCanvas
 new Proxy(function(){},
 {
-    construct: function GpuCanvas_ctor(target, args, newTarget) //ctor args: width, height, opts
+    construct: function GpuCanvas_jsctor(target, args, newTarget) //ctor args: width, height, opts
     {
+        const MAGIC = 0x1234beef; //used to detect if shared memory is valid
 //    if (!(this instanceof GpuCanvas_shim)) return new GpuCanvas_shim(title, width, height, opts); //convert factory call to class
 //console.log("args", JSON.stringify(args));
         const [width, height, opts] = args;
@@ -235,9 +237,8 @@ new Proxy(function(){},
         var shmkey = (opts || {}).SHM_KEY; //no default; //|| OPTS.SHM_KEY[1];
         if (typeof shmkey != "undefined") shmkey = +shmkey;
 //console.log("shm key-1 %s 0x%s", typeof shmkey, (shmkey || -1).toString(16));
-        var extralen32 = (opts || {}).EXTRA_LEN || OPTS.EXTRA_LEN[1] || 0; //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
-extralen32 += 10;
-        const buflen32 = THIS.width * THIS.height + RwlockOps.SIZE32 + extralen32;
+        const extralen32 = (opts || {}).EXTRA_LEN || OPTS.EXTRA_LEN[1] || 0; //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
+        const buflen32 = THIS.width * THIS.height + RwlockOps.SIZE32 + extralen32 + 1;
 //extralen += 10;
 //        const alloc = num_wkers? shmbuf: function(ignored, len) { return new Buffer(len); }
 //debug(`smh alloc: key 0x${shmkey.toString(16)} retry?`,  typeof cluster.isMaster, cluster.isMaster, typeof cluster.isWorker, cluster.isWorker);
@@ -249,23 +250,28 @@ extralen32 += 10;
 //        shmbuf.byteLength = shmbuf.length;
         /*if (num_wkers)*/ THIS.SHM_KEY = shmbuf.key;
 //console.log("shm key-2 0x%s", THIS.SHM_KEY.toString(16));
-        THIS.shmbuf = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset, RwlockOps.SIZE32 + extralen32); //shmbuf.byteLength / U32SIZE); //CAUTION: need ofs + len if buf is < 4K (due to shared node.js bufs?)
-        if (extralen32) THIS.extra = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + RwlockOps.SIZE32 * U32SIZE, extralen32); //THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen32);
-        THIS.pixels = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32) * U32SIZE, THIS.width * THIS.height); //THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen32);
-        debug(`GpuCanvas: ${THIS.prtype}, #bkg wkers ${num_wkers}, alloc ${commas(shmbuf.byteLength)} ofs ${shmbuf.byteOffset} bytes, ${commas(THIS.pixels.byteLength)} ofs ${shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32) * U32SIZE} for pixels, ${commas(RwlockOps.SIZE32 * U32SIZE)} ofs 0 for rwlock, ${commas(THIS.extra? THIS.extra.byteLength: 0)} ofs ${shmbuf.byteOffset + RwlockOps.SIZE32 * U32SIZE} for extra data`.blue_lt);
-//shm paranoid check:
-        if (cluster.isMaster)
+        THIS.shmbuf = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset, RwlockOps.SIZE32 + 1); //shmbuf.byteLength / U32SIZE); //CAUTION: need ofs + len if buf is < 4K (due to shared node.js bufs?)
+        if (extralen32) THIS.extra = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (RwlockOps.SIZE32 + 1) * U32SIZE, extralen32); //THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen32);
+        THIS.pixels = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32 + 1) * U32SIZE, THIS.width * THIS.height); //THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen32);
+        debug(`GpuCanvas: ${THIS.prtype}, #bkg wkers ${num_wkers}, alloc ${commas(shmbuf.byteLength)}'${shmbuf.byteOffset} bytes = ${4}'${shmbuf.byteOffset} for hdr + ${commas(RwlockOps.SIZE32 * U32SIZE)}'${shmbuf.byteOffset + 4} for rwlock + ${commas(THIS.extra? THIS.extra.byteLength: 0)}'${shmbuf.byteOffset + (RwlockOps.SIZE32 + 1) * U32SIZE} for extra data + ${commas(THIS.pixels.byteLength)}'${shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32 + 1) * U32SIZE} for pixels`.blue_lt);
+        if (cluster.isMaster) //initialize shm
         {
-            THIS.shmbuf.fill(0x12345678);
+            shmbuf["writeUInt32" + os.endianness()](MAGIC, 0); //write via buf, read via typedarray for dual check; //THIS.shmbuf[0] = MAGIC;
+            var errstr = num_wkers? rwlock(THIS.shmbuf, 1, RwlockOps.INIT): false; //use shm to allow access by multiple procs
+            if (errstr) throw `GpuCanvas: can't create shm lock: ${errstr}`.red_lt;
+            THIS.pixels.fill(BLACK); //start with all pixels dark
+            if (extralen32) THIS.extra.fill(0);
+//            THIS.shmbuf.fill(0x12345678);
 //debug("shmbuf fill-1: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
-            THIS.shmbuf[RwlockOps.SIZE32 + 1] = 0xdead;
-            THIS.shmbuf[RwlockOps.SIZE32 + 9] = 0xbeef;
+//            THIS.shmbuf[RwlockOps.SIZE32 + 1] = 0xdead;
+//            THIS.shmbuf[RwlockOps.SIZE32 + 9] = 0xbeef;
 //debug("shmbuf fill-2: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
 //debug("shmbuf fill-2: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0], THIS.shmbuf[RwlockOps.SIZE32 + 9]);
 //            AtomicAdd(THIS.extra, 0, 1);
 //            AtomicAdd(THIS.extra, 9, -1);
 //debug("shmbuf fill-3: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16));
         }
+//debug("'0 = %s", shmbuf.readUInt32LE(4 * (RwlockOps.SIZE32 + 1)).toString(16));
 //var buf = [];
 //for (var i = 0; i < THIS.shmbuf.length; ++i) if ((i == 56) || (i == 65) || (THIS.shmbuf[i] != 0x12345678)) buf.push(`${i} = 0x${THIS.shmbuf[i].toString(16)}`);
 //for (var i = 0; i < extralen; ++i) if (THIS.extra[i] != 0x12345678) buf.push(`${i} = 0x${THIS.extra[i].toString(16)}`);
@@ -273,16 +279,13 @@ extralen32 += 10;
 //debug(`${THIS.shmbuf[0].toString(16)} ${THIS.shmbuf[1].toString(16)} ${THIS.shmbuf[2].toString(16)} ${THIS.shmbuf[3].toString(16)}`)
 //const ok = ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef))? "bad": "good";
 //debug("shmbuf fill-2: ", ok, THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16));
-debug("here4", THIS.extra[1].toString(16), THIS.extra[9].toString(16), (THIS.extra[1] != 0xdead) || (THIS.extra[9] != 0xbeef));
-        if ((THIS.extra[1] != 0xdead) || (THIS.extra[9] != 0xbeef)) throw `${THIS.prtype} '${process.pid}' shm bad: 0x${THIS.extra[1].toString(16)} 0x${THIS.extra[9].toString(16)}`.red_lt;
+//shm paranoid check:
+debug("here4 0x%s", THIS.shmbuf[0].toString(16)); //extra[1].toString(16), THIS.extra[9].toString(16), (THIS.extra[1] != 0xdead) || (THIS.extra[9] != 0xbeef));
+        if (THIS.shmbuf[0] != MAGIC) throw `${THIS.prtype} '${process.pid}' shm hdr bad: 0x${THIS.shmbuf[0].toString(16)}, should be 0x{MAGIC.toString(16)}`.red_lt;
 //debug(`${THIS.shmbuf[224 + 0].toString(16)} ${THIS.shmbuf[224 + 1].toString(16)} ${THIS.shmbuf[224 + 2].toString(16)} ${THIS.shmbuf[224 + 3].toString(16)}`)
-
-        if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
-        if (cluster.isMaster) THIS.extra.fill(0);
+//        if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
+//        if (cluster.isMaster) THIS.extra.fill(0);
 debug("here5");
-//TODO: rwlock might not be needed
-        var errstr = (num_wkers && cluster.isMaster)? rwlock(THIS.shmbuf, 0, RwlockOps.INIT): false; //use shm to allow access by multiple procs
-        if (errstr) throw `GpuCanvas: can't create lock: ${errstr}`.red_lt;
 //        if (cluster.isMaster) { THIS.shmbuf[0] = 0xdead; THIS.shmbuf[1] = 0xbeef; }
 //        else if ((THIS.shmbuf[0] != 0xdead) || (THIS.shmbuf[1] != 0xbeef)) throw `shm bad: 0x${THIS.shmbuf[0].toString(16)} 0x${THIS.shmbuf[1].toString(16)}`.red_lt;
 //        if (cluster.isMaster) { THIS.pixels[0] = 0xdead; THIS.pixels[1] = 0xbeef; }
@@ -313,14 +316,17 @@ debug("here5");
 //    const super_paint = this.paint.bind(this);
 //SharedCanvas.prototype.paint =
         const want_progress = (opts || {}).SHOW_PROGRESS || OPTS.SHOW_PROGRESS[1];
-        THIS.paint = want_progress? paint_progress_method: paint_method;
+        THIS.paint = cluster.isMaster? (want_progress? paint_progress_method: paint_method): nop;
 
 //SharedCanvas.prototype.render_stats =
-        THIS.render_stats = render_stats_method;
+        THIS.render_stats = cluster.isMaster? render_stats_method: nop;
 
-        THIS.close = function() { if (num_wkers && cluster.isMaster) rwlock(THIS.shmbuf, 0, RwlockOps.DESTROY); }
+//don't really need to do this; shm seg container will be reclaimed anyway
+//        THIS.close = (num_wkers && cluster.isMaster)? function() { rwlock(THIS.shmbuf, 1, RwlockOps.DESTROY); }: nop;
 
         return THIS;
+
+        function nop() {} //dummy method for special methods on non-master copy
     }
 });
 
@@ -339,7 +345,7 @@ function atomic_method(func, args)
 //read/write lock:
 function lock_method(wr)
 {
-    var errstr = rwlock(this.shmbuf, 0, (wr === true)? RwlockOps.WRLOCK: (wr === false)? RwlockOps.RDLOCK: RwlockOps.UNLOCK);
+    var errstr = rwlock(this.shmbuf, 1, (wr === true)? RwlockOps.WRLOCK: (wr === false)? RwlockOps.RDLOCK: RwlockOps.UNLOCK);
     if (errstr) throw `GpuCanvas: un/lock failed: ${errstr}`.red_lt;
 
 //    const {caller/*, calledfrom, shortname*/} = require("./demos/shared/caller");
