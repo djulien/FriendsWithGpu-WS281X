@@ -29,25 +29,6 @@ const {Screen, GpuCanvas/*, cluster, AtomicAdd*/} = require('gpu-friends-ws281x'
 //console.log(JSON.stringify(Screen));
 //process.exit();
 
-var BkgWker = {sync: function() { return false; }, close: function(){}, };
-var canvas = {};
-
-console.log("elapsed-1", elapsed());
-step(function*()
-{
-    if (cluster.isMaster) elapsed(0);
-    wait(1);
-    console.log("elapsed-2", elapsed());
-    wait(2);
-    if (cluster.isMaster) cluster.fork();
-    wait(3);
-    console.log("elapsed-3", elapsed());
-    process.exit(0);
-});
-console.log("elapsed-4", elapsed());
-function ignore()
-{
-
 /*
 const {shmbuf} = require('gpu-friends-ws281x');
 const shmkey = 0x123456;
@@ -113,7 +94,7 @@ const OPTS =
 const NUM_UNIV = 24; //#universes; can't exceed #VGA output pins (24) without external mux
 const UNIV_LEN = Screen.gpio? Screen.height: 30; //universe length; can't exceed #display lines; show larger pixels in dev mode
 const WKER_UNIV = OPTS.NUM_WKERS? Math.ceil(NUM_UNIV / OPTS.NUM_WKERS): NUM_UNIV; //#univ to render by each bkg wker
-debug("Screen %d x %d, refresh %d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.width, Screen.height, trunc(Screen.fps, 10), Screen.isRPi, Screen.gpio, process.env.NODE_ENV || "(dev)");
+debug("Screen %d x %d @%d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.width, Screen.height, trunc(Screen.fps, 10), Screen.isRPi, Screen.gpio, process.env.NODE_ENV || "(dev)");
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //GPU canvas:
@@ -274,7 +255,7 @@ function render_bkgwker(frnum)
 //    var pending = AtomicAdd(canvas.extra, 0, 1) + 1; //keep track of #outstanding render req
 //    debug(`render: atomic inc (${pending} now pending)`.blue_lt);
     var pending = canvas.atomic(Pending, +1, "render"); //keep track of #outstanding render req
-debug("cur val: %d", canvas.extra[0]);
+//debug("cur val: %d", canvas.extra[0]);
     this.wker.send({render: true, frnum});
 //    var reply = yield;
 //    debug(`got reply ${JSON.stringify(reply)} from bkg wker`.blue_lt);
@@ -300,12 +281,12 @@ function sync_bkgwker()
 //main thread sent a wakeup msg:
     process.on('message', function(msg)
     {
-        debug("cur val: %d", canvas.extra[0]);
+//        debug("cur val: %d", canvas.extra[0]);
         var remaining = canvas.atomic(Pending, 0, "rcv msg"); //AtomicAdd(canvas.extra, 0, 0);
-        if (!remaining) throw "main not expecting a response".red_lt;
         debug(`${canvas.prtype} '${process.pid}' rcv msg ${JSON.stringify(msg)}, atomic chk ${remaining} still pending`.blue_lt);
         if (msg.render)
         {
+            if (!remaining) throw "main not expecting a response".red_lt;
             debug(`BkgWker '${process.pid}' render req fr# ${msg.frnum}, ${models.length} model(s)`.blue_lt);
 //            models.renderAll(msg.frnum);
 //            process.send({reply: frnum});
@@ -315,6 +296,7 @@ function sync_bkgwker()
         }
         if (msg.quit)
         {
+            if (remaining) throw "main expecting a response".red_lt;
             debug(`BkgWker '${process.pid}' quit`.blue_lt);
   //          process.send({quite: true});
             process.exit(0);
@@ -455,13 +437,12 @@ step(function*() //onexit)
     if (wait.stats) wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
     debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: ${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle: ${trunc(idle_time, 10)} msec (${trunc(100 * idle_time / frtime, 10)}%), ${frnum} frames`.blue_lt);
     cpu = process.cpuUsage(cpu);
-    debug(`cpu usage: ${JSON.stringify(cpu)} usec, accounts for ${trunc((cpu.user + cpu.system) / 1e4 / canvas.elapsed, 10)}% of elapsed`.blue_lt);
+    debug(`cpu usage: ${JSON.stringify(cpu)} usec = ${trunc((cpu.user + cpu.system) / 1e4 / canvas.elapsed, 10)}% of elapsed`.blue_lt);
     debug(`end: ${canvas.prtype} '${process.pid}' ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
     yield wait(PAUSE); //pause to show screen stats longer
     canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
 //    canvas.close();
 });
-}//HERE
 
 
 //stepper function:

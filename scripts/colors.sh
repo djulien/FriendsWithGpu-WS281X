@@ -10,6 +10,6 @@ BLUE='\e[1;34m' #`tput setaf 4`
 PINK='\e[1;35m' #`tput setaf 5`
 CYAN='\e[1;36m' #`tput setaf 6`
 GRAY='\e[0;37m'
-NORMAL='\e[0m' #`tput sgr0`
+ENDCOLOR='\e[0m' #`tput sgr0`
 
 #eof#

@@ -35,10 +35,10 @@ const elapsed =
 module.exports.elapsed =
 function elapsed(new_epoch)
 {
-    if (module.exports.shmkey && !elapsed.shmbuf) //sync across processes
-        elapsed.shmbuf = shm.create(1, "Float64Array", module.exports.shmkey);
+    if (!elapsed.shmbuf) //set up shared memory for sync across processes
+        elapsed.shmbuf = module.exports.shmkey? shm.get(module.exports.shmkey, "Float64Array") || shm.create(1, "Float64Array", module.exports.shmkey): new FloatArray(1);
 //        elapsed.shmbuf[0] = 0; //caller needs to do this
-    if (arguments.length) elapsed.shmbuf[0] = now_sec() - (new_epoch || 0); //set new epoch if passed; 0 = now; < 0 for past; > 0 for future
+    if (arguments.length || !elapsed.shmbuf[0]) elapsed.shmbuf[0] = now_sec() - (new_epoch || 0); //set new epoch if passed; 0 = now; < 0 for past; > 0 for future
     return now_sec() - elapsed.shmbuf[0]; //(elapsed.epoch || 0);
 }
 

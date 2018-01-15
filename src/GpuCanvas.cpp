@@ -1436,8 +1436,8 @@ public:
         if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_LT "Bad number of universes: %d (should be 1..%d)" ENDCOLOR, num_univ, WS281X_BITS));
         if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_LT "Bad universe size: %d (should be 1..%d)" ENDCOLOR, univ_len, wndh));
 //NOTE: to avoid fractional pixels, screen/window width should be a multiple of 71, height should be a multiple of univ_len
-        if (wndw % (TXR_WIDTH - 1)) myprintf(1, YELLOW_LT "Window width %d is not a multiple of txr width %d: check for correct edges" ENDCOLOR, wndw, TXR_WIDTH - 1);
-        if (wndh % univ_len) myprintf(1, YELLOW_LT "Window height %d is not a multiple of univ len %d: check for correct edges" ENDCOLOR, wndh, univ_len);
+        if (wndw % (TXR_WIDTH - 1)) myprintf(1, YELLOW_LT "Window width %d !multiple of txr width %d: check for correct edges" ENDCOLOR, wndw, TXR_WIDTH - 1);
+        if (wndh % univ_len) myprintf(1, YELLOW_LT "Window height %d !multiple of univ len %d: check for correct edges" ENDCOLOR, wndh, univ_len);
 
 #ifdef MULTI_THREADED
 //create memory buf to hold pixel data:
@@ -2495,7 +2495,7 @@ private:
         double rowtime = (double)scfg.mode_line.htotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
         double frametime = (double)scfg.mode_line.htotal * scfg.mode_line.vtotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
 
-        myprintf(28, BLUE_LT "Screen[%d/%d] timing: %d x %d, pxclk %2.1f MHz, hblank %d+%d+%d = %d (%2.1f%%), vblank = %d+%d+%d = %d (%2.1f%%), row time %2.1f usec, frame time %2.1f msec (fps %2.1f)" ENDCOLOR, i, num_screens,
+        myprintf(28, BLUE_LT "Screen[%d/%d] timing: %d x %d, pxclk %2.1f MHz, hblank %d+%d+%d = %d (%2.1f%%), vblank = %d+%d+%d = %d (%2.1f%%), row %2.1f usec, frame %2.1f msec (fps %2.1f)" ENDCOLOR, i, num_screens,
             scfg.mode_line.hdisplay, scfg.mode_line.vdisplay, (double)scfg.dot_clock / 1000, //vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, vinfo.pixclock,
             scfg.mode_line.hsyncstart - scfg.mode_line.hdisplay, scfg.mode_line.hsyncend - scfg.mode_line.hsyncstart, scfg.mode_line.htotal - scfg.mode_line.hsyncend, scfg.mode_line.htotal - scfg.mode_line.hdisplay, (double)100 * (scfg.mode_line.htotal - scfg.mode_line.hdisplay) / scfg.mode_line.htotal, //vinfo.left_margin, vinfo.right_margin, vinfo.hsync_len, 
             scfg.mode_line.vsyncstart - scfg.mode_line.vdisplay, scfg.mode_line.vsyncend - scfg.mode_line.vsyncstart, scfg.mode_line.vtotal - scfg.mode_line.vsyncend, scfg.mode_line.vtotal - scfg.mode_line.vdisplay, (double)100 * (scfg.mode_line.vtotal - scfg.mode_line.vdisplay) / scfg.mode_line.vtotal, //vinfo.upper_margin, vinfo.lower_margin, vinfo.vsync_len,
@@ -3313,7 +3313,7 @@ void GpuCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
 void GpuCanvas_js::Quit(void* ignored)
 {
 //    GpuCanvas::Quit();
-    myprintf(22, BLUE_LT "js cleanup: %d instances to destroy" ENDCOLOR, all.size());
+    myprintf(22, BLUE_LT "js cleanup: %d instance(s) to destroy" ENDCOLOR, all.size());
 //    while (all.size())
     for (int i = 0; i < all.size(); ++i)
     {
@@ -3322,9 +3322,9 @@ void GpuCanvas_js::Quit(void* ignored)
 //IsNearDeath Checks if the handle holds the only reference to an object. 
 //so it looks like the wrapped object pointer must be empty to avoid this error
 //New() above did a Wrap() which did a MakeWeak(), which does a MarkIndependent()
-        all[i]->inner = NULL; //call GpuCanvas dtor, which will remove itself from list
+        all[i]->inner = NULL; //call GpuCanvas dtor to free up SDL resources
     }
-    myprintf(22, BLUE_LT "js cleanup: %d instances remaining" ENDCOLOR, all.size());
+//    myprintf(22, BLUE_LT "js cleanup: %d instance(s) remaining" ENDCOLOR, all.size());
 }
 
 
