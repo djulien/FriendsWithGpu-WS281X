@@ -14,7 +14,6 @@ const shm = require('shm-typed-array');
 //const bindings = require('bindings');
 const {debug} = require('./demos/shared/debug');
 const {Screen, GpuCanvas, UnivTypes, /*shmbuf, AtomicAdd,*/ usleep, RwlockOps, rwlock} = require('./build/Release/gpu-canvas.node'); //bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
-debug("TODO: retry DIY shm".red_lt);
 //lazy-load Screen props to avoid unneeded SDL inits:
 //module.exports.Screen = {};
 //Object.defineProperties(module.exports.Screen,

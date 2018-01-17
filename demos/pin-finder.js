@@ -18,12 +18,12 @@ require('colors').enabled = true; //for console output (all threads)
 //const os = require('os');
 //const pathlib = require('path');
 //const {blocking, wait} = require('blocking-style');
-const cluster = require('cluster');
+//const cluster = require('cluster');
 //const JSON = require('circular-json'); //CAUTION: replace std JSON with circular-safe version
-const {debug, elapsed} = require('./shared/debug');
+const {debug/*, elapsed*/} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
-const {Screen, GpuCanvas/*, cluster, AtomicAdd*/} = require('gpu-friends-ws281x');
+const {Screen, GpuCanvas/*, elapsed, cluster, AtomicAdd*/} = require('gpu-friends-ws281x');
 //const EPOCH = cluster.isWorker? elapsed(+process.env.EPOCH): elapsed(); //use consistent time base for logging
 //debug(`epoch ${EPOCH}, master? ${cluster.isMaster}`.blue_lt); //TODO: fix shared time base
 //console.log(JSON.stringify(Screen));
@@ -60,9 +60,9 @@ process.exit();
 /// Config settings:
 //
 
-const DURATION = 5; //30; //10; //60; //how long to run (sec)
+const DURATION = 60-55; //30; //10; //60; //how long to run (sec)
 const PAUSE = 5; //how long to pause at end
-const FPS = 30/15; //2; //animation speed (max depends on screen settings)
+const FPS = 30-28; //2; //animation speed (max depends on screen settings)
 
 
 //display settings:
@@ -72,14 +72,14 @@ const OPTS =
 //    SHOW_SHSRC: true, //show shader source code
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
-//    SHOW_PROGRESS: true, //show progress bar at bottom of screen
+    SHOW_PROGRESS: true, //show progress bar at bottom of screen
     DEV_MODE: true, //disable WS281X formatting on screen (for demo purposes)
 //    WS281X_DEBUG: true, //show timing debug info
 //    UNIV_TYPE: UnivTypes.CHPLEX_SSR,
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
     TITLE: "PinFinder",
-    EXTRA_LEN: 1,
-    SHM_KEY: process.env.SHM_KEY,
+//    EXTRA_LEN: 1 + this.NUM_WKERS,
+//    SHM_KEY: process.env.SHM_KEY,
 //choose one of options below for performance tuning:
 //    NUM_WKERS: 0, //whole-house fg render
     NUM_WKERS: 1, //whole-house bg render
@@ -116,14 +116,16 @@ const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 //
 
 
-const models = []; //list of models/effects to be rendered by *this* thread
+const models = []; //list of models/effects to be rendered
 
 //TODO: use WKER_UNIV here
 if (OPTS.NUM_WKERs > 1) //split up models across multiple bkg threads
     for (var u = 0; u < NUM_UNIV; ++u)
-        models.push((canvas.WKER_ID == u >> 3)? new PinFinder({univ_num: u, name: `Univ#${u}`}): canvas.isMaster? new BkgWker(u >> 3): null);
+//        models.push((canvas.WKER_ID == u >> 3)? new PinFinder({univ_num: u, name: `Univ#${u}`}): canvas.isMaster? new BkgWker(u >> 3): null);
+        models.push(new PinFinder({univ_num: u, name: `Univ#${u}`, wker: Math.floor(u / WKER_UNIV)}));
 else //whole-house on main or bkg thread
-    models.push(/*new*/ BkgWker(/*new*/ PinFinder({name: "WholeHouse"})));
+//    models.push(/*new*/ BkgWker(/*new*/ PinFinder({name: "WholeHouse"})));
+    models.push(new PinFinder({name: "WholeHouse", wker: OPTS.NUM_WKERs? 0: undefined}));
 //    models.push((!OPTS.NUM_WKERS || canvas.isWorker)? new PinFinder(): new BkgWker());
 debug(`${canvas.prtype}# ${canvas.WKER_ID} '${process.pid}' has ${models.length} model(s) to render: ${models.map(m => { return m.name || m.constructor.name}).join(",")}`.blue_lt);
 
@@ -152,17 +154,18 @@ const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
 //NOTE: use function ctor instead of ES6 class syntax to allow hoisting
 function PinFinder(opts)
 {
-    if (!(this instanceof PinFinder))
-    {
-        if (OPTS.NUM_WKERS && canvas.isMaster) return opts; //don't need real model; return placeholder
-        return new PinFinder(opts); //{univ_num}
-    }
-    if (isNaN(++PinFinder.count)) PinFinder.count = 1;
+    if (!(this instanceof PinFinder)) return new PinFinder(opts); //{univ_num, name, wker}
+//    {
+//        if (OPTS.NUM_WKERS && canvas.isMaster) return opts; //don't need real model; return placeholder
+//    }
+    if (isNaN(++PinFinder.count)) PinFinder.count = 1; //put this before affinity check so model names are all unique (easier debug)
     this.name = (opts || {}).name || "PinFinder#" + PinFinder.count;
+    this.affinity = (typeof (opts || {}).wker != "undefined")? opts.wker: -1; //which thread to run on
+    if (OPTS.NUM_WKERs && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; cancel init
     const whole_house = (typeof (opts || {}).univ_num == "undefined");
 //        this.univ_num = univ_num; //stofs = univ_num * univ_len; //0..23 * screen height (screen column)
-    this.begin_univ = !whole_house? opts.univ_num: 0;
     this.end_univ = !whole_house? opts.univ_num + 1: canvas.width; //single univ vs. whole-house
+    this.begin_univ = !whole_house? opts.univ_num: 0;
 //        this.pixels = canvas.pixels.slice(begin_univ * UNIV_LEN, end_univ * UNIV_LEN); //pixels for this/these universe(s) (screen column(s))
 //        this.repeat = 9 - (univ & 7); //patterm repeat factor; 9..2
 //        this.height = univ_len; //universe length (screen height)
@@ -193,161 +196,6 @@ function render(frnum)
 }
 
 
-////////////////////////////TODO: move to index.js
-//bkg wker:
-//treated as a pseudo-model by main thread
-//NOTE: use function ctor instead of ES6 class syntax to allow hoisting
-function BkgWker(opts)
-{
-    if (!(this instanceof BkgWker))
-    {
-        if (OPTS.NUM_WKERS && canvas.isMaster) return new BkgWker(opts);
-        return opts; //don't need bkg wker; use model as-is
-    }
-    if (isNaN(++BkgWker.count)) BkgWker.count = 1;
-    this.name = "BkgWker" + ((opts || {}).name? `-${opts.name}`: `#${BkgWker.count}`);
-//    if (!BkgWker.all) BkgWker.all = [];
-    canvas.atomic(Pending, +1, "fork"); //keep track of #pending bkg wker acks
-//debug("fork: shm key 0x%s", canvas.SHM_KEY.toString(16))
-    this.wker = cluster.fork({WKER_ID: Object.keys(cluster.workers).length, SHM_KEY: canvas.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV}); //BkgWker.all.length});
-//    if (all.id) return null; //already have this wker
-//    BkgWker.all.push(this);
-//    cluster.on('message', (wker, msg, handle) =>
-    this.wker.on('message', (msg) => //TODO: not needed?
-    {
-//        debug(`got reply ${JSON.stringify(msg)} from bkg wker`.blue_lt);
-//no                step(); //wake fg thread
-//send msgs back to caller:
-//            if (msg.mp3done) done_cb.apply(null, msg.mp3done);
-//            if (msg.mp3progess) progress_cb.apply(null, msg.mp3progress);
-        debug(`${canvas.prtype} '${process.pid}' got msg ${JSON.stringify(msg)}`.blue_lt);
-        if (msg.ack)
-        {
-            canvas.atomic(Pending, -1, "fork"); //update #outstanding acks from bkg wkers
-//            var remaining = AtomicAdd(canvas.extra, 0, -1) - 1; 
-//            debug(`fork: atomic dec (${remaining} still pending)`.blue_lt);
-            /*if (!remaining)*/ step(); //NOTE: don't need to check remaining here; step() will do it
-            return;
-        }
-//        if (AtomicAdd(canvas.extra, 0, -1) != 1) return; //more wkers yet to respond
-//        step.retval = msg;
-//        step(); //wake up caller after all outstanding render req completed
-        throw `Unhandled msg: ${JSON.stringify(msg)}`.red_lt;
-    });
-//    cluster.on('exit', (wker, code, signal) =>
-    this.wker.on('exit', (code, signal) =>
-    {
-        console.log(`${canvas.prtype} '${process.pid}' died (${code || signal || "unknown reason"})`.red_lt);
-//        step.retval = {died: process.pid};
-//        step();
-//TODO: restart proc? state will be gone, might be problematic
-    });
-}
-//ipc render async
-BkgWker.prototype.render =
-function render_bkgwker(frnum)
-{
-//    models.forEach((model) => { model.render(frnum); });
-//        all.forEach(wker => wker.render_req(frnum));
-//        all.forEach(wker => wker.render_wait());
-//if (canvas.isWorker)
-//    Object.keys(cluster.workers).forEach(wkid =>
-//    var pending = AtomicAdd(canvas.extra, 0, 1) + 1; //keep track of #outstanding render req
-//    debug(`render: atomic inc (${pending} now pending)`.blue_lt);
-    var pending = canvas.atomic(Pending, +1, "render"); //keep track of #outstanding render req
-//debug("cur val: %d", canvas.extra[0]);
-    this.wker.send({render: true, frnum});
-//    var reply = yield;
-//    debug(`got reply ${JSON.stringify(reply)} from bkg wker`.blue_lt);
-}
-//coordinate bkg wkers with main thread:
-const sync_bkgwker =
-BkgWker.sync =
-function sync_bkgwker()
-{
-    if (canvas.isMaster) //all wkers should have finished before main thread starts next frame
-    {
-//        var remaining = AtomicAdd(canvas.extra, 0, 0);
-//        debug(`step-gate: atomic get (${remaining} still pending)`.blue_lt);
-//console.log("here3");
-        var remaining = canvas.atomic(Pending, 0, "step-gate");
-//        if (remaining) throw `step: ${remaining} render req still outstanding`.red_lt;
-//console.log("here4", remaining, !remaining);
-        return !remaining;
-    }
-    if (sync_bkgwker.init) return true;
-    process.send({ack: true});
-    debug(`Worker '${process.pid}' sync-up: ack sent`.blue_lt);
-//main thread sent a wakeup msg:
-    process.on('message', function(msg)
-    {
-//        debug("cur val: %d", canvas.extra[0]);
-        var remaining = canvas.atomic(Pending, 0, "rcv msg"); //AtomicAdd(canvas.extra, 0, 0);
-        debug(`${canvas.prtype} '${process.pid}' rcv msg ${JSON.stringify(msg)}, atomic chk ${remaining} still pending`.blue_lt);
-        if (msg.render)
-        {
-            if (!remaining) throw "main not expecting a response".red_lt;
-            debug(`BkgWker '${process.pid}' render req fr# ${msg.frnum}, ${models.length} model(s)`.blue_lt);
-//            models.renderAll(msg.frnum);
-//            process.send({reply: frnum});
-            if (msg.frnum != (wait_bkgwker.frnum || 0)) throw `BkgWker '${process.pid}': out of sync: at frame# ${wait.frnum}, but main thread wants frame# ${msg.frnum}`.red_lt;
-            step(); //let caller run
-            return;
-        }
-        if (msg.quit)
-        {
-            if (remaining) throw "main expecting a response".red_lt;
-            debug(`BkgWker '${process.pid}' quit`.blue_lt);
-  //          process.send({quite: true});
-            process.exit(0);
-            return;
-        }
-        throw `unknown msg type: ${JSON.stringify(msg)}`.red_lt;
-    });
-    sync_bkgwker.init = true;
-    return false; //don't step caller until ack comes back
-}
-const wait_bkgwker =
-BkgWker.wait =
-function wait_bkgwker(frnum)
-{
-    if (!canvas.isWorker) return;
-//    var remaining = AtomicAdd(canvas.extra, 0, -1) - 1; //update #outstanding render req
-//    debug(`render: atomic dec (${remaining} still pending)`.blue_lt);
-    canvas.atomic(Pending, -1, "render");
-    wait_bkgwker.frnum = frnum; //safety check: remember which frame is next
-//    return; //main thread will send wakeup msg
-}
-const close_bkgwker =
-BkgWker.close = 
-function close_bkgwker()
-{
-    if (!canvas.isMaster) return;
-    for (var w in cluster.workers)
-        cluster.workers[w].send({quit: true});
-//    for (var w in cluster.workers)
-//        yield;
-}
-
-
-//update pending count:
-//NOTE: this is atomic (thread-safe)
-function Pending(adj, desc)
-{
-    const {caller/*, calledfrom, shortname*/} = require("./shared/caller");
-    const from = caller(-2).replace("@pin-finder:", "");
-//    var pending = AtomicAdd(canvas.extra, 0, adj) + adj;
-    var pending = canvas.extra[0];
-    canvas.extra[0] += adj;
-    var newval = canvas.extra[0];
-//    var paranoid = AtomicAdd(canvas.extra, 0, 0); //NOTE: not guaranteed, but only a problem if other threads are updating at same time
-//    if (paranoid != pending) throw `atomic ${desc}: is ${paranoid}, should be ${pending}`.red_lt;
-    if ((pending < 0) || (newval < 0)) throw "underflow: lost track of pending count".red_lt;
-    debug(`${canvas.prtype} ${desc} (from ${from}): atomic pending ${adj? "now": "still"} = ${pending} + ${adj} = ${newval}`.blue_lt);
-    return pending; //old value
-}
-
-
 /*
 //verify alignment of corners:
 function calibrate()
@@ -368,9 +216,10 @@ function calibrate()
 /// Main logic (synchronous coding style to simplify timing logic):
 //
 
-step(function*() //onexit)
+canvas.playback =
+function* playback() //onexit)
 {
-    debug(`begin: ${canvas.prtype} '${process.pid}' startup took %d sec, now run fx for %d sec`.green_lt, trunc(process.uptime(), 10), DURATION);
+    debug(`begin: startup took %d sec, now run fx for %d sec`.green_lt, trunc(process.uptime(), 10), DURATION);
     var render_time = 0, idle_time = 0;
     var cpu = process.cpuUsage();
 //    onexit(BkgWker.closeAll);
@@ -382,7 +231,7 @@ step(function*() //onexit)
     canvas.duration = DURATION; //set progress bar limit
 //    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
 //    var hd = new memwatch.HeapDiff();
-    for (var frnum = 0; canvas.elapsed <= DURATION; ++frnum)
+    for (var frnum = 1; canvas.elapsed <= DURATION; ++frnum)
     {
         render_time -= canvas.elapsed; //exclude non-rendering (paint + V-sync wait) time
 //        models.renderAll(canvas, frnum); //forEach((model) => { model.render(frnum); });
@@ -423,7 +272,7 @@ step(function*() //onexit)
 //        yield wait(started + (t + 1) / FPS - now_sec()); //avoid cumulative timing errors
         idle_time -= canvas.elapsed; //exclude non-waiting time
 //bkg wker: set reply status for main (atomic dec); main thread: sync wait and check all ipc reply rcvd
-        yield wait((frnum + 1) / FPS - canvas.elapsed, frnum + 1); //throttle to target frame rate; avoid cumulative timing errors
+        yield wait(frnum / FPS - canvas.elapsed, frnum); //throttle to target frame rate; avoid cumulative timing errors
         idle_time += canvas.elapsed;
 //bkg wker: noop - already waited for ipc req (rdlock?); main thread: gpu update
         canvas.paint();
@@ -442,9 +291,10 @@ step(function*() //onexit)
     yield wait(PAUSE); //pause to show screen stats longer
     canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
 //    canvas.close();
-});
+};
 
 
+////////////////////////////////////////////////////////////////////////////////
 //stepper function:
 //NOTE: only steps generator function 1 step; subsequent events must also caller step to finish executing generator
 function step(gen)
@@ -505,7 +355,7 @@ function wait(delay, nxtfr)
     }; //{[overdue]: 1, [!overdue]: 0}; //false: 0, true: 1]: [1, 0]; //[!overdue, overdue];
     if ((wait.stats[overdue]++ < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
 //    {
-        debug("wait[%d] %d msec"[overdue? "red_lt": "blue_lt"], wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
+        debug(`${canvas.prtype} wait[%d] %d msec`[overdue? "red_lt": "blue_lt"], wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
 //        if (isNaN(++wait.counts[overdue])) wait.counts = [!overdue, overdue];
 //    }
     return !overdue? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
@@ -516,6 +366,164 @@ function wait(delay, nxtfr)
 //if (++x.z > 10) console.log("yes-2");
 //else console.log("no-2");
 //process.exit();
+
+
+////////////////////////////TODO: move to index.js
+//bkg wker:
+//treated as a pseudo-model by main thread
+//NOTE: use function ctor instead of ES6 class syntax to allow hoisting
+function BkgWker(opts)
+{
+    if (!(this instanceof BkgWker))
+    {
+        if (OPTS.NUM_WKERS && canvas.isMaster) return new BkgWker(opts);
+        return opts; //don't need bkg wker; use model as-is
+    }
+    if (isNaN(++BkgWker.count)) BkgWker.count = 1;
+    this.name = "BkgWker" + ((opts || {}).name? `-${opts.name}`: `#${BkgWker.count}`);
+//    if (!BkgWker.all) BkgWker.all = [];
+    canvas.atomic(Pending, +1, "fork"); //keep track of #pending bkg wker acks
+//debug("fork: shm key 0x%s", canvas.SHM_KEY.toString(16))
+    this.wker = cluster.fork({WKER_ID: Object.keys(cluster.workers).length, SHM_KEY: canvas.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
+//    if (all.id) return null; //already have this wker
+//    BkgWker.all.push(this);
+//    cluster.on('message', (wker, msg, handle) =>
+    this.wker.on('message', (msg) => //TODO: not needed?
+    {
+//        debug(`got reply ${JSON.stringify(msg)} from bkg wker`.blue_lt);
+//no                step(); //wake fg thread
+//send msgs back to caller:
+//            if (msg.mp3done) done_cb.apply(null, msg.mp3done);
+//            if (msg.mp3progess) progress_cb.apply(null, msg.mp3progress);
+        debug(`${canvas.prtype} '${process.pid}' got msg ${JSON.stringify(msg)}`.blue_lt);
+        if (msg.ack)
+        {
+            canvas.atomic(Pending, -1, "fork"); //update #outstanding acks from bkg wkers
+//            var remaining = AtomicAdd(canvas.extra, 0, -1) - 1; 
+//            debug(`fork: atomic dec (${remaining} still pending)`.blue_lt);
+            /*if (!remaining)*/ step(); //NOTE: don't need to check remaining here; step() will do it
+            return;
+        }
+//        if (AtomicAdd(canvas.extra, 0, -1) != 1) return; //more wkers yet to respond
+//        step.retval = msg;
+//        step(); //wake up caller after all outstanding render req completed
+        throw `Unhandled msg: ${JSON.stringify(msg)}`.red_lt;
+    });
+//    cluster.on('exit', (wker, code, signal) =>
+    this.wker.on('exit', (code, signal) =>
+    {
+        console.log(`${canvas.prtype} '${process.pid}' died (${code || signal || "unknown reason"})`.red_lt);
+//        step.retval = {died: process.pid};
+//        step();
+//TODO: restart proc? state will be gone, might be problematic
+    });
+}
+//ipc render async
+BkgWker.prototype.render =
+function render_bkgwker(frnum)
+{
+//    models.forEach((model) => { model.render(frnum); });
+//        all.forEach(wker => wker.render_req(frnum));
+//        all.forEach(wker => wker.render_wait());
+//if (canvas.isWorker)
+//    Object.keys(cluster.workers).forEach(wkid =>
+//    var pending = AtomicAdd(canvas.extra, 0, 1) + 1; //keep track of #outstanding render req
+//    debug(`render: atomic inc (${pending} now pending)`.blue_lt);
+    canvas.atomic(Pending, +1); //, "render"); //keep track of #outstanding render req
+//debug("cur val: %d", canvas.extra[0]);
+    this.wker.send({render: true, frnum});
+//    var reply = yield;
+//    debug(`got reply ${JSON.stringify(reply)} from bkg wker`.blue_lt);
+}
+//coordinate bkg wkers with main thread:
+const sync_bkgwker =
+BkgWker.sync =
+function sync_bkgwker()
+{
+    if (canvas.isMaster) //all wkers should have finished before main thread starts next frame
+    {
+//        var remaining = AtomicAdd(canvas.extra, 0, 0);
+//        debug(`step-gate: atomic get (${remaining} still pending)`.blue_lt);
+//console.log("here3");
+        var remaining = canvas.atomic(Pending, 0, "step-gate");
+//        if (remaining) throw `step: ${remaining} render req still outstanding`.red_lt;
+//console.log("here4", remaining, !remaining);
+        return !remaining;
+    }
+    if (sync_bkgwker.init) return true;
+    process.send({ack: true});
+    debug(`Worker '${process.pid}' sync-up: ack sent`.blue_lt);
+//main thread sent a wakeup msg:
+    process.on('message', function(msg)
+    {
+//        debug("cur val: %d", canvas.extra[0]);
+        var remaining = canvas.atomic(Pending, 0); //, "rcv msg"); //AtomicAdd(canvas.extra, 0, 0);
+//        debug(`${canvas.prtype} '${process.pid}' rcv msg ${JSON.stringify(msg)}, atomic chk ${remaining} still pending`.blue_lt);
+        if (msg.render)
+        {
+            if (!remaining) throw "render msg: main not expecting a response".red_lt;
+            debug(`BkgWker '${process.pid}' render req fr# ${msg.frnum}, ${models.length} model(s)`.blue_lt);
+//            models.renderAll(msg.frnum);
+//            process.send({reply: frnum});
+            if (msg.frnum != (wait_bkgwker.frnum || 0)) throw `BkgWker '${process.pid}': out of sync: at frame# ${wait.frnum}, but main thread wants frame# ${msg.frnum}`.red_lt;
+            step(); //let caller run
+            return;
+        }
+        if (msg.quit)
+        {
+            if (remaining) throw `quit msg: main expecting a response (${remaining} pending)`.red_lt;
+            debug(`BkgWker '${process.pid}' quit`.blue_lt);
+  //          process.send({quite: true});
+            process.exit(0);
+            return;
+        }
+        throw `unknown msg type (pending ${remaining}): ${JSON.stringify(msg)}`.red_lt;
+    });
+    sync_bkgwker.init = true;
+    return false; //don't step caller until ack comes back
+}
+const wait_bkgwker =
+BkgWker.wait =
+function wait_bkgwker(frnum)
+{
+    if (!canvas.isWorker) return;
+//    var remaining = AtomicAdd(canvas.extra, 0, -1) - 1; //update #outstanding render req
+//    debug(`render: atomic dec (${remaining} still pending)`.blue_lt);
+    canvas.atomic(Pending, -1, "render");
+    wait_bkgwker.frnum = frnum; //safety check: remember which frame is next
+//    return; //main thread will send wakeup msg
+}
+const close_bkgwker =
+BkgWker.close = 
+function close_bkgwker()
+{
+    if (!canvas.isMaster) return;
+    for (var w in cluster.workers)
+        cluster.workers[w].send({quit: true});
+//    for (var w in cluster.workers)
+//        yield;
+}
+
+
+//update pending count:
+//NOTE: this is atomic (thread-safe)
+function Pending(adj, desc)
+{
+//    var pending = AtomicAdd(canvas.extra, 0, adj) + adj;
+    var pending = canvas.extra[0];
+    canvas.extra[0] += adj;
+    var newval = canvas.extra[0];
+//    var paranoid = AtomicAdd(canvas.extra, 0, 0); //NOTE: not guaranteed, but only a problem if other threads are updating at same time
+//    if (paranoid != pending) throw `atomic ${desc}: is ${paranoid}, should be ${pending}`.red_lt;
+    if (desc || (pending < 0) || (newval < 0)) //debug info
+    {
+        const {caller/*, calledfrom, shortname*/} = require("./shared/caller");
+        const from = caller(-2).replace("@pin-finder:", "");
+        if ((pending < 0) || (newval < 0)) throw `underflow (from ${from}): lost track of pending count`.red_lt;
+        debug(`${canvas.prtype} ${desc} (from ${from}): atomic pending ${adj? "now": "still"} = ${pending} + ${adj} = ${newval}`.blue_lt);
+    }
+    return pending; //old value
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -570,3 +578,35 @@ function trunc(val, digits)
 //}
 
 //eof
+{GpuCanvas, wait, elapsed} = require(); // !CLUSTER; use web-worker or
+child_proc.fork instead
+
+const opts =
+{
+    num_wkers = 0, 1, ...
+};
+const canvas = new GpuCanvas(w, h, opts) //if (cluster.isMaster)
+process.nextTick(function() { step(canvas.playback); });
+
+canvas.playback = function*() //if (cluster.isMaster)
+{
+    elapsed(0);
+    for (frnum=0; elapsed < duration; ++frnum)
+    {
+        models.forEach(    model.render(frnum, this.elapsed);
+        wait(frnum / fps - elapsed);
+        this.paint();
+    }
+    stats();
+}
+
+models =
+[
+    model(affinity: #),
+];
+
+model.render = function(frnum)
+{
+    color = fx(frnum);
+    canvas.pixels[n] = color;
+}
