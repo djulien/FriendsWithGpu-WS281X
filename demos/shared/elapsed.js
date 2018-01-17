@@ -35,7 +35,7 @@ const elapsed =
 module.exports.elapsed =
 function elapsed(new_epoch)
 {
-console.log("elapsed(%s)", new_epoch);
+//console.log("elapsed(%s)", new_epoch);
     if (!elapsed.shmbuf) //set up shared memory for sync across processes
         elapsed.shmbuf = module.exports.shmkey? shm.get(module.exports.shmkey, "Float64Array") || shm.create(1, "Float64Array", module.exports.shmkey): new FloatArray(1);
 //        elapsed.shmbuf[0] = 0; //caller needs to do this

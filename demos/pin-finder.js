@@ -15,7 +15,7 @@
 
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output (all threads)
-//const os = require('os');
+const os = require('os');
 //const pathlib = require('path');
 //const {blocking, wait} = require('blocking-style');
 //const cluster = require('cluster');
@@ -82,8 +82,8 @@ const OPTS =
 //    SHM_KEY: process.env.SHM_KEY,
 //choose one of options below for performance tuning:
 //    NUM_WKERS: 0, //whole-house fg render
-    NUM_WKERS: 1, //whole-house bg render
-//    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
+//    NUM_WKERS: 1, //whole-house bg render
+    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
 };
 //if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
 
@@ -117,17 +117,22 @@ const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 
 
 const models = []; //list of models/effects to be rendered
-
-//TODO: use WKER_UNIV here
-if (OPTS.NUM_WKERs > 1) //split up models across multiple bkg threads
+//split up models across multiple threads:
+for (var u = 0; u < NUM_UNIV; u += WKER_UNIV)
+    models.push(new PinFinder({univ: [u, Math.min(u + WKER_UNIV, NUM_UNIV)]})); //, get name() { return `Univ#${this.ubegin}..${this.uend - 1}`; }, })); //, wker: Math.floor(u / WKER_UNIV)}));
+/*
+if (OPTS.NUM_WKERS > 1) //split up models across multiple bkg threads
     for (var u = 0; u < NUM_UNIV; ++u)
 //        models.push((canvas.WKER_ID == u >> 3)? new PinFinder({univ_num: u, name: `Univ#${u}`}): canvas.isMaster? new BkgWker(u >> 3): null);
         models.push(new PinFinder({univ_num: u, name: `Univ#${u}`, wker: Math.floor(u / WKER_UNIV)}));
 else //whole-house on main or bkg thread
-//    models.push(/*new*/ BkgWker(/*new*/ PinFinder({name: "WholeHouse"})));
-    models.push(new PinFinder({name: "WholeHouse", wker: OPTS.NUM_WKERs? 0: undefined}));
+//    models.push(/-*new*-/ BkgWker(/-*new*-/ PinFinder({name: "WholeHouse"})));
+    models.push(new PinFinder({name: "WholeHouse"})); //, wker: OPTS.NUM_WKERS? 0: undefined}));
 //    models.push((!OPTS.NUM_WKERS || canvas.isWorker)? new PinFinder(): new BkgWker());
+*/
 debug(`${canvas.prtype}# ${canvas.WKER_ID} '${process.pid}' has ${models.length} model(s) to render: ${models.map(m => { return m.name || m.constructor.name}).join(",")}`.blue_lt);
+console.log(JSON.stringify(models));
+process.exit();
 
 
 //ARGB primary colors:
@@ -158,14 +163,16 @@ function PinFinder(opts)
 //    {
 //        if (OPTS.NUM_WKERS && canvas.isMaster) return opts; //don't need real model; return placeholder
 //    }
-    if (isNaN(++PinFinder.count)) PinFinder.count = 1; //put this before affinity check so model names are all unique (easier debug)
-    this.name = (opts || {}).name || "PinFinder#" + PinFinder.count;
-    this.affinity = (typeof (opts || {}).wker != "undefined")? opts.wker: -1; //which thread to run on
-    if (OPTS.NUM_WKERs && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; cancel init
-    const whole_house = (typeof (opts || {}).univ_num == "undefined");
+//    if (isNaN(++PinFinder.count)) PinFinder.count = 1; //do this before affinity check so model names are unified across processes (easier debug)
+//    this.name = (opts || {}).name || `PinFinder#${PinFinder.count}`;
+//    const whole_house = (typeof (opts || {}).univ == "undefined");
 //        this.univ_num = univ_num; //stofs = univ_num * univ_len; //0..23 * screen height (screen column)
-    this.end_univ = !whole_house? opts.univ_num + 1: canvas.width; //single univ vs. whole-house
-    this.begin_univ = !whole_house? opts.univ_num: 0;
+    const multi_univ = ((opts || {}).univ || []).length; //check for univ range
+    this.univ_begin = multi_univ? opts.univ[0]: (opts || {}).univ || 0;
+    this.univ_end = multi_univ? opts.univ.slice(-1)[0]: (typeof (opts || {}).univ != "undefined")? opts.univ + 1: NUM_UNIV; //range vs. single univ vs. whole-house
+    this.name = (opts || {}).name || `PinFinder[${this.univ_begin}-${this.univ_end - 1}]`; //`PinFinder#${PinFinder.count}`;
+    this.affinity = (typeof (opts || {}).affinity != "undefined")? opts.affinity: models.length % (OPTS.NUM_WKERS || 1); //which thread to run on; default to round robin assignment
+    if (OPTS.NUM_WKERS && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; bypass remaining init
 //        this.pixels = canvas.pixels.slice(begin_univ * UNIV_LEN, end_univ * UNIV_LEN); //pixels for this/these universe(s) (screen column(s))
 //        this.repeat = 9 - (univ & 7); //patterm repeat factor; 9..2
 //        this.height = univ_len; //universe length (screen height)
@@ -227,7 +234,7 @@ function* playback() //onexit)
 //        models.forEach((model) => { model.render(i); });
 
 //    var started = now_sec();
-    canvas.elapsed = 0;
+    canvas.elapsed = 0; //elapsed(0);
     canvas.duration = DURATION; //set progress bar limit
 //    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
 //    var hd = new memwatch.HeapDiff();
@@ -236,7 +243,7 @@ function* playback() //onexit)
         render_time -= canvas.elapsed; //exclude non-rendering (paint + V-sync wait) time
 //        models.renderAll(canvas, frnum); //forEach((model) => { model.render(frnum); });
 //render all models (synchronous):
-        models.forEach(model => { model.render(frnum); }); //bkg wker: sync render; main thread: sync render or async ipc
+        models.forEach(model => { model.render(frnum, canvas.elapsed); }); //bkg wker: sync render; main thread: sync render or async ipc
 //        render(frnum);
 //        yield canvas.render(frnum);
         render_time += canvas.elapsed;
@@ -578,35 +585,3 @@ function trunc(val, digits)
 //}
 
 //eof
-{GpuCanvas, wait, elapsed} = require(); // !CLUSTER; use web-worker or
-child_proc.fork instead
-
-const opts =
-{
-    num_wkers = 0, 1, ...
-};
-const canvas = new GpuCanvas(w, h, opts) //if (cluster.isMaster)
-process.nextTick(function() { step(canvas.playback); });
-
-canvas.playback = function*() //if (cluster.isMaster)
-{
-    elapsed(0);
-    for (frnum=0; elapsed < duration; ++frnum)
-    {
-        models.forEach(    model.render(frnum, this.elapsed);
-        wait(frnum / fps - elapsed);
-        this.paint();
-    }
-    stats();
-}
-
-models =
-[
-    model(affinity: #),
-];
-
-model.render = function(frnum)
-{
-    color = fx(frnum);
-    canvas.pixels[n] = color;
-}

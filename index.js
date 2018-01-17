@@ -210,6 +210,7 @@ new Proxy(function(){},
         opts_check(opts);
         const title = (opts || {}).TITLE || OPTS.TITLE[1] || "(title)";
         const num_wkers = [(opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0].reduce(firstOf);
+        if (num_wkers > os.cpus().length) debug(`#wkers ${num_wkers} exceeds #cores ${os.cpus().length}`.yellow_lt);
 //        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
         const THIS = cluster.isMaster /*|| !num_wkers)*/? new GpuCanvas(title, width, height): {title, width, height}; //initialize base class; dummy wrapper for wker procs
         THIS.WKER_ID = cluster.isWorker? +process.env.WKER_ID: -1; //which wker thread is this
@@ -323,6 +324,7 @@ debug("here5");
 //don't really need to do this; shm seg container will be reclaimed anyway
 //        THIS.close = (num_wkers && cluster.isMaster)? function() { rwlock(THIS.shmbuf, 1, RwlockOps.DESTROY); }: nop;
 
+        if (cluster.isMaster) process.nextTick(function() { step(THIS.playback()); });
         return THIS;
 
         function nop() {} //dummy method for special methods on non-master copy
