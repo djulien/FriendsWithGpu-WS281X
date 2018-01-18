@@ -42,7 +42,7 @@ function elapsed(new_epoch)
     if (arguments.length || !elapsed.shmbuf[0]) elapsed.shmbuf[0] = now_sec() - (new_epoch || 0); //set new epoch if passed; 0 = now; < 0 for past; > 0 for future
     return now_sec() - elapsed.shmbuf[0]; //(elapsed.epoch || 0);
 }
-process.nextTick(elapsed); //give caller a chance to set epoch before i do
+process.nextTick(elapsed); //give caller a chance to set epoch before we do it here
 
 
 //current time (sec):

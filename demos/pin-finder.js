@@ -83,7 +83,8 @@ const OPTS =
 //choose one of options below for performance tuning:
 //    NUM_WKERS: 0, //whole-house fg render
 //    NUM_WKERS: 1, //whole-house bg render
-    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
+//    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
+    NUM_WKERS: 6, //hard-coded #bkg wkers
 };
 //if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
 
@@ -115,7 +116,6 @@ const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 /// Models/effects rendering:
 //
 
-
 const models = []; //list of models/effects to be rendered
 //split up models across multiple threads:
 for (var u = 0; u < NUM_UNIV; u += WKER_UNIV)
@@ -133,7 +133,6 @@ else //whole-house on main or bkg thread
 debug(`${canvas.prtype}# ${canvas.WKER_ID} '${process.pid}' has ${models.length} model(s) to render: ${models.map(m => { return m.name || m.constructor.name}).join(",")}`.blue_lt);
 console.log(JSON.stringify(models));
 process.exit();
-
 
 //ARGB primary colors:
 const RED = 0xffff0000;
@@ -167,7 +166,7 @@ function PinFinder(opts)
 //    this.name = (opts || {}).name || `PinFinder#${PinFinder.count}`;
 //    const whole_house = (typeof (opts || {}).univ == "undefined");
 //        this.univ_num = univ_num; //stofs = univ_num * univ_len; //0..23 * screen height (screen column)
-    const multi_univ = ((opts || {}).univ || []).length; //check for univ range
+    const multi_univ = ((opts || {}).univ || []).length; //caller wants univ range (although it could be just one)
     this.univ_begin = multi_univ? opts.univ[0]: (opts || {}).univ || 0;
     this.univ_end = multi_univ? opts.univ.slice(-1)[0]: (typeof (opts || {}).univ != "undefined")? opts.univ + 1: NUM_UNIV; //range vs. single univ vs. whole-house
     this.name = (opts || {}).name || `PinFinder[${this.univ_begin}-${this.univ_end - 1}]`; //`PinFinder#${PinFinder.count}`;
@@ -181,14 +180,15 @@ function PinFinder(opts)
 }
 //synchronous render:
 PinFinder.prototype.render =
-function render(frnum)
+function render(frnum, timestamp)
 {
 //        if (isNaN(++this.frnum)) this.frnum = 0; //frame# (1 animation step per frame)
-    for (var u = this.begin_univ, uofs = u * canvas.height; u < this.end_univ; ++u, uofs += canvas.height)
+    for (var u = this.univ_begin, uofs = u * canvas.height; u < this.univ_end; ++u, uofs += canvas.height)
     {
         var color = [RED, GREEN, BLUE][u >> 3]; //Math.floor(x / 8)];
         var repeat = 9 - (u & 7); //(x % 8);
-        for (var n = 0, c = -frnum % repeat; n < canvas.height; ++n, ++c)
+//        for (var n = 0, c = -frnum % repeat; n < canvas.height; ++n, ++c)
+        for (var n = 0; n < canvas.height; ++n)
 //, csel = -this.count++ % this.repeat
 //            if (csel >= this.repeat) csel = 0;
 //if ((t < 3) && !x && (y < 10)) console.log(t, typeof c, c);
@@ -227,26 +227,30 @@ canvas.playback =
 function* playback() //onexit)
 {
     debug(`begin: startup took %d sec, now run fx for %d sec`.green_lt, trunc(process.uptime(), 10), DURATION);
-    var render_time = 0, idle_time = 0;
-    var cpu = process.cpuUsage();
+    var perf = {render: 0, idle: 0, paint: 0, cpu: process.cpuUsage()};
+    wait.stats = {};
 //    onexit(BkgWker.closeAll);
 //    for (var i = 0; i < 100; ++i)
 //        models.forEach((model) => { model.render(i); });
 
 //    var started = now_sec();
-    canvas.elapsed = 0; //elapsed(0);
-    canvas.duration = DURATION; //set progress bar limit
+    this.duration = DURATION; //set progress bar limit
+    perf.timestamp = this.elapsed = 0; //elapsed(0);
 //    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
 //    var hd = new memwatch.HeapDiff();
-    for (var frnum = 1; canvas.elapsed <= DURATION; ++frnum)
+    for (var frnum = 1; this.elapsed <= DURATION; ++frnum)
     {
-        render_time -= canvas.elapsed; //exclude non-rendering (paint + V-sync wait) time
+//        var now = this.elapsed;
+        perf.render -= perf.timestamp; //this.elapsed; //exclude non-rendering (paint + V-sync wait) time
 //        models.renderAll(canvas, frnum); //forEach((model) => { model.render(frnum); });
 //render all models (synchronous):
-        models.forEach(model => { model.render(frnum, canvas.elapsed); }); //bkg wker: sync render; main thread: sync render or async ipc
+//        models.forEach(model => { model.render(frnum, canvas.elapsed); }); //bkg wker: sync render; main thread: sync render or async ipc
+        this.render(frnum, perf.timestamp); //use frame timestamp for render time of all models
+        perf.timestamp = this.elapsed;
 //        render(frnum);
 //        yield canvas.render(frnum);
-        render_time += canvas.elapsed;
+        perf.render += perf.timestamp; //this.elapsed;
+
 //NOTE: pixel (0, 0) is upper left on screen
 //NOTE: the code below will run up to ~ 35 FPS on RPi 2
 //        if (!OPTS.gpufx) //generate fx on CPU instead of GPU
@@ -277,28 +281,61 @@ function* playback() //onexit)
                 }
 */
 //        yield wait(started + (t + 1) / FPS - now_sec()); //avoid cumulative timing errors
-        idle_time -= canvas.elapsed; //exclude non-waiting time
+        perf.idle -= perf.timestamp; //this.elapsed; //exclude non-waiting time
 //bkg wker: set reply status for main (atomic dec); main thread: sync wait and check all ipc reply rcvd
-        yield wait(frnum / FPS - canvas.elapsed, frnum); //throttle to target frame rate; avoid cumulative timing errors
-        idle_time += canvas.elapsed;
+        yield wait(frnum / FPS - perf.timestamp); //throttle to target frame rate; avoid cumulative timing errors
+        perf.timestamp = this.elapsed;
+        perf.idle += perf.timestamp; //this.elapsed;
+
 //bkg wker: noop - already waited for ipc req (rdlock?); main thread: gpu update
-        canvas.paint();
+        perf.paint -= perf.timestamp; //this.elapsed;
+        this.paint();
+        perf.timestamp = this.elapsed;
+        perf.paint += perf.timestamp; //this.elapsed;
 //        yield wait(1);
 //        ++canvas.elapsed; //update progress bar
+
+        if (!(frnum % 50)) stats(perf, frnum);
     }
+    if (--frnum % 50) stats(perf, frnum); //stats for last partial interval; undo last loop inc
+
 //    debug("heap diff:", JSON.stringify(hd.end(), null, 2));
-    render_time = 1000 * render_time / frnum; //(DURATION * FPS);
+/*
+    render_time *= 1000 / frnum; //= 1000 * render_time / frnum; //(DURATION * FPS);
+    idle_time *= 1000 / frnum; //= 1000 * idle_time / frnum;
+    paint_time *= 1000 / frnum;
     var frtime = 1000 * canvas.elapsed / frnum;
-    idle_time = 1000 * idle_time / frnum;
     if (wait.stats) wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
     debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: ${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle: ${trunc(idle_time, 10)} msec (${trunc(100 * idle_time / frtime, 10)}%), ${frnum} frames`.blue_lt);
     cpu = process.cpuUsage(cpu);
     debug(`cpu usage: ${JSON.stringify(cpu)} usec = ${trunc((cpu.user + cpu.system) / 1e4 / canvas.elapsed, 10)}% of elapsed`.blue_lt);
-    debug(`end: ${canvas.prtype} '${process.pid}' ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
+*/
+    debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
     yield wait(PAUSE); //pause to show screen stats longer
-    canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
+//    canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
 //    canvas.close();
 };
+
+
+canvas.render =
+function render(frnum, timestamp)
+{
+    models.forEach(model => { model.render(frnum, timestamp); });
+}
+
+
+function stats(perf, numfr)
+{
+//    var perf = {render: 0, idle: 0, paint: 0, cpu: process.cpuUsage()}, timestamp;
+    if (wait.stats) debug(wait.stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
+    debug(`avg render: ${trunc(perf.render * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.render, 10)} fps), \
+        avg frame: ${trunc(perf.timestamp * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.timestamp, 10)} fps), \
+        avg idle: ${trunc(perf.idle * 1e3 / numfr, 10)} msec (${trunc(100 * perf.idle / perf.timestamp, 10)}%), \
+        avg paint: ${trunc(perf.paint * 1e3 / numfr, 10)} msec (${trunc(100 * perf.paint / perf.timestamp, 10)}%), \
+        ${numfr} frames`.blue_lt);
+    var cpu = process.cpuUsage(perf.cpu);
+    debug(`cpu usage: ${cpu.user / 1e6} user + ${cpu.system} system = ${trunc((cpu.user + cpu.system) / 1e4 / perf.timestamp, 10)}% of elapsed`.blue_lt);
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -335,36 +372,30 @@ try{
 
 
 //delay next step:
-function wait(delay, nxtfr)
+function wait(delay) //, frnum)
 {
-    if (canvas.isWorker) return BkgWker.wait(nxtfr);
+//    if (canvas.isWorker) return BkgWker.wait(nxtfr);
     delay *= 1000; //sec -> msec
     const overdue = (delay <= 1); //1 msec is too close for comfort; treat it as overdue
 //    if (isNaN(++wait.counts[overdue])) wait.counts = [!overdue, overdue];
 //    if (overdue) if (isNaN(++wait.overdue_count)) wait.overdue_count = 1;
     if (wait.stats)
     {
+        if (isNaN(++wait.stats[overdue])) Object.assign(wait.stats, //init stats
+        {
+            [overdue]: 1, [!overdue]: 0, get count() { return this.false + this.true; },
+            total_delay: 0, max_delay: 0, min_delay: Number.MAX_SAFE_INTEGER,
+            get report() { return `waiting: overdue frames ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), \
+                avg wait ${trunc(this.total_delay / this.count, 10)} msec, \
+                min wait[${this.min_when}] ${trunc(this.min_delay, 10)} msec, \
+                max wait[${this.max_when}] ${trunc(this.max_delay, 10)} msec`[this.true? "red_lt": "green_lt"]; },
+        });
         wait.stats.total_delay += Math.max(delay, 0);
-        if (delay > wait.stats.max_delay) { wait.stats.max_delay = delay; wait.stats.max_when = wait.stats.false + wait.stats.true; }
-        if (delay < wait.stats.min_delay) { wait.stats.min_delay = delay; wait.stats.min_when = wait.stats.false + wait.stats.true; }
+        if (delay > wait.stats.max_delay) { wait.stats.max_delay = delay; wait.stats.max_when = wait.stats.count; } //wait.stats.false + wait.stats.true; }
+        if (delay < wait.stats.min_delay) { wait.stats.min_delay = delay; wait.stats.min_when = wait.stats.count; } //frnum; } //wait.stats.false + wait.stats.true; }
+        if ((wait.stats[overdue] < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
+            debug(`wait[${wait.stats.count}] ${commas(trunc(delay, 10))} msec`[overdue? "red_lt": "blue_lt"]); //, wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
     }
-    else wait.stats =
-    {
-        false: 0, //non-overdue count
-        true: 0, //overdue count
-        total_delay: Math.max(delay, 0),
-        max_delay: delay,
-        max_when: 0,
-        min_delay: delay,
-        min_when: 0,
-        get count() { return this.false + this.true; },
-        report: function() { debug(`waiting: overdue frames ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), avg wait ${trunc(this.total_delay / this.count, 10)} msec, min wait[${this.min_when}] ${trunc(this.min_delay, 10)} msec, max wait[${this.max_when}] ${trunc(this.max_delay, 10)} msec`[this.true? "red_lt": "green_lt"]); },
-    }; //{[overdue]: 1, [!overdue]: 0}; //false: 0, true: 1]: [1, 0]; //[!overdue, overdue];
-    if ((wait.stats[overdue]++ < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
-//    {
-        debug(`${canvas.prtype} wait[%d] %d msec`[overdue? "red_lt": "blue_lt"], wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
-//        if (isNaN(++wait.counts[overdue])) wait.counts = [!overdue, overdue];
-//    }
     return !overdue? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
 }
 //const x = {};
