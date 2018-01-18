@@ -175,6 +175,7 @@ const OPTS =
     UNIV_TYPE: [LIVEOK, UnivTypes.WS281X], //set default univ type
 //    WS281X_FMT: [LIVEOK, true], //force WS281X formatting on screen
     DEV_MODE: [LIVEOK, false], //apply WS281X or other formatting
+    AUTO_PLAY: [LIVEOK, true], //start playback
 //    WS281X_DEBUG: true, //show timing debug info
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
     SHM_KEY: [LIVEOK, 0xface], //makes it easier to find in shm (for debug)
@@ -209,7 +210,7 @@ new Proxy(function(){},
 //console.log("proxy ctor", width, height, opts);
         opts_check(opts);
         const title = (opts || {}).TITLE || OPTS.TITLE[1] || "(title)";
-        const num_wkers = [(opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0].reduce(firstOf);
+        const num_wkers = firstOf((opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0);
         if (num_wkers > os.cpus().length) debug(`#wkers ${num_wkers} exceeds #cores ${os.cpus().length}`.yellow_lt);
 //        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
         const THIS = cluster.isMaster /*|| !num_wkers)*/? new GpuCanvas(title, width, height): {title, width, height}; //initialize base class; dummy wrapper for wker procs
@@ -237,7 +238,7 @@ new Proxy(function(){},
         var shmkey = (opts || {}).SHM_KEY; //no default; //|| OPTS.SHM_KEY[1];
         if (typeof shmkey != "undefined") shmkey = +shmkey;
 //console.log("shm key-1 %s 0x%s", typeof shmkey, (shmkey || -1).toString(16));
-        const extralen32 = (opts || {}).EXTRA_LEN || OPTS.EXTRA_LEN[1] || 0; //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
+        const extralen32 = firstOf((opts || {}).EXTRA_LEN, OPTS.EXTRA_LEN[1], 0); //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
         const buflen32 = THIS.width * THIS.height + RwlockOps.SIZE32 + extralen32 + 1;
 //extralen += 10;
 //        const alloc = num_wkers? shmbuf: function(ignored, len) { return new Buffer(len); }
@@ -246,7 +247,7 @@ new Proxy(function(){},
 //NOTE: TypedArray (Uint32Array) ref to Buffer using native byte order is reportedly a lot faster than DataView ref to Buffer using explicitly defined byte order
         const shmbuf = !num_wkers? Buffer.allocUnsafe(buflen32 * U32SIZE): //NOTE: will initialize to non-0 values below, so don't init to 0 here; //new Buffer(buflen32 * U32SIZE): //Uint32Array(buflen32): //doesn't need to be shared
                       cluster.isMaster? shm.create(buflen32 * U32SIZE, "Buffer", shmkey): shm.get(shmkey, "Buffer");
-        if (!shmbuf) throw `Can't create ${num_wkers? "shared": "private"} buf of size ${buflen32}`.red_lt;
+        if (!shmbuf) throw new Error(`Can't create ${num_wkers? "shared": "private"} buf of size ${buflen32}`.red_lt);
 //        shmbuf.byteLength = shmbuf.length;
         /*if (num_wkers)*/ THIS.SHM_KEY = shmbuf.key;
 //console.log("shm key-2 0x%s", THIS.SHM_KEY.toString(16));
@@ -258,7 +259,7 @@ new Proxy(function(){},
         {
             shmbuf["writeUInt32" + os.endianness()](MAGIC, 0); //write via buf, read via typedarray for dual check; //THIS.shmbuf[0] = MAGIC;
             var errstr = num_wkers? rwlock(THIS.shmbuf, 1, RwlockOps.INIT): false; //use shm to allow access by multiple procs
-            if (errstr) throw `GpuCanvas: can't create shm lock: ${errstr}`.red_lt;
+            if (errstr) throw new Error(`GpuCanvas: can't create shm lock: ${errstr}`.red_lt);
             THIS.pixels.fill(BLACK); //start with all pixels dark
             if (extralen32) THIS.extra.fill(0);
 //            THIS.shmbuf.fill(0x12345678);
@@ -281,7 +282,7 @@ new Proxy(function(){},
 //debug("shmbuf fill-2: ", ok, THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16));
 //shm paranoid check:
 debug("here4 0x%s", THIS.shmbuf[0].toString(16)); //extra[1].toString(16), THIS.extra[9].toString(16), (THIS.extra[1] != 0xdead) || (THIS.extra[9] != 0xbeef));
-        if (THIS.shmbuf[0] != MAGIC) throw `${THIS.prtype} '${process.pid}' shm hdr bad: 0x${THIS.shmbuf[0].toString(16)}, should be 0x{MAGIC.toString(16)}`.red_lt;
+        if (THIS.shmbuf[0] != MAGIC) throw new Error(`${THIS.prtype} '${process.pid}' shm hdr bad: 0x${THIS.shmbuf[0].toString(16)}, should be 0x{MAGIC.toString(16)}`.red_lt);
 //debug(`${THIS.shmbuf[224 + 0].toString(16)} ${THIS.shmbuf[224 + 1].toString(16)} ${THIS.shmbuf[224 + 2].toString(16)} ${THIS.shmbuf[224 + 3].toString(16)}`)
 //        if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
 //        if (cluster.isMaster) THIS.extra.fill(0);
@@ -298,11 +299,11 @@ debug("here5");
 //    }
 //};
 //inherits(SharedCanvas, SimplerCanvas);
-        THIS.devmode = (opts || {}).DEV_MODE || OPTS.DEV_MODE[1];
+        THIS.devmode = firstOf((opts || {}).DEV_MODE, OPTS.DEV_MODE[1], true);
 
         THIS.atomic = atomic_method;
 
-        THIS.lock = (num_wkers && cluster.isMaster)? lock_method: function(ignored) {};
+        THIS.lock = (num_wkers && cluster.isMaster)? lock_method: nop; //function(ignored) {};
 
 //SharedCanvas.prototype.pixel =
         THIS.pixel = pixel_method;
@@ -315,7 +316,7 @@ debug("here5");
 
 //    const super_paint = this.paint.bind(this);
 //SharedCanvas.prototype.paint =
-        const want_progress = (opts || {}).SHOW_PROGRESS || OPTS.SHOW_PROGRESS[1];
+        const want_progress = firstOf((opts || {}).SHOW_PROGRESS, OPTS.SHOW_PROGRESS[1], true);
         THIS.paint = cluster.isMaster? (want_progress? paint_progress_method: paint_method): nop;
 
 //SharedCanvas.prototype.render_stats =
@@ -324,12 +325,24 @@ debug("here5");
 //don't really need to do this; shm seg container will be reclaimed anyway
 //        THIS.close = (num_wkers && cluster.isMaster)? function() { rwlock(THIS.shmbuf, 1, RwlockOps.DESTROY); }: nop;
 
-        if (cluster.isMaster) process.nextTick(function() { step(THIS.playback()); });
+        const auto_play = firstOf((opts || {}).AUTO_PLAY, OPTS.AUTO_PLAY[1], true);
+        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
         return THIS;
 
         function nop() {} //dummy method for special methods on non-master copy
     }
 });
+
+
+//start playback:
+function delay_playback(auto_play)
+{
+    debug(`playback: master? ${cluster.isMaster}, auto play? ${auto_play}`.blue_lt);
+    if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
+    if (!cluster.isMaster) return;
+    if (!this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
+    if (auto_play) step(this.playback());
+}
 
 
 //perform atomic op on shared memory:
@@ -347,7 +360,7 @@ function atomic_method(func, args)
 function lock_method(wr)
 {
     var errstr = rwlock(this.shmbuf, 1, (wr === true)? RwlockOps.WRLOCK: (wr === false)? RwlockOps.RDLOCK: RwlockOps.UNLOCK);
-    if (errstr) throw `GpuCanvas: un/lock failed: ${errstr}`.red_lt;
+    if (errstr) throw new Error(`GpuCanvas: un/lock failed: ${errstr}`.red_lt);
 
 //    const {caller/*, calledfrom, shortname*/} = require("./demos/shared/caller");
 //    const from = caller(-2); //.replace("@pin-finder:", "");
@@ -468,9 +481,9 @@ function opts_check(opts)
 //console.log("chk opts", JSON.stringify(opts));
     Object.keys(opts || {}).forEach((key, inx, all) =>
     {
-        if (!(key in OPTS)) throw `GpuCanvas: option '${key}' not supported until maybe later`.red_lt;
+        if (!(key in OPTS)) throw new Error(`GpuCanvas: option '${key}' not supported until maybe later`.red_lt);
 //        const info = OPTS[key];
-//console.log("info", key, inx, JSON.stringify(info));
+//console.log("info", key, inx, typeof OPTS[key]); //JSON.stringify(info));
         const [opt_mode, def_val] = OPTS[key];
         if (opts.DEV_MODE) return; //all options okay in dev mode
         if (opt_mode != DEVONLY) return; //option okay in live mode
@@ -486,11 +499,61 @@ function opts_check(opts)
 }
 
 
-//return first non-empty value of an array:
-//for use with Array.reduce()
-function firstOf(prevval, curval) //, curinx, all)
+////////////////////////////////////////////////////////////////////////////////
+////
+/// Helper functions:
+//
+
+//stepper function:
+//NOTE: only steps generator function 1 step; subsequent events must also caller step to finish executing generator
+const step =
+module.exports.step =
+function step(gen)
 {
-    return (typeof prevval != "undefined")? prevval: curval;
+//    if (canvas.isWorker) return; //stepper not needed by bkg threads
+try{
+//console.log("step");
+//    if (step.done) throw "Generator function is already done.";
+//	if (typeof gen == "function") gen = gen(); //invoke generator if not already
+	if (typeof gen == "function") { setImmediate(function() { step(gen(/*function(cb) { step.onexit = cb; }*/)); }); return; } //invoke generator if not already
+//        return setImmediate(function() { step(gen()); }); //avoid hoist errors
+    if (typeof gen != "undefined")
+    {
+        if (typeof step.svgen != "undefined") throw new Error("step: previous generator not done yet".red_lt);
+        step.svgen = gen; //save generator for subsequent steps
+    }
+//console.log("step:", typeof gen, JSON.stringify_tidy(gen));
+//    if (!BkgWker.sync()) return; //coordinate bkg wkers before advancing; NOTE: must cache svgen first
+    var {value, done} = step.svgen.next(step.retval); //send previous value to generator
+//    {step.retval, step.done} = step.svgen.next(step.retval); //send previous value to generator
+//    Object.assign(step, step.svgen.next(step.retval)); //send previous value to generator
+//console.log("step: got value %s %s, done? %d", typeof value, value, done);
+//    step.done = done; //prevent overrun
+    if (done) delete step.svgen; // = null; //prevent overrun; do bedore value()
+    if (typeof value == "function") value = value(); //execute caller code before returning
+//    if (done /*&& step.onexit*/) BkgWker.close(); //step.onexit(); //do after value()
+//console.log("here3");
+    return step.retval = value; //return value to caller and to next yield
+} catch(exc) { console.log(`step EXC: ${exc}`.red_lt); /*gen.*/throw(exc); } //CAUTION: without this, func gen might quit without telling anyone
+}
+
+
+//resume later:
+const later =
+module.exports.later =
+function later(delay)
+{
+    return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
+}
+
+
+//return first non-empty value:
+function firstOf(args) //prevval, curval) //, curinx, all)
+{
+    for (var i = 0; i < arguments.length; ++i)
+        if (typeof arguments[i] != "undefined") return arguments[i];
+//    return (typeof prevval != "undefined")? prevval: curval;
+    throw new Error("firstOf: no value found".red_lt);
 }
 
 
@@ -528,7 +591,7 @@ new Proxy(function(){},
         if (!opts) opts = (typeof opts == "boolean")? {WS281X_FMT: opts}: {};
         Object.keys(opts).forEach((key, inx, all) =>
         {
-            if (/*opts[key] &&*/ !supported_OPTS[key]) throw `Option '${key}' not supported until maybe 2018 (OpenGL re-enabled)`.red_lt;
+            if (/*opts[key] &&*/ !supported_OPTS[key]) throw new Error(`Option '${key}' not supported until maybe 2018 (OpenGL re-enabled)`.red_lt);
             if (!opts.WS281X_FMT || (['WS281X_FMT', 'UNIV_TYPE', 'WANT_SHARED'].indexOf(key) != -1)) return;
             all[inx] = null; //don't show other stuff in live mode (interferes with output signal)
             console.error(`Ignoring option '${key}' for live mode`.yellow_lt);
@@ -730,12 +793,12 @@ function pushable(props)
     {
         get: function()
         {
-            if (!this.length) throw "Pushable stack underflow".red_lt;
+            if (!this.length) throw new Error("Pushable stack underflow".red_lt);
             return this[this.length - 1]; //.slice(-1)[0];
         },
         set: function(newval)
         {
-            if (!this.length) throw "Pushable stack underflow".red_lt;
+            if (!this.length) throw new Error("Pushable stack underflow".red_lt);
             this[this.length - 1] = newval;
         },
     });
