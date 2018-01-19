@@ -2,12 +2,13 @@
 //Javascript wrapper to expose GpuCanvas class and Screen config object
 
 "use strict"; //find bugs easier
+require('colors').enabled = true; //console output colors; allow bkg threads to use it also
 const fs = require('fs');
 const os = require('os');
 const glob = require('glob');
 const {PNG} = require('pngjs');
 const pathlib = require('path');
-require('colors').enabled = true; //console output colors; allow bkg threads to use it also
+const Emitter = require('events');
 const cluster = require('cluster');
 const shm = require('shm-typed-array');
 //const {inherits} = require('util');
@@ -191,6 +192,19 @@ const WHITE = 0xffffffff;
 
 const U32SIZE = Uint32Array.BYTES_PER_ELEMENT; //reduce verbosity
 
+
+//const jsGpuCanvas =
+//module.exports.newGpuCanvas =
+//function jsGpuCanvas(width, height, opts)
+//{
+//    if (!(this instanceof jsGpuCanvas)) return new jsGpuCanvas(width, height, opts);
+//    if (cluster.isMaster) GpuCanvas.call(this, width, height, opts);
+//    else 
+//    Emitter.call(this); //super
+}
+//inherits(GpuCanvas, Emitter);
+
+
 //simpler shared canvas:
 //proxy wrapper adds shared semantics (underlying SimplerCanvas is not thread-aware)
 //proxy also allows methods and props to be intercepted
@@ -200,8 +214,10 @@ module.exports.GpuCanvas =
 //function SharedCanvas(width, height, opts)
 //class SharedCanvas extends SimplerCanvas
 new Proxy(function(){},
+//class GpuCanvas extends EventEmitter
 {
     construct: function GpuCanvas_jsctor(target, args, newTarget) //ctor args: width, height, opts
+//    constructor(args) //ctor args: width, height, opts
     {
         const MAGIC = 0x1234beef; //used to detect if shared memory is valid
 //    if (!(this instanceof GpuCanvas_shim)) return new GpuCanvas_shim(title, width, height, opts); //convert factory call to class
@@ -218,6 +234,8 @@ new Proxy(function(){},
         THIS.isMaster = cluster.isMaster; //(THIS.WKER_ID == -1);
         THIS.isWorker = cluster.isWorker; //(THIS.WKER_ID != -1);
         THIS.prtype = cluster.isMaster? "master": "worker";
+        Emitter.call(THIS); //event emitter mixin
+        Object.keys(Emitter.prototype).forEach(method => { THIS.prototype[method] = Emitter.prototype[method]; });
 //        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
         debug(`GpuCanvas: ${THIS.prtype} '${process.pid}' is wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
 //        pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
