@@ -20,10 +20,11 @@ const os = require('os');
 //const {blocking, wait} = require('blocking-style');
 //const cluster = require('cluster');
 //const JSON = require('circular-json'); //CAUTION: replace std JSON with circular-safe version
+const getOwnPropertyDescriptors = require('object.getownpropertydescriptors'); //ES7 shim (not available in Node.js yet)
 const {debug/*, elapsed*/} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
-const {Screen, GpuCanvas, later/*, elapsed, cluster, AtomicAdd*/} = require('gpu-friends-ws281x');
+const {Screen, GpuCanvas, run_later/*, elapsed, cluster, AtomicAdd*/} = require('gpu-friends-ws281x');
 //const EPOCH = cluster.isWorker? elapsed(+process.env.EPOCH): elapsed(); //use consistent time base for logging
 //debug(`epoch ${EPOCH}, master? ${cluster.isMaster}`.blue_lt); //TODO: fix shared time base
 //console.log(JSON.stringify(Screen));
@@ -60,7 +61,7 @@ process.exit();
 /// Config settings:
 //
 
-const DURATION = 60-55; //30; //10; //60; //how long to run (sec)
+const DURATION = 60-55+25; //30; //10; //60; //how long to run (sec)
 const PAUSE = 5; //how long to pause at end
 const FPS = 30-28; //2; //animation speed (max depends on screen settings)
 
@@ -314,7 +315,7 @@ function* playback() //onexit)
 */
     debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
     yield wait(PAUSE); //pause to show screen stats longer
-//    canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
+    canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
 //    canvas.close();
 };
 
@@ -329,11 +330,11 @@ function render(frnum, timestamp)
 function stats(perf, numfr)
 {
 //    var perf = {render: 0, idle: 0, paint: 0, cpu: process.cpuUsage()}, timestamp;
-debug(JSON.stringify(wait.stats));
+//debug(JSON.stringify(wait.stats));
     if (wait.stats) debug(wait.stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
-    debug(`avg render: ${trunc(perf.render * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.render, 10)} fps), \
-        avg frame: ${trunc(perf.timestamp * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.timestamp, 10)} fps), \
-        avg idle: ${trunc(perf.idle * 1e3 / numfr, 10)} msec (${trunc(100 * perf.idle / perf.timestamp, 10)}%), \
+    debug(`avg frame: ${trunc(perf.timestamp * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.timestamp, 10)} fps) = \
+        avg render: ${trunc(perf.render * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.render, 10)} fps) + \
+        avg idle: ${trunc(perf.idle * 1e3 / numfr, 10)} msec (${trunc(100 * perf.idle / perf.timestamp, 10)}%) + \
         avg paint: ${trunc(perf.paint * 1e3 / numfr, 10)} msec (${trunc(100 * perf.paint / perf.timestamp, 10)}%), \
         ${numfr} frames`.replace(/\s+/gm, " ").blue_lt);
     var cpu = process.cpuUsage(perf.cpu);
@@ -352,22 +353,22 @@ function wait(delay) //, frnum)
     if (wait.stats)
     {
         const overdue = (delay <= 1); //1 msec is too close for comfort; treat it as overdue
-        if (isNaN(++wait.stats[overdue])) Object.defineProperties(wait.stats, //Object_getOwnPropertyDescriptors( //init stats, delay execution of getters; need descriptors
+        if (isNaN(++wait.stats[overdue])) Object.defineProperties(wait.stats, getOwnPropertyDescriptors( //init stats, delay execution of getters; need descriptors
         {
-            [overdue]: {value: 1}, [!overdue]: {value: 0}, count: {get: function() { return this.false + this.true; }},
-            total_delay: {value: 0}, max_delay: {value: 0}, min_delay: {value: Number.MAX_SAFE_INTEGER},
-            report: {get: function() { return `waiting: overdue frames ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), \
+            [overdue]: 1, [!overdue]: 0, get count() { return this.false + this.true; },
+            total_delay: 0, max_delay: 0, min_delay: Number.MAX_SAFE_INTEGER,
+            get report() { return `wait stats: overdue frames ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), \
                 avg wait ${trunc(this.total_delay / this.count, 10)} msec, \
                 min wait[${this.min_when}] ${trunc(this.min_delay, 10)} msec, \
-                max wait[${this.max_when}] ${trunc(this.max_delay, 10)} msec`.replace(/\s+/gm, " ")[this.true? "red_lt": "green_lt"]; }},
-        });
+                max wait[${this.max_when}] ${trunc(this.max_delay, 10)} msec`.replace(/\s+/gm, " ")[this.true? "red_lt": "green_lt"]; },
+        }));
         wait.stats.total_delay += Math.max(delay, 0);
         if (delay > wait.stats.max_delay) { wait.stats.max_delay = delay; wait.stats.max_when = wait.stats.count; } //wait.stats.false + wait.stats.true; }
         if (delay < wait.stats.min_delay) { wait.stats.min_delay = delay; wait.stats.min_when = wait.stats.count; } //frnum; } //wait.stats.false + wait.stats.true; }
         if ((wait.stats[overdue] < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
             debug(`wait[${wait.stats.count}] ${commas(trunc(delay, 10))} msec`[overdue? "red_lt": "blue_lt"]); //, wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
     }
-    return later(delay);
+    return run_later(delay);
 }
 //const x = {};
 //if ((++x.y || 0) < 10) console.log("yes-1");
@@ -563,7 +564,7 @@ function commas(val)
 //truncate decimal places:
 function trunc(val, digits)
 {
-    return Math.floor(val * (digits || 1)) / (digits || 1);
+    return Math.floor(val * (digits || 1) + 0.5) / (digits || 1); //round to desired precision
 }
 
 

@@ -86,6 +86,7 @@
     "colors": "git+https://github.com/djulien/colors.js.git",
     "glob": "^7.1.1",
     "nan": "^2.8.0",
+    "object.getownpropertydescriptors": "^2.0.3",
     "pngjs": "^3.3.1",
     "shm-typed-array": "0.0.10"
   },

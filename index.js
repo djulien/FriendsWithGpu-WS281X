@@ -539,9 +539,9 @@ try{
 
 
 //resume later:
-const later =
-module.exports.later =
-function later(delay)
+const run_later =
+module.exports.run_later =
+function run_later(delay)
 {
     return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
 }
