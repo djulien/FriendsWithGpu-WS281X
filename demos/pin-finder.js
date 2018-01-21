@@ -20,15 +20,18 @@ const os = require('os');
 //const {blocking, wait} = require('blocking-style');
 //const cluster = require('cluster');
 //const JSON = require('circular-json'); //CAUTION: replace std JSON with circular-safe version
-const getOwnPropertyDescriptors = require('object.getownpropertydescriptors'); //ES7 shim (not available in Node.js yet)
 const {debug/*, elapsed*/} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
-const {Screen, GpuCanvas, run_later/*, elapsed, cluster, AtomicAdd*/} = require('gpu-friends-ws281x');
+const {Screen, GpuCanvas/*, wait, elapsed, cluster, AtomicAdd*/} = require('gpu-friends-ws281x');
 //const EPOCH = cluster.isWorker? elapsed(+process.env.EPOCH): elapsed(); //use consistent time base for logging
 //debug(`epoch ${EPOCH}, master? ${cluster.isMaster}`.blue_lt); //TODO: fix shared time base
 //console.log(JSON.stringify(Screen));
 //process.exit();
+debug("TODO: MP3 any".red_lt);
+debug("TODO: http stats server/monitor".red_lt);
+debug("TODO: js encode".red_lt);
+debug("TODO: emit warnings?".red_lt);
 
 /*
 const {shmbuf} = require('gpu-friends-ws281x');
@@ -75,6 +78,7 @@ const OPTS =
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
     DEV_MODE: true, //disable WS281X formatting on screen (for demo purposes); TODO: use process.env.NODE_ENV?
+    WANT_STATS: true, //collect perf stats
 //    AUTO_PLAY: false, //true, //start playback
 //    WS281X_DEBUG: true, //show timing debug info
 //    UNIV_TYPE: UnivTypes.CHPLEX_SSR,
@@ -83,12 +87,12 @@ const OPTS =
 //    EXTRA_LEN: 1 + this.NUM_WKERS,
 //    SHM_KEY: process.env.SHM_KEY,
 //choose one of options below for performance tuning:
-    NUM_WKERS: 0, //whole-house fg render
-//    NUM_WKERS: 1, //whole-house bg render
+//    NUM_WKERS: 0, //whole-house fg render
+    NUM_WKERS: 1, //whole-house bg render
 //    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
 //    NUM_WKERS: 6, //hard-coded #bkg wkers
 };
-//if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (test only)
+if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (dev/test only)
 
 
 //canvas settings:
@@ -102,7 +106,7 @@ debug("Screen %d x %d @%d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.widt
 
 //GPU canvas:
 //global to reduce parameter passing (only one needed)
-//NOTE: must occur before creating models and bkg wkers (sets up shm, etc)
+//no-NOTE: must occur before creating models and bkg wkers (sets up shm, etc)
 //debug(`pid '${process.pid}' master? ${cluster.isMaster}, wker? ${cluster.isWorker}`.cyan_lt);
 const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 
@@ -179,9 +183,10 @@ function PinFinder(opts)
 //        this.height = univ_len; //universe length (screen height)
 //        this.color = (opts || {}).color || WHITE;
 //        this.frnum = 0; //frame# (1 animation step per frame)
-//TODO: more init here as needed
+//TODO: more init here if needed (after affinity check)
 }
 //synchronous render:
+//handles 1 or more universes
 PinFinder.prototype.render =
 function render(frnum, timestamp)
 {
@@ -223,7 +228,7 @@ function calibrate()
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
-/// Main logic (synchronous coding style to simplify timing logic):
+/// Main playback logic (uses synchronous coding style to simplify timing flow):
 //
 
 canvas.playback =
@@ -231,28 +236,29 @@ function* playback() //onexit)
 {
     debug(`begin: startup took %d sec, now run fx for %d sec`.green_lt, trunc(process.uptime(), 10), DURATION);
     var perf = {render: 0, idle: 0, paint: 0, cpu: process.cpuUsage()};
-    wait.stats = {};
+//    this.on('stats', stats_cb, perf);
+//    canvas.wait_stats = true; //request wait() stats
 //    onexit(BkgWker.closeAll);
 //    for (var i = 0; i < 100; ++i)
 //        models.forEach((model) => { model.render(i); });
 
 //    var started = now_sec();
     this.duration = DURATION; //set progress bar limit
-    perf.timestamp = this.elapsed = 0; //elapsed(0);
+    perf.time = this.elapsed = 0; //elapsed(0);
 //    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
 //    var hd = new memwatch.HeapDiff();
     for (var frnum = 1; this.elapsed <= DURATION; ++frnum)
     {
 //        var now = this.elapsed;
-        perf.render -= perf.timestamp; //this.elapsed; //exclude non-rendering (paint + V-sync wait) time
+        perf.render -= perf.time; //this.elapsed; //exclude non-rendering (paint + V-sync wait) time
 //        models.renderAll(canvas, frnum); //forEach((model) => { model.render(frnum); });
 //render all models (synchronous):
 //        models.forEach(model => { model.render(frnum, canvas.elapsed); }); //bkg wker: sync render; main thread: sync render or async ipc
-        this.render(frnum, perf.timestamp); //use frame timestamp for render time of all models
-        perf.timestamp = this.elapsed;
+        this.render(frnum, perf.time); //use frame timestamp for render time of all models
+        perf.time = this.elapsed;
 //        render(frnum);
 //        yield canvas.render(frnum);
-        perf.render += perf.timestamp; //this.elapsed;
+        perf.render += perf.time; //this.elapsed;
 
 //NOTE: pixel (0, 0) is upper left on screen
 //NOTE: the code below will run up to ~ 35 FPS on RPi 2
@@ -284,23 +290,23 @@ function* playback() //onexit)
                 }
 */
 //        yield wait(started + (t + 1) / FPS - now_sec()); //avoid cumulative timing errors
-        perf.idle -= perf.timestamp; //this.elapsed; //exclude non-waiting time
+        perf.idle -= perf.time; //this.elapsed; //exclude non-waiting time
 //bkg wker: set reply status for main (atomic dec); main thread: sync wait and check all ipc reply rcvd
-        yield wait(frnum / FPS - perf.timestamp); //throttle to target frame rate; avoid cumulative timing errors
-        perf.timestamp = this.elapsed;
-        perf.idle += perf.timestamp; //this.elapsed;
+        yield this.wait(frnum / FPS - perf.time); //throttle to target frame rate; avoid cumulative timing errors
+        perf.time = this.elapsed;
+        perf.idle += perf.time; //this.elapsed;
 
 //bkg wker: noop - already waited for ipc req (rdlock?); main thread: gpu update
-        perf.paint -= perf.timestamp; //this.elapsed;
+        perf.paint -= perf.time; //this.elapsed;
         this.paint();
-        perf.timestamp = this.elapsed;
-        perf.paint += perf.timestamp; //this.elapsed;
+        perf.time = this.elapsed;
+        perf.paint += perf.time; //this.elapsed;
 //        yield wait(1);
 //        ++canvas.elapsed; //update progress bar
 
-        if (!(frnum % 50)) stats(perf, frnum);
+        if (OPTS.WANT_STATS && !(frnum % 50)) stats(perf, frnum);
     }
-    if (--frnum % 50) stats(perf, frnum); //stats for last partial interval; undo last loop inc
+    if (!stats.reported || --frnum % 50) stats(perf, frnum); //stats for last partial interval; undo last loop inc
 
 //    debug("heap diff:", JSON.stringify(hd.end(), null, 2));
 /*
@@ -314,62 +320,56 @@ function* playback() //onexit)
     debug(`cpu usage: ${JSON.stringify(cpu)} usec = ${trunc((cpu.user + cpu.system) / 1e4 / canvas.elapsed, 10)}% of elapsed`.blue_lt);
 */
     debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
-    yield wait(PAUSE); //pause to show screen stats longer
-    canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
+    yield this.wait(PAUSE); //pause to show screen stats longer
+//    canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
 //    canvas.close();
 };
 
 
+//render all models for this thread:
 canvas.render =
 function render(frnum, timestamp)
 {
     models.forEach(model => { model.render(frnum, timestamp); });
+//    if (OPTS.NUM_WKERS && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; bypass remaining init
 }
 
 
+//periodically display perf stats:
+//stats are collected from 3 sources: above playback(), process.cpuUsage(), and canvas methods (paint + wait)
+//TODO: http server
 function stats(perf, numfr)
 {
+    var canvst;
+//    if (!OPTS.WANT_STATS) return;
 //    var perf = {render: 0, idle: 0, paint: 0, cpu: process.cpuUsage()}, timestamp;
 //debug(JSON.stringify(wait.stats));
-    if (wait.stats) debug(wait.stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
-    debug(`avg frame: ${trunc(perf.timestamp * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.timestamp, 10)} fps) = \
-        avg render: ${trunc(perf.render * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.render, 10)} fps) + \
-        avg idle: ${trunc(perf.idle * 1e3 / numfr, 10)} msec (${trunc(100 * perf.idle / perf.timestamp, 10)}%) + \
-        avg paint: ${trunc(perf.paint * 1e3 / numfr, 10)} msec (${trunc(100 * perf.paint / perf.timestamp, 10)}%), \
+    debug("------ stats -----".blue_lt);
+    if (canvst = canvas.render_stats) //cut down on verbosity; //console.log(canvas.wait_stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
+        console.log(`#fr ${canvst.numfr}, #err ${canvst.numerr}, #dirty ${canvst.num_dirty} (${pct(canvst.num_dirty / canvst.numfr)}%), \
+            elapsed ${trunc(canvst.elapsed, 10)} sec (${trunc(canvst.fps, 10)} fps), avg ${trunc(1000 / canvst.fps, 10)} msec = \
+            caller ${trunc(canvst.caller_time, 10)} (${pct(canvst.caller_time / 1000 * canvst.fps)}%) + \
+            encode ${trunc(canvst.encode_time, 10)} (${pct(canvst.encode_time / 1000 * canvst.fps)}%) + \
+            update ${trunc(canvst.update_time, 10)} (${pct(canvst.update_time / 1000 * canvst.fps)}%) + \
+            render ${trunc(canvst.render_time, 10)} (${pct(canvst.render_time / 1000 * canvst.fps)}%), \
+            frame rate: ${canvst.frrate.map(fr => { return trunc(fr, 10); })} msec (avg ${trunc(canvst.avg_fps, 10)} fps)`.replace(/\s+/gm, " ").yellow_lt);
+    if (canvst = canvas.wait_stats) //cut down on verbosity; //console.log(canvas.wait_stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
+        console.log(`wait stats: overdue frames ${commas(canvst.true)}/${commas(canvst.count)} (${pct(canvst.true / canvst.count)}%), \
+            avg wait ${trunc(canvst.total_delay / canvst.count, 10)} msec, \
+            min wait[${canvst.min_when}] ${trunc(canvst.min_delay, 10)} msec, \
+            max wait[${canvst.max_when}] ${trunc(canvst.max_delay, 10)} msec`.replace(/\s+/gm, " ")[canvst.true? "red_lt": "green_lt"]);
+    console.log(`avg frame: ${trunc(perf.time * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.time, 10)} fps) = \
+        avg render: ${trunc(perf.render * 1e3 / numfr, 10)} msec @${trunc(numfr / perf.render, 10)} fps (${pct(perf.render / perf.time)}%) + \
+        avg idle: ${trunc(perf.idle * 1e3 / numfr, 10)} msec (${pct(perf.idle / perf.time)}%) + \
+        avg paint: ${trunc(perf.paint * 1e3 / numfr, 10)} msec (${pct(perf.paint / perf.time)}%), \
         ${numfr} frames`.replace(/\s+/gm, " ").blue_lt);
-    var cpu = process.cpuUsage(perf.cpu);
-    debug(`cpu usage: ${cpu.user / 1e6} user + ${cpu.system / 1e6} system = ${trunc((cpu.user + cpu.system) / 1e4 / perf.timestamp, 10)}% of elapsed`.blue_lt);
+    var cpu = micro(process.cpuUsage(perf.cpu));
+    console.log(`cpu usage: ${cpu.user} user + ${cpu.system} system = ${cpu.user + cpu.system} sec (${pct((cpu.user + cpu.system) / perf.time)}% elapsed)`.blue_lt);
+    debug("------ /stats -----".blue_lt);
+    stats.reported = true;
 }
 
 
-//delay next step:
-function wait(delay) //, frnum)
-{
-//    if (canvas.isWorker) return BkgWker.wait(nxtfr);
-    delay *= 1000; //sec -> msec
-//    const overdue = (delay <= 1); //1 msec is too close for comfort; treat it as overdue
-//    if (isNaN(++wait.counts[overdue])) wait.counts = [!overdue, overdue];
-//    if (overdue) if (isNaN(++wait.overdue_count)) wait.overdue_count = 1;
-    if (wait.stats)
-    {
-        const overdue = (delay <= 1); //1 msec is too close for comfort; treat it as overdue
-        if (isNaN(++wait.stats[overdue])) Object.defineProperties(wait.stats, getOwnPropertyDescriptors( //init stats, delay execution of getters; need descriptors
-        {
-            [overdue]: 1, [!overdue]: 0, get count() { return this.false + this.true; },
-            total_delay: 0, max_delay: 0, min_delay: Number.MAX_SAFE_INTEGER,
-            get report() { return `wait stats: overdue frames ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), \
-                avg wait ${trunc(this.total_delay / this.count, 10)} msec, \
-                min wait[${this.min_when}] ${trunc(this.min_delay, 10)} msec, \
-                max wait[${this.max_when}] ${trunc(this.max_delay, 10)} msec`.replace(/\s+/gm, " ")[this.true? "red_lt": "green_lt"]; },
-        }));
-        wait.stats.total_delay += Math.max(delay, 0);
-        if (delay > wait.stats.max_delay) { wait.stats.max_delay = delay; wait.stats.max_when = wait.stats.count; } //wait.stats.false + wait.stats.true; }
-        if (delay < wait.stats.min_delay) { wait.stats.min_delay = delay; wait.stats.min_when = wait.stats.count; } //frnum; } //wait.stats.false + wait.stats.true; }
-        if ((wait.stats[overdue] < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
-            debug(`wait[${wait.stats.count}] ${commas(trunc(delay, 10))} msec`[overdue? "red_lt": "blue_lt"]); //, wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
-    }
-    return run_later(delay);
-}
 //const x = {};
 //if ((++x.y || 0) < 10) console.log("yes-1");
 //else console.log("no-1");
@@ -378,178 +378,18 @@ function wait(delay) //, frnum)
 //process.exit();
 
 
-//polyfill:
-//no worky on getters without setters :(
-//function Object_getOwnPropertyDescriptors(obj)
-//{
-//    for (var i in obj)
-//        obj[i] = Object.getOwnPropertyDescriptor(obj, i);
-//    return obj;
-//}
-
-
-////////////////////////////TODO: move to index.js
-//bkg wker:
-//treated as a pseudo-model by main thread
-//NOTE: use function ctor instead of ES6 class syntax to allow hoisting
-function BkgWker(opts)
-{
-    if (!(this instanceof BkgWker))
-    {
-        if (OPTS.NUM_WKERS && canvas.isMaster) return new BkgWker(opts);
-        return opts; //don't need bkg wker; use model as-is
-    }
-    if (isNaN(++BkgWker.count)) BkgWker.count = 1;
-    this.name = "BkgWker" + ((opts || {}).name? `-${opts.name}`: `#${BkgWker.count}`);
-//    if (!BkgWker.all) BkgWker.all = [];
-    canvas.atomic(Pending, +1, "fork"); //keep track of #pending bkg wker acks
-//debug("fork: shm key 0x%s", canvas.SHM_KEY.toString(16))
-    this.wker = cluster.fork({WKER_ID: Object.keys(cluster.workers).length, SHM_KEY: canvas.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
-//    if (all.id) return null; //already have this wker
-//    BkgWker.all.push(this);
-//    cluster.on('message', (wker, msg, handle) =>
-    this.wker.on('message', (msg) => //TODO: not needed?
-    {
-//        debug(`got reply ${JSON.stringify(msg)} from bkg wker`.blue_lt);
-//no                step(); //wake fg thread
-//send msgs back to caller:
-//            if (msg.mp3done) done_cb.apply(null, msg.mp3done);
-//            if (msg.mp3progess) progress_cb.apply(null, msg.mp3progress);
-        debug(`${canvas.prtype} '${process.pid}' got msg ${JSON.stringify(msg)}`.blue_lt);
-        if (msg.ack)
-        {
-            canvas.atomic(Pending, -1, "fork"); //update #outstanding acks from bkg wkers
-//            var remaining = AtomicAdd(canvas.extra, 0, -1) - 1; 
-//            debug(`fork: atomic dec (${remaining} still pending)`.blue_lt);
-            /*if (!remaining)*/ step(); //NOTE: don't need to check remaining here; step() will do it
-            return;
-        }
-//        if (AtomicAdd(canvas.extra, 0, -1) != 1) return; //more wkers yet to respond
-//        step.retval = msg;
-//        step(); //wake up caller after all outstanding render req completed
-        throw new Error(`Unhandled msg: ${JSON.stringify(msg)}`.red_lt);
-    });
-//    cluster.on('exit', (wker, code, signal) =>
-    this.wker.on('exit', (code, signal) =>
-    {
-        console.log(`${canvas.prtype} '${process.pid}' died (${code || signal || "unknown reason"})`.red_lt);
-//        step.retval = {died: process.pid};
-//        step();
-//TODO: restart proc? state will be gone, might be problematic
-    });
-}
-//ipc render async
-BkgWker.prototype.render =
-function render_bkgwker(frnum)
-{
-//    models.forEach((model) => { model.render(frnum); });
-//        all.forEach(wker => wker.render_req(frnum));
-//        all.forEach(wker => wker.render_wait());
-//if (canvas.isWorker)
-//    Object.keys(cluster.workers).forEach(wkid =>
-//    var pending = AtomicAdd(canvas.extra, 0, 1) + 1; //keep track of #outstanding render req
-//    debug(`render: atomic inc (${pending} now pending)`.blue_lt);
-    canvas.atomic(Pending, +1); //, "render"); //keep track of #outstanding render req
-//debug("cur val: %d", canvas.extra[0]);
-    this.wker.send({render: true, frnum});
-//    var reply = yield;
-//    debug(`got reply ${JSON.stringify(reply)} from bkg wker`.blue_lt);
-}
-//coordinate bkg wkers with main thread:
-const sync_bkgwker =
-BkgWker.sync =
-function sync_bkgwker()
-{
-    if (canvas.isMaster) //all wkers should have finished before main thread starts next frame
-    {
-//        var remaining = AtomicAdd(canvas.extra, 0, 0);
-//        debug(`step-gate: atomic get (${remaining} still pending)`.blue_lt);
-//console.log("here3");
-        var remaining = canvas.atomic(Pending, 0, "step-gate");
-//        if (remaining) throw `step: ${remaining} render req still outstanding`.red_lt;
-//console.log("here4", remaining, !remaining);
-        return !remaining;
-    }
-    if (sync_bkgwker.init) return true;
-    process.send({ack: true});
-    debug(`Worker '${process.pid}' sync-up: ack sent`.blue_lt);
-//main thread sent a wakeup msg:
-    process.on('message', function(msg)
-    {
-//        debug("cur val: %d", canvas.extra[0]);
-        var remaining = canvas.atomic(Pending, 0); //, "rcv msg"); //AtomicAdd(canvas.extra, 0, 0);
-//        debug(`${canvas.prtype} '${process.pid}' rcv msg ${JSON.stringify(msg)}, atomic chk ${remaining} still pending`.blue_lt);
-        if (msg.render)
-        {
-            if (!remaining) throw new Error("render msg: main not expecting a response".red_lt);
-            debug(`BkgWker '${process.pid}' render req fr# ${msg.frnum}, ${models.length} model(s)`.blue_lt);
-//            models.renderAll(msg.frnum);
-//            process.send({reply: frnum});
-            if (msg.frnum != (wait_bkgwker.frnum || 0)) throw new Error(`BkgWker '${process.pid}': out of sync: at frame# ${wait.frnum}, but main thread wants frame# ${msg.frnum}`.red_lt);
-            step(); //let caller run
-            return;
-        }
-        if (msg.quit)
-        {
-            if (remaining) throw new Error(`quit msg: main expecting a response (${remaining} pending)`.red_lt);
-            debug(`BkgWker '${process.pid}' quit`.blue_lt);
-  //          process.send({quite: true});
-            process.exit(0);
-            return;
-        }
-        throw new Error(`unknown msg type (pending ${remaining}): ${JSON.stringify(msg)}`.red_lt);
-    });
-    sync_bkgwker.init = true;
-    return false; //don't step caller until ack comes back
-}
-const wait_bkgwker =
-BkgWker.wait =
-function wait_bkgwker(frnum)
-{
-    if (!canvas.isWorker) return;
-//    var remaining = AtomicAdd(canvas.extra, 0, -1) - 1; //update #outstanding render req
-//    debug(`render: atomic dec (${remaining} still pending)`.blue_lt);
-    canvas.atomic(Pending, -1, "render");
-    wait_bkgwker.frnum = frnum; //safety check: remember which frame is next
-//    return; //main thread will send wakeup msg
-}
-const close_bkgwker =
-BkgWker.close = 
-function close_bkgwker()
-{
-    if (!canvas.isMaster) return;
-    for (var w in cluster.workers)
-        cluster.workers[w].send({quit: true});
-//    for (var w in cluster.workers)
-//        yield;
-}
-
-
-//update pending count:
-//NOTE: this is atomic (thread-safe)
-function Pending(adj, desc)
-{
-//    var pending = AtomicAdd(canvas.extra, 0, adj) + adj;
-    var pending = canvas.extra[0];
-    canvas.extra[0] += adj;
-    var newval = canvas.extra[0];
-//    var paranoid = AtomicAdd(canvas.extra, 0, 0); //NOTE: not guaranteed, but only a problem if other threads are updating at same time
-//    if (paranoid != pending) throw `atomic ${desc}: is ${paranoid}, should be ${pending}`.red_lt;
-    if (desc || (pending < 0) || (newval < 0)) //debug info
-    {
-        const {caller/*, calledfrom, shortname*/} = require("./shared/caller");
-        const from = caller(-2).replace("@pin-finder:", "");
-        if ((pending < 0) || (newval < 0)) throw new Error(`underflow (from ${from}): lost track of pending count`.red_lt);
-        debug(`${canvas.prtype} ${desc} (from ${from}): atomic pending ${adj? "now": "still"} = ${pending} + ${adj} = ${newval}`.blue_lt);
-    }
-    return pending; //old value
-}
-
-
 ////////////////////////////////////////////////////////////////////////////////
 ////
 /// Helpers:
 //
+
+
+//convert usec to sec:
+function micro(obj)
+{
+    Object.keys(obj).forEach(key => { obj[key] /= 1e6; });
+    return obj;
+}
 
 
 //display commas for readability (debug):
@@ -558,6 +398,13 @@ function commas(val)
 {
 //number.toLocaleString('en-US', {minimumFractionDigits: 2})
     return val.toLocaleString();
+}
+
+
+//show %:
+function pct(val)
+{
+    return trunc(100 * val, 10); //+ "%";
 }
 
 

@@ -1346,7 +1346,7 @@ private:
 //    static int count;
 //performance stats:
     uint64_t started, reported; //doesn't need to be atomic; won't be modified after fg thread wakes
-    uint64_t render_timestamp, frame_rate;
+    uint64_t render_timestamp, frame_rate[30];
 #ifdef MULTI_THREADED
     std::atomic<uint32_t> numfr, numerr, num_dirty; //could be updated by another thread
     struct { uint64_t previous; std::atomic<uint64_t> user_time, caller_time, encode_time; } fg; //, lock_time, update_time, unlock_time; } fg;
@@ -1366,7 +1366,7 @@ public:
 //    std::atomic<double> PresentTime; //presentation timestamp (set by bkg rendering thread)
     double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
     void ResetElapsed(double elaps = 0) { started = now() - elaps * SDL_TickFreq(); }
-    int StatsAdjust; //allow caller to tweak stats
+//    int StatsAdjust; //allow caller to tweak stats
 //CAUTION: must match firmware
 //        unsigned unused: 5; //lsb
 //        unsigned RGswap: 1;
@@ -1394,9 +1394,9 @@ private:
 public:
 //ctor/dtor:
 #ifdef MULTI_THREADED
-    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(now()), StatsAdjust(0), dump_count(0)
+    GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(now()), /*StatsAdjust(0),*/ dump_count(0)
 #else
-    GpuCanvas(const char* title, int num_univ, int univ_len): started(now()), StatsAdjust(0)
+    GpuCanvas(const char* title, int num_univ, int univ_len): started(now()) //, StatsAdjust(0)
 #endif
     {
         if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
@@ -1404,7 +1404,7 @@ public:
         if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
 //        if (!count++) Init();
         if (!title) title = "GpuCanvas";
-        myprintf(3, BLUE_LT "Init: title '%s', #univ %d, univ len %d, pivot? %d" ENDCOLOR, title, num_univ, univ_len, want_pivot);
+        myprintf(3, BLUE_LT "Init: title '%s', #univ %d, univ len %d" ENDCOLOR, title, num_univ, univ_len); //, want_pivot);
 
 //NOTE: scaling *must* be set to nearest pixel sampling (0) because texture is stretched horizontally to fill screen
         if (SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0") != SDL_TRUE) //set texture filtering to linear; TODO: is this needed?
@@ -1496,14 +1496,14 @@ public:
 
         myprintf(8, MAGENTA_LT "canvas startup took %2.1f msec" ENDCOLOR, elapsed(started));
         times.caller = times.encode = times.update = times.render = numfr = numerr = num_dirty = 0;
-        started = reported = times.previous = now();
-        render_timestamp = frame_rate = 0;
+        render_timestamp = started = reported = times.previous = now();
+//        render_timestamp = frame_rate = 0;
 #endif //def MULTI_THREADED
     }
     ~GpuCanvas()
     {
 //        myprintf(22, BLUE_LT "GpuCanvas dtor" ENDCOLOR);
-        if (reported != times.previous) stats();
+//        if (reported != times.previous) stats();
 #ifdef MULTI_THREADED
         this->done = true;
         this->wake(); //eof; tell bkg thread to quit (if it's waiting)
@@ -1553,8 +1553,8 @@ private:
 //        Paint(NULL); //start with all pixels dark
         bg.caller_time = bg.encode_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = num_dirty = 0;
 
-        started = fg.previous = bg.previous = now();
-        render_timestamp = frame_rate = 0;
+        render_timestamp = started = fg.previous = bg.previous = now();
+//        render_timestamp = frame_rate = 0;
 //        PresentTime = 0; //start of official playback
 //        myprintf(33, "bkg ack main" ENDCOLOR);
         out.wake(pxbuf); //tell main thread i'm ready
@@ -1654,7 +1654,7 @@ private:
             render_timestamp = bg.previous; //now
 //            PresentTime = elapsed(started); //update presentation timestamp (in case main thread wants to know)
 //myprintf(22, BLUE_LT "fr[%d] deltas: %lld, %lld, %lld, %lld, %lld" ENDCOLOR, numfr, delta1, delta2, delta3, delta4, delta5);
-            if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec @60 FPS
+//            if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec @60 FPS
         }
 //        myprintf(33, "bkg done" ENDCOLOR);
         myprintf(8, MAGENTA_LT "bkg renderer thread: exit after %2.1f msec" ENDCOLOR, elapsed(started));
@@ -1795,9 +1795,10 @@ public:
     bool Paint(uint32_t* pixels = 0) //, void* cb)
     {
         uint64_t delta;
-        delta = now() - times.previous; times.caller += delta; times.previous += delta;
+        delta = now() - times.previous; times.previous += delta; times.caller += delta;
         if (pixels) //updated data from caller (optional)
         {
+            ++num_dirty;
             { //scope for locked texture
                 auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
 //                delta = now() - fg.previous; fg.lock_time += delta; fg.previous += delta;
@@ -1805,7 +1806,7 @@ public:
 //NOTE: SDL_UpdateTexture is reportedly slow; use Lock/Unlock and copy pixel data directly for better performance
 //            memcpy(lock.data.surf.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
                 encode(pixels, (uint32_t*)lock.data.surf.pixels);
-                delta = now() - times.previous; times.encode += delta; times.previous += delta;
+                delta = now() - times.previous; times.previous += delta; times.encode += delta;
             }
 //            delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
 //slower; doesn't work with streaming texture?
@@ -1816,41 +1817,80 @@ public:
                 err(RED_LT "Unable to render to screen" ENDCOLOR);
                 ++numerr;
             }
-            delta = now() - times.previous; times.update += delta; times.previous += delta;
+            delta = now() - times.previous; times.previous += delta; times.encode += delta;
         }
         SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
-        delta = now() - times.previous; times.render += delta; times.previous += delta;
-        if (render_timestamp) frame_rate += times.previous - render_timestamp; //now - previous timestamp
-        render_timestamp = times.previous; //now
+        delta = now() - times.previous; times.previous += delta; times.render += delta;
+//myprintf(22, "render present: old ts %2.3f sec, new ts %2.3f, rate %2.3f + %2.3f = %2.3f" ENDCOLOR, 
+//(double)render_timestamp / SDL_TickFreq(), (double)times.previous / SDL_TickFreq(), 
+//(double)frame_rate / SDL_TickFreq(), (double)(times.previous - render_timestamp) / SDL_TickFreq(), (double)(frame_rate + times.previous - render_timestamp) / SDL_TickFreq());
+        /*if (render_timestamp)*/ frame_rate[numfr % SIZE(frame_rate)] = times.previous - render_timestamp; //now - previous timestamp
+        render_timestamp = times.previous; //now (presentation time)
 //        if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec @60 FPS
         ++numfr;
-        if (elapsed(reported) >= 10) stats(); //show stats every 10 sec
+//        if (elapsed(reported) >= 10) stats(); //show stats every 10 sec
         return true;
     }
-    bool stats()
+    struct
+    {
+        double elapsed, fps;
+        uint32_t numfr, numerr, num_dirty; //, frrate; //kludge: avoid "deleted function" error on atomic
+//        double avg_fr, avg_fps;
+        double frrate[SIZE(frame_rate)], avg_fps;
+        double caller_time, encode_time, update_time, render_time;
+    } stats_report;
+    /*bool*/ void stats(bool display = false)
     {
 //TODO: skip if numfr already reported
 //        uint64_t elapsed = now() - started, freq = SDL_GetPerformanceFrequency(); //#ticks/second
 //        uint64_t unknown_time = elapsed - caller_time - encode_time - update_time - unlock_time - copy_time - present_time; //unaccounted for; probably function calls, etc
-        uint64_t idle_time = times.render; //isRPi()? bg.present_time: bg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
-        double elaps = elapsed(started) + StatsAdjust, fps = numfr / elaps;
+//        uint64_t idle_time = times.render; //isRPi()? bg.present_time: bg.unlock_time; //kludge: V-sync delay appears to be during unlock on desktop
+//        double elaps = elapsed(started) /*+ StatsAdjust*/, fps = numfr / elaps;
+        stats_report.elapsed = elapsed(started) /*+ StatsAdjust*/;
+        stats_report.fps = numfr / stats_report.elapsed;
 //#define avg_ms(val)  (double)(1000 * (val)) / (double)freq / (double)numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
-        uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
+//        uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
+        stats_report.numfr = numfr;
+        stats_report.numerr = numerr;
+        stats_report.num_dirty = num_dirty;
+//        stats_report.frrate = frame_rate; //kludge: avoid "deleted function" error on atomic
+        stats_report.avg_fps = 0;
+        for (int i = 0; i < SIZE(stats_report.frrate); ++i)
+        {
+            stats_report.avg_fps += (i < stats_report.numfr)? frame_rate[i]: 0;
+            stats_report.frrate[i] = (i < stats_report.numfr)? (double)frame_rate[i] * 1000 / SDL_TickFreq(): 0;
+        }
+        if (stats_report.numfr) stats_report.avg_fps = (double)std::min<int>(SIZE(stats_report.frrate), stats_report.numfr) / stats_report.avg_fps * SDL_TickFreq();
 //        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
 //        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
-        myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec (%2.1f fps)" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000, (double)numfr_cpy * SDL_TickFreq() / frrate_cpy);
+//        double actual_fr = (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000;
+//        double actual_fps = (double)numfr_cpy * SDL_TickFreq() / frrate_cpy);
+        stats_report.caller_time = avg_ms(times.caller);
+        stats_report.encode_time = avg_ms(times.encode);
+        stats_report.update_time = avg_ms(times.update);
+        stats_report.render_time = avg_ms(times.render);
+//        stats_report.avg_fr = (double)stats_report.frrate / (stats_report.numfr - 1) / SDL_TickFreq() * 1000;
+//        stats_report.avg_fps = (double)(stats_report.numfr - 1) * SDL_TickFreq() / stats_report.frrate;
+        if (!display) return;
+
         myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, avg %2.1f msec = caller %2.3f + encode %2.3f + update %2.3f + render %2.3f" ENDCOLOR, //, %2.1f%% idle" ENDCOLOR, 
-            numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
-            avg_ms(times.caller), avg_ms(times.encode), avg_ms(times.update), avg_ms(times.render));
+//            numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
+//            avg_ms(times.caller), avg_ms(times.encode), avg_ms(times.update), avg_ms(times.render));
+            stats_report.numfr, stats_report.numerr, stats_report.num_dirty, (double)100 * stats_report.num_dirty / stats_report.numfr, stats_report.elapsed, stats_report.fps, 1000 / stats_report.fps, 
+            stats_report.caller_time, stats_report.encode_time, stats_report.update_time, stats_report.render_time);
 //            (double)100 * idle_time / (now() - started));
-        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, frrate %s, caller %s, update %s, encode %s, render %s" ENDCOLOR, 
-            commas(now() - started), commas(SDL_TickFreq()), commas(frrate_cpy),
+        char buf[SIZE(stats_report.frrate) * 10 + 2] = ", 0", *bp = buf;
+        for (int i = 0; (i < SIZE(stats_report.frrate)) && (i < numfr); ++i)
+            bp += sprintf(bp, ", %2.1f", stats_report.frrate[i]);
+        myprintf(12, YELLOW_LT "frame rate: %s msec (%2.1f fps)" ENDCOLOR, buf + 2, stats_report.avg_fps);
+        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, caller %s, update %s, encode %s, render %s" ENDCOLOR, 
+            commas(now() - started), commas(SDL_TickFreq()), //commas(stats_report.frrate), //frrate_cpy),
             commas(times.caller), commas(times.update), commas(times.encode), commas(times.render));
 //        myprintf(22, "raw-raw: elapsed %ld, freq %ld" ENDCOLOR, now() - started, SDL_TickFreq());
-        reported = times.previous;
-        return true;
+//        reported = times.previous;
+//        return true;
     }
 #endif //def MULTI_THREADED
 private:
@@ -2940,7 +2980,8 @@ private:
 //    static NAN_GETTER(WidthGetter);
 //    static NAN_GETTER(PitchGetter);
     static NAN_METHOD(paint);
-    static NAN_METHOD(stats);
+//    static NAN_METHOD(stats);
+    static NAN_GETTER(stats_getter);
 //??    static NAN_PROPERTY_GETTER(get_pivot);
 //??    static NAN_PROPERTY_SETTER(set_pivot);
 //    static NAN_GETTER(get_pivot);
@@ -2952,8 +2993,8 @@ private:
 //    static NAN_METHOD(devmode_tofix);
     static NAN_GETTER(devmode_getter);
     static NAN_SETTER(devmode_setter);
-    static NAN_GETTER(StatsAdjust_getter);
-    static NAN_SETTER(StatsAdjust_setter);
+//    static NAN_GETTER(StatsAdjust_getter);
+//    static NAN_SETTER(StatsAdjust_setter);
 //    static NAN_GETTER(DumpFile_getter);
 //    static NAN_SETTER(DumpFile_setter);
     static NAN_METHOD(UnivType_tofix); //TODO: change to accessor/getter/setter; can't figure out how to do that with 2 parameters
@@ -2988,7 +3029,8 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 //    Nan::SetPrototypeMethod(proto, "paint", paint);
 //    NODE_SET_PROTOTYPE_METHOD(ctor, "paint", GpuCanvas_js::paint);
     Nan::SetPrototypeMethod(ctor, "paint", paint);
-    Nan::SetPrototypeMethod(ctor, "stats", stats);
+//    Nan::SetPrototypeMethod(ctor, "stats", stats);
+    Nan::SetAccessor(proto, JS_STR(iso, "render_stats"), stats_getter);
 //    Nan::SetPrototypeMethod(ctor, "width", width_getter);
 //    Nan::SetPrototypeMethod(ctor, "height", height_getter);
     Nan::SetAccessor(proto, JS_STR(iso, "width"), width_getter);
@@ -2997,7 +3039,7 @@ void GpuCanvas_js::Init(v8::Local<v8::Object> exports)
 //TODO    Nan::SetPrototypeMethod(ctor, "utype", GpuCanvas_js::utype);
 //    Nan::SetPrototypeMethod(ctor, "devmode_tofix", devmode_tofix);
     Nan::SetAccessor(proto, JS_STR(iso, "devmode"), devmode_getter, devmode_setter);
-    Nan::SetAccessor(proto, JS_STR(iso, "StatsAdjust"), StatsAdjust_getter, StatsAdjust_setter);
+//    Nan::SetAccessor(proto, JS_STR(iso, "StatsAdjust"), StatsAdjust_getter, StatsAdjust_setter);
 //    Nan::SetAccessor(proto, JS_STR(iso, "DumpFile"), DumpFile_getter, DumpFile_setter);
     Nan::SetPrototypeMethod(ctor, "UnivType_tofix", UnivType_tofix); //TODO: fix this
 //    Nan::SetPrototypeMethod(ctor, "release", GpuCanvas_js::release);
@@ -3174,6 +3216,7 @@ NAN_SETTER(GpuCanvas_js::devmode_setter) //defines "info" and "value"; implicit 
 }
 
 
+#if 0
 //get/set stats adjust:
 //void GpuCanvas_js::devmode_tofix(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
@@ -3195,6 +3238,7 @@ NAN_SETTER(GpuCanvas_js::StatsAdjust_setter) //defines "info" and "value"; impli
 //    info.GetReturnValue().Set(JS_BOOL(iso, canvas->inner.WantPivot)); //return old value
     if (!value->IsUndefined()) canvas->inner.cast->StatsAdjust = value->IntegerValue();
 }
+#endif
 
 
 #if 0
@@ -3286,13 +3330,33 @@ myprintf(33, "js paint(0x%x) %d arg(s): pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pix
 
 
 //show performance stats:
-void GpuCanvas_js::stats(const Nan::FunctionCallbackInfo<v8::Value>& info)
+//void GpuCanvas_js::stats(const Nan::FunctionCallbackInfo<v8::Value>& info)
 //NAN_METHOD(GpuCanvas_js::setget_pivot) //defines "info"; implicit HandleScope (~ v8 stack frame)
+NAN_GETTER(GpuCanvas_js::stats_getter) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
-    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
-    if (!canvas->inner.cast->stats()) return_void(errjs(iso, "GpuCanvas.stats: failed"));
-    info.GetReturnValue().Set(0); //TODO: what value to return?
+    GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.This()); //Holder()); //info.This());
+//    if (!canvas->inner.cast->stats()) return_void(errjs(iso, "GpuCanvas.stats: failed"));
+    canvas->inner.cast->stats();
+
+    v8::Local<v8::Object> retval = v8::Object::New(iso);
+    retval->Set(JS_STR(iso, "elapsed"), JS_FLOAT(iso, canvas->inner.cast->stats_report.elapsed));
+    retval->Set(JS_STR(iso, "fps"), JS_FLOAT(iso, canvas->inner.cast->stats_report.fps));
+    retval->Set(JS_STR(iso, "numfr"), JS_INT(iso, canvas->inner.cast->stats_report.numfr));
+    retval->Set(JS_STR(iso, "numerr"), JS_INT(iso, canvas->inner.cast->stats_report.numerr));
+    retval->Set(JS_STR(iso, "num_dirty"), JS_INT(iso, canvas->inner.cast->stats_report.num_dirty));
+//    retval->Set(JS_STR(iso, "frrate"), JS_INT(iso, canvas->inner.cast->stats_report.frrate));
+//    retval->Set(JS_STR(iso, "avg_fr"), JS_FLOAT(iso, canvas->inner.cast->stats_report.avg_fr));
+    v8::Local<v8::Array> frrate = v8::Array::New(iso);
+    for (int i = 0; (i < SIZE(canvas->inner.cast->stats_report.frrate)) && (i < canvas->inner.cast->stats_report.numfr); ++i)
+        frrate->Set(i, JS_FLOAT(iso, canvas->inner.cast->stats_report.frrate[i]));
+    retval->Set(JS_STR(iso, "frrate"), frrate);
+    retval->Set(JS_STR(iso, "avg_fps"), JS_FLOAT(iso, canvas->inner.cast->stats_report.avg_fps));
+    retval->Set(JS_STR(iso, "caller_time"), JS_FLOAT(iso, canvas->inner.cast->stats_report.caller_time));
+    retval->Set(JS_STR(iso, "encode_time"), JS_FLOAT(iso, canvas->inner.cast->stats_report.encode_time));
+    retval->Set(JS_STR(iso, "update_time"), JS_FLOAT(iso, canvas->inner.cast->stats_report.update_time));
+    retval->Set(JS_STR(iso, "render_time"), JS_FLOAT(iso, canvas->inner.cast->stats_report.render_time));
+    info.GetReturnValue().Set(retval);
 }
 
 

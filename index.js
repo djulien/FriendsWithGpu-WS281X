@@ -8,13 +8,14 @@ const os = require('os');
 const glob = require('glob');
 const {PNG} = require('pngjs');
 const pathlib = require('path');
-const Emitter = require('events');
+//const Emitter = require('events');
 const cluster = require('cluster');
 const shm = require('shm-typed-array');
 //const {inherits} = require('util');
 //const bindings = require('bindings');
-const {debug} = require('./demos/shared/debug');
+const getOwnPropertyDescriptors = require('object.getownpropertydescriptors'); //ES7 shim (not available in Node.js yet)
 const {Screen, GpuCanvas, UnivTypes, /*shmbuf, AtomicAdd,*/ usleep, RwlockOps, rwlock} = require('./build/Release/gpu-canvas.node'); //bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
+const {debug} = require('./demos/shared/debug');
 //lazy-load Screen props to avoid unneeded SDL inits:
 //module.exports.Screen = {};
 //Object.defineProperties(module.exports.Screen,
@@ -177,9 +178,10 @@ const OPTS =
 //    WS281X_FMT: [LIVEOK, true], //force WS281X formatting on screen
     DEV_MODE: [LIVEOK, false], //apply WS281X or other formatting
     AUTO_PLAY: [LIVEOK, true], //start playback
+    WANT_STATS: [LIVEOK, true], //run-time perf stats
 //    WS281X_DEBUG: true, //show timing debug info
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
-    SHM_KEY: [LIVEOK, 0xface], //makes it easier to find in shm (for debug)
+//    SHM_KEY: [LIVEOK, 0xface], //makes it easier to find in shm (for debug)
     EXTRA_LEN: [LIVEOK, 0], //caller-requrested extra space for frame#, #wkers, timestamp, etc
     TITLE: [DEVONLY, "GpuCanvas"], //only displayed in dev mode
     NUM_WKERS: [LIVEOK, os.cpus().length], //create 1 bkg wker for each core
@@ -201,7 +203,7 @@ const U32SIZE = Uint32Array.BYTES_PER_ELEMENT; //reduce verbosity
 //    if (cluster.isMaster) GpuCanvas.call(this, width, height, opts);
 //    else 
 //    Emitter.call(this); //super
-}
+//}
 //inherits(GpuCanvas, Emitter);
 
 
@@ -219,7 +221,6 @@ new Proxy(function(){},
     construct: function GpuCanvas_jsctor(target, args, newTarget) //ctor args: width, height, opts
 //    constructor(args) //ctor args: width, height, opts
     {
-        const MAGIC = 0x1234beef; //used to detect if shared memory is valid
 //    if (!(this instanceof GpuCanvas_shim)) return new GpuCanvas_shim(title, width, height, opts); //convert factory call to class
 //console.log("args", JSON.stringify(args));
         const [width, height, opts] = args;
@@ -230,14 +231,14 @@ new Proxy(function(){},
         if (num_wkers > os.cpus().length) debug(`#wkers ${num_wkers} exceeds #cores ${os.cpus().length}`.yellow_lt);
 //        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
         const THIS = cluster.isMaster /*|| !num_wkers)*/? new GpuCanvas(title, width, height): {title, width, height}; //initialize base class; dummy wrapper for wker procs
-        THIS.WKER_ID = cluster.isWorker? +process.env.WKER_ID: -1; //which wker thread is this
         THIS.isMaster = cluster.isMaster; //(THIS.WKER_ID == -1);
-        THIS.isWorker = cluster.isWorker; //(THIS.WKER_ID != -1);
+        THIS.WKER_ID = cluster.isWorker? +process.env.WKER_ID: -1; //which wker thread is this
         THIS.prtype = cluster.isMaster? "master": "worker";
-        Emitter.call(THIS); //event emitter mixin
-        Object.keys(Emitter.prototype).forEach(method => { THIS.prototype[method] = Emitter.prototype[method]; });
-//        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
+    //    this.isWorker = cluster.isWorker; //(THIS.WKER_ID != -1);
         debug(`GpuCanvas: ${THIS.prtype} '${process.pid}' is wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
+        memory.call(THIS, opts, num_wkers);
+//        Emitter.call(THIS); //event emitter mixin
+//        Object.keys(Emitter.prototype).forEach(method => { THIS.prototype[method] = Emitter.prototype[method]; });
 //        pushable.call(THIS, Object.assign({}, supported_OPTS, opts || {}));
 //console.log("initial props:", THIS.WS281X_FMT, THIS.SHOW_PROGRESS, opts.UNIV_TYPE);
 //if (opts.UNIV_TYPE) console.log("set all unv type to", opts.UNIV_TYPE);
@@ -245,70 +246,6 @@ new Proxy(function(){},
 //        THIS.UnivType = THIS.UnivType_tofix;
 //        if (THIS.UNIV_TYPE) for (var i = 0; i < THIS.width; ++i) THIS.UnivType(i, THIS.UNIV_TYPE);
 
-//keep pixel data local to reduce #API calls into Nan/v8
-//        THIS.pixels = new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
-//shared memory buffer for inter-process data:
-//significantly reduces inter-process serialization and data passing overhead
-//mem copying reportedly can take ~ 25 msec for 100KB; that is way too high for 60 FPS frame rate
-//to see shm segs:  ipcs -a
-//to delete:  ipcrm -M key
-//var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
-        var shmkey = (opts || {}).SHM_KEY; //no default; //|| OPTS.SHM_KEY[1];
-        if (typeof shmkey != "undefined") shmkey = +shmkey;
-//console.log("shm key-1 %s 0x%s", typeof shmkey, (shmkey || -1).toString(16));
-        const extralen32 = firstOf((opts || {}).EXTRA_LEN, OPTS.EXTRA_LEN[1], 0); //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
-        const buflen32 = THIS.width * THIS.height + RwlockOps.SIZE32 + extralen32 + 1;
-//extralen += 10;
-//        const alloc = num_wkers? shmbuf: function(ignored, len) { return new Buffer(len); }
-//debug(`smh alloc: key 0x${shmkey.toString(16)} retry?`,  typeof cluster.isMaster, cluster.isMaster, typeof cluster.isWorker, cluster.isWorker);
-//        THIS.shmbuf = new Uint32Array(alloc(shmkey, (THIS.width * THIS.height + RwlockOps.SIZE32 + extralen) * Uint32Array.BYTES_PER_ELEMENT, true)); //cluster.isMaster));
-//NOTE: TypedArray (Uint32Array) ref to Buffer using native byte order is reportedly a lot faster than DataView ref to Buffer using explicitly defined byte order
-        const shmbuf = !num_wkers? Buffer.allocUnsafe(buflen32 * U32SIZE): //NOTE: will initialize to non-0 values below, so don't init to 0 here; //new Buffer(buflen32 * U32SIZE): //Uint32Array(buflen32): //doesn't need to be shared
-                      cluster.isMaster? shm.create(buflen32 * U32SIZE, "Buffer", shmkey): shm.get(shmkey, "Buffer");
-        if (!shmbuf) throw new Error(`Can't create ${num_wkers? "shared": "private"} buf of size ${buflen32}`.red_lt);
-//        shmbuf.byteLength = shmbuf.length;
-        /*if (num_wkers)*/ THIS.SHM_KEY = shmbuf.key;
-//console.log("shm key-2 0x%s", THIS.SHM_KEY.toString(16));
-        THIS.shmbuf = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset, RwlockOps.SIZE32 + 1); //shmbuf.byteLength / U32SIZE); //CAUTION: need ofs + len if buf is < 4K (due to shared node.js bufs?)
-        if (extralen32) THIS.extra = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (RwlockOps.SIZE32 + 1) * U32SIZE, extralen32); //THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen32);
-        THIS.pixels = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32 + 1) * U32SIZE, THIS.width * THIS.height); //THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen32);
-        debug(`GpuCanvas: ${THIS.prtype}, #bkg wkers ${num_wkers}, alloc ${commas(shmbuf.byteLength)}'${shmbuf.byteOffset} bytes = ${4}'${shmbuf.byteOffset} for hdr + ${commas(RwlockOps.SIZE32 * U32SIZE)}'${shmbuf.byteOffset + 4} for rwlock + ${commas(THIS.extra? THIS.extra.byteLength: 0)}'${shmbuf.byteOffset + (RwlockOps.SIZE32 + 1) * U32SIZE} for extra data + ${commas(THIS.pixels.byteLength)}'${shmbuf.byteOffset + (RwlockOps.SIZE32 + extralen32 + 1) * U32SIZE} for pixels`.blue_lt);
-        if (cluster.isMaster) //initialize shm
-        {
-            shmbuf["writeUInt32" + os.endianness()](MAGIC, 0); //write via buf, read via typedarray for dual check; //THIS.shmbuf[0] = MAGIC;
-            var errstr = num_wkers? rwlock(THIS.shmbuf, 1, RwlockOps.INIT): false; //use shm to allow access by multiple procs
-            if (errstr) throw new Error(`GpuCanvas: can't create shm lock: ${errstr}`.red_lt);
-            THIS.pixels.fill(BLACK); //start with all pixels dark
-            if (extralen32) THIS.extra.fill(0);
-//            THIS.shmbuf.fill(0x12345678);
-//debug("shmbuf fill-1: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
-//            THIS.shmbuf[RwlockOps.SIZE32 + 1] = 0xdead;
-//            THIS.shmbuf[RwlockOps.SIZE32 + 9] = 0xbeef;
-//debug("shmbuf fill-2: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
-//debug("shmbuf fill-2: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0], THIS.shmbuf[RwlockOps.SIZE32 + 9]);
-//            AtomicAdd(THIS.extra, 0, 1);
-//            AtomicAdd(THIS.extra, 9, -1);
-//debug("shmbuf fill-3: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16));
-        }
-//debug("'0 = %s", shmbuf.readUInt32LE(4 * (RwlockOps.SIZE32 + 1)).toString(16));
-//var buf = [];
-//for (var i = 0; i < THIS.shmbuf.length; ++i) if ((i == 56) || (i == 65) || (THIS.shmbuf[i] != 0x12345678)) buf.push(`${i} = 0x${THIS.shmbuf[i].toString(16)}`);
-//for (var i = 0; i < extralen; ++i) if (THIS.extra[i] != 0x12345678) buf.push(`${i} = 0x${THIS.extra[i].toString(16)}`);
-//debug(`smh check: ${THIS.prtype} ` + (!buf.length? `all ${THIS.extra.length} ok`: `wrong at(${buf.length}): ` + buf.join(", ")));
-//debug(`${THIS.shmbuf[0].toString(16)} ${THIS.shmbuf[1].toString(16)} ${THIS.shmbuf[2].toString(16)} ${THIS.shmbuf[3].toString(16)}`)
-//const ok = ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef))? "bad": "good";
-//debug("shmbuf fill-2: ", ok, THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16));
-//shm paranoid check:
-debug("here4 0x%s", THIS.shmbuf[0].toString(16)); //extra[1].toString(16), THIS.extra[9].toString(16), (THIS.extra[1] != 0xdead) || (THIS.extra[9] != 0xbeef));
-        if (THIS.shmbuf[0] != MAGIC) throw new Error(`${THIS.prtype} '${process.pid}' shm hdr bad: 0x${THIS.shmbuf[0].toString(16)}, should be 0x{MAGIC.toString(16)}`.red_lt);
-//debug(`${THIS.shmbuf[224 + 0].toString(16)} ${THIS.shmbuf[224 + 1].toString(16)} ${THIS.shmbuf[224 + 2].toString(16)} ${THIS.shmbuf[224 + 3].toString(16)}`)
-//        if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
-//        if (cluster.isMaster) THIS.extra.fill(0);
-debug("here5");
-//        if (cluster.isMaster) { THIS.shmbuf[0] = 0xdead; THIS.shmbuf[1] = 0xbeef; }
-//        else if ((THIS.shmbuf[0] != 0xdead) || (THIS.shmbuf[1] != 0xbeef)) throw `shm bad: 0x${THIS.shmbuf[0].toString(16)} 0x${THIS.shmbuf[1].toString(16)}`.red_lt;
-//        if (cluster.isMaster) { THIS.pixels[0] = 0xdead; THIS.pixels[1] = 0xbeef; }
-//        else if ((THIS.pixels[0] != 0xdead) || (THIS.pixels[1] != 0xbeef)) throw `shm bad: 0x${THIS.pixels[0].toString(16)} 0x${THIS.pixels[1].toString(16)}`.red_lt;
 //        if (cluster.isMaster)
 //        for (var w = 0; w < num_wkers; ++w) cluster.fork({WKER_ID: w});
 //NOTE: lock is left in shm; no destroy (not sure when to destroy it)
@@ -320,16 +257,13 @@ debug("here5");
         THIS.devmode = firstOf((opts || {}).DEV_MODE, OPTS.DEV_MODE[1], true);
 
         THIS.atomic = atomic_method;
-
-        THIS.lock = (num_wkers && cluster.isMaster)? lock_method: nop; //function(ignored) {};
+        THIS.lock = /*cluster.isMaster &&*/ num_wkers? lock_method: nop; //function(ignored) {};
 
 //SharedCanvas.prototype.pixel =
-        THIS.pixel = pixel_method;
-
 //SharedCanvas.prototype.fill =
-        THIS.fill = fill_method;
-
 //SharedCanvas.prototype.load =
+        THIS.pixel = pixel_method;
+        THIS.fill = fill_method;
         THIS.load_img = load_img_method;
 
 //    const super_paint = this.paint.bind(this);
@@ -338,13 +272,17 @@ debug("here5");
         THIS.paint = cluster.isMaster? (want_progress? paint_progress_method: paint_method): nop;
 
 //SharedCanvas.prototype.render_stats =
-        THIS.render_stats = cluster.isMaster? render_stats_method: nop;
+//        THIS.render_stats = cluster.isMaster? render_stats_method: nop;
 
 //don't really need to do this; shm seg container will be reclaimed anyway
 //        THIS.close = (num_wkers && cluster.isMaster)? function() { rwlock(THIS.shmbuf, 1, RwlockOps.DESTROY); }: nop;
 
+        if (firstOf((opts || {}).WANT_STATS, OPTS.WANT_STATS[1], false)) THIS.wait_stats = {};
+        THIS.wait = cluster.isMaster? wait_method: nop;
+
         const auto_play = firstOf((opts || {}).AUTO_PLAY, OPTS.AUTO_PLAY[1], true);
-        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
+//        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
+        process.nextTick(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
         return THIS;
 
         function nop() {} //dummy method for special methods on non-master copy
@@ -352,6 +290,173 @@ debug("here5");
 });
 
 
+//set up shared memory:
+function memory(opts, num_wkers)
+{
+    const MAGIC = 0x1234beef; //used to detect if shared memory is valid
+    const HDRLEN = 2; //magic + sync count
+//keep pixel data local to reduce #API calls into Nan/v8
+//        THIS.pixels = new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
+//shared memory buffer for inter-process data:
+//significantly reduces inter-process serialization and data passing overhead
+//mem copying reportedly can take ~ 25 msec for 100KB; that is way too high for 60 FPS frame rate
+//to see shm segs:  ipcs -a
+//to delete:  ipcrm -M key
+//var sab = new SharedArrayBuffer(1024); //not implemented yet in Node.js :(
+//    var shmkey = (opts || {}).SHM_KEY; //no default; //|| OPTS.SHM_KEY[1];
+//    if (typeof shmkey != "undefined") shmkey = +shmkey; //kludge: shm wants number
+    var shmkey = firstOf((opts || {}).SHM_KEY, process.env.SHM_KEY, /*OPTS.SHM_KEY[1],*/ function(){});
+//    if (this.SHM_KEY === null) delete this.SHM_KEY; //kludge: shm wants number or undefined
+    if (typeof shmkey != "undefined") shmkey = +shmkey; //kludge: shm wants key to be number or undefined
+//console.log(typeof (opts || {}).SHM_KEY, typeof +(opts || {}).SHM_KEY);
+//console.log(typeof process.env.SHM_KEY, +process.env.SHM_KEY);
+//console.log(typeof null, +null);
+//console.log(`${this.prtype} shm key %s 0x%s`, typeof this.SHM_KEY, (this.SHM_KEY || -1).toString(16));
+    const extralen32 = firstOf((opts || {}).EXTRA_LEN, OPTS.EXTRA_LEN[1], 0); //1 + 1 + 1; //extra space for frame#, #wkers, and/or timestamp
+    const buflen32 = HDRLEN + RwlockOps.SIZE32 + extralen32 + this.width * this.height;
+//extralen += 10;
+//        const alloc = num_wkers? shmbuf: function(ignored, len) { return new Buffer(len); }
+//debug(`smh alloc: key 0x${shmkey.toString(16)} retry?`,  typeof cluster.isMaster, cluster.isMaster, typeof cluster.isWorker, cluster.isWorker);
+//        THIS.shmbuf = new Uint32Array(alloc(shmkey, (THIS.width * THIS.height + RwlockOps.SIZE32 + extralen) * Uint32Array.BYTES_PER_ELEMENT, true)); //cluster.isMaster));
+//NOTE: TypedArray (Uint32Array) ref to Buffer using native byte order is reportedly a lot faster than DataView ref to Buffer using explicitly defined byte order
+    const shmbuf = !num_wkers? Buffer.allocUnsafe(buflen32 * U32SIZE): //NOTE: will initialize to non-0 values below, so don't init to 0 here; //new Buffer(buflen32 * U32SIZE): //Uint32Array(buflen32): //doesn't need to be shared
+                  cluster.isMaster? shm.create(buflen32 * U32SIZE, "Buffer", shmkey): shm.get(shmkey, "Buffer");
+    if (!shmbuf) throw new Error(`Can't create ${this.prtype} buf size ${buflen32}`.red_lt);
+//        shmbuf.byteLength = shmbuf.length;
+    /*if (num_wkers)*/ this.SHM_KEY = shmbuf.key; //actual key needed to fork wkers
+//console.log("shm key-2 0x%s", THIS.SHM_KEY.toString(16));
+    this.shmbuf = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset, HDRLEN + RwlockOps.SIZE32); //shmbuf.byteLength / U32SIZE); //CAUTION: need ofs + len if buf is < 4K (due to shared node.js bufs?)
+    if (extralen32) this.extra = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (HDRLEN + RwlockOps.SIZE32) * U32SIZE, extralen32); //THIS.shmbuf.slice(RwlockOps.SIZE32, RwlockOps.SIZE32 + extralen32);
+    this.pixels = new Uint32Array(shmbuf.buffer, shmbuf.byteOffset + (HDRLEN + RwlockOps.SIZE32 + extralen32) * U32SIZE, this.width * this.height); //THIS.shmbuf.slice(RwlockOps.SIZE32 + extralen32);
+    debug(`GpuCanvas: ${this.prtype} #bkg wkers ${num_wkers}, alloc ${commas(shmbuf.byteLength)}'${shmbuf.byteOffset} bytes = ${HDRLEN * U32SIZE}'${shmbuf.byteOffset} for hdr + ${commas(RwlockOps.SIZE32 * U32SIZE)}'${shmbuf.byteOffset + HDRLEN * U32SIZE} for rwlock + ${commas((this.extra || {}).byteLength || 0)}'${shmbuf.byteOffset + (HDRLEN + RwlockOps.SIZE32) * U32SIZE} for extra data + ${commas(this.pixels.byteLength)}'${shmbuf.byteOffset + (HDRLEN + RwlockOps.SIZE32 + extralen32) * U32SIZE} for pixels`.blue_lt);
+    if (cluster.isMaster) //initialize shm
+    {
+        shmbuf["writeUInt32" + os.endianness()](MAGIC, 0); //write via buf, read via typedarray for dual check; //THIS.shmbuf[0] = MAGIC;
+//        this.shmbuf[1] = 0;
+        var errstr = num_wkers? rwlock(this.shmbuf, HDRLEN, RwlockOps.INIT): false; //use shm to allow access by multiple procs
+        if (errstr) throw new Error(`GpuCanvas: can't create shm lock: ${errstr}`.red_lt);
+        this.pixels.fill(BLACK); //start with all pixels dark
+        if (extralen32) this.extra.fill(0);
+//            THIS.shmbuf.fill(0x12345678);
+//debug("shmbuf fill-1: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
+//            THIS.shmbuf[RwlockOps.SIZE32 + 1] = 0xdead;
+//            THIS.shmbuf[RwlockOps.SIZE32 + 9] = 0xbeef;
+//debug("shmbuf fill-2: ", RwlockOps.SIZE32 + 0, THIS.shmbuf[RwlockOps.SIZE32 - 1].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 1].toString(16), RwlockOps.SIZE32 + 9, THIS.shmbuf[RwlockOps.SIZE32 + 8].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 10].toString(16));
+//debug("shmbuf fill-2: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0], THIS.shmbuf[RwlockOps.SIZE32 + 9]);
+//            AtomicAdd(THIS.extra, 0, 1);
+//            AtomicAdd(THIS.extra, 9, -1);
+//debug("shmbuf fill-3: ", THIS.extra[0].toString(16), THIS.extra[9].toString(16));
+    }
+//debug("'0 = %s", shmbuf.readUInt32LE(4 * (RwlockOps.SIZE32 + 1)).toString(16));
+//var buf = [];
+//for (var i = 0; i < THIS.shmbuf.length; ++i) if ((i == 56) || (i == 65) || (THIS.shmbuf[i] != 0x12345678)) buf.push(`${i} = 0x${THIS.shmbuf[i].toString(16)}`);
+//for (var i = 0; i < extralen; ++i) if (THIS.extra[i] != 0x12345678) buf.push(`${i} = 0x${THIS.extra[i].toString(16)}`);
+//debug(`smh check: ${THIS.prtype} ` + (!buf.length? `all ${THIS.extra.length} ok`: `wrong at(${buf.length}): ` + buf.join(", ")));
+//debug(`${THIS.shmbuf[0].toString(16)} ${THIS.shmbuf[1].toString(16)} ${THIS.shmbuf[2].toString(16)} ${THIS.shmbuf[3].toString(16)}`)
+//const ok = ((THIS.extra[0] != 0xdead) || (THIS.extra[9] != 0xbeef))? "bad": "good";
+//debug("shmbuf fill-2: ", ok, THIS.extra[0].toString(16), THIS.extra[9].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 0].toString(16), THIS.shmbuf[RwlockOps.SIZE32 + 9].toString(16));
+//shm paranoid check:
+//debug("here4 0x%s", this.shmbuf[0].toString(16)); //extra[1].toString(16), THIS.extra[9].toString(16), (THIS.extra[1] != 0xdead) || (THIS.extra[9] != 0xbeef));
+    if (this.shmbuf[0] != MAGIC) throw new Error(`${this.prtype} shm hdr bad: 0x${this.shmbuf[0].toString(16)}, should be 0x{MAGIC.toString(16)}`.red_lt);
+//debug(`${THIS.shmbuf[224 + 0].toString(16)} ${THIS.shmbuf[224 + 1].toString(16)} ${THIS.shmbuf[224 + 2].toString(16)} ${THIS.shmbuf[224 + 3].toString(16)}`)
+//        if (cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
+//        if (cluster.isMaster) THIS.extra.fill(0);
+//debug("here5");
+//        if (cluster.isMaster) { THIS.shmbuf[0] = 0xdead; THIS.shmbuf[1] = 0xbeef; }
+//        else if ((THIS.shmbuf[0] != 0xdead) || (THIS.shmbuf[1] != 0xbeef)) throw `shm bad: 0x${THIS.shmbuf[0].toString(16)} 0x${THIS.shmbuf[1].toString(16)}`.red_lt;
+//        if (cluster.isMaster) { THIS.pixels[0] = 0xdead; THIS.pixels[1] = 0xbeef; }
+//        else if ((THIS.pixels[0] != 0xdead) || (THIS.pixels[1] != 0xbeef)) throw `shm bad: 0x${THIS.pixels[0].toString(16)} 0x${THIS.pixels[1].toString(16)}`.red_lt;
+}
+
+
+//finish master init asynchronously:
+//starts bkg wkers
+function master_async(num_wkers, auto_play)
+{
+    if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
+    if (auto_play && !this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
+//    if (!cluster.isMaster) return;
+    for (var w = 0, pending = num_wkers; w < num_wkers; ++w)
+    {
+        var wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
+//        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
+/*
+        wker.on('message', (msg) =>
+        {
+//        debug(`got reply ${JSON.stringify(msg)} from bkg wker`.blue_lt);
+            debug(`master '${process.pid}' got msg ${JSON.stringify(msg)}, pending ${pending}`.blue_lt);
+            if (msg.ack) { if (!--pending) step(); return; } //all wkers replied; wake up master
+            throw new Error(`Unhandled msg: ${JSON.stringify(msg)}`.red_lt);
+        });
+*/
+//    cluster.on('exit', (wker, code, signal) =>
+        wker.on('exit', (code, signal) =>
+        {
+            console.log(`wker '${process.pid}' died (${code || signal || "unknown reason"})`.red_lt);
+//        step.retval = {died: process.pid};
+//        step();
+//TODO: restart proc? state will be gone, might be problematic
+        });
+    }
+    debug(`GpuCanvas: ${this.prtype} ${num_wkers} wkers forked`.blue_lt);
+    this.shmbuf[1] = 0;
+}
+
+
+//finish wker init asynchronously:
+//acks parent then starts render loop
+function worker_async()
+{
+    if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
+//    if (!this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
+//handle msg from main thread:
+/*
+    process.on('message', (msg) =>
+    {
+//        debug("cur val: %d", canvas.extra[0]);
+        var remaining = canvas.atomic(Pending, 0); //, "rcv msg"); //AtomicAdd(canvas.extra, 0, 0);
+//        debug(`${canvas.prtype} '${process.pid}' rcv msg ${JSON.stringify(msg)}, atomic chk ${remaining} still pending`.blue_lt);
+        if (msg.render)
+        {
+            if (!remaining) throw new Error("render msg: main not expecting a response".red_lt);
+            debug(`BkgWker '${process.pid}' render req fr# ${msg.frnum}, ${models.length} model(s)`.blue_lt);
+//            models.renderAll(msg.frnum);
+//            process.send({reply: frnum});
+            if (msg.frnum != (wait_bkgwker.frnum || 0)) throw new Error(`BkgWker '${process.pid}': out of sync: at frame# ${wait.frnum}, but main thread wants frame# ${msg.frnum}`.red_lt);
+            step(); //let caller run
+            return;
+        }
+        if (msg.quit)
+        {
+//            if (remaining) throw new Error(`quit msg: main expecting a response (${remaining} pending)`.red_lt);
+            debug(`Bkg Wker '${process.pid}' quit`.blue_lt);
+  //          process.send({quite: true});
+            process.exit(0);
+            return;
+        }
+        throw new Error(`Bkg wker unknown msg type: ${JSON.stringify(msg)}`.red_lt);
+    });
+*/
+//    sync_bkgwker.init = true;
+//    process.send({ack: true}); //tell main thread ready for work
+    debug(`Worker '${process.pid}' ready`.blue_lt);
+    var rendered = -1;
+    for (;;)
+    {
+        this.lock(false); //acquire rd lock (multiple readers); used to sync with main thread
+        var want_quit = (this.shmbuf[1] == 0xffffffff), need_render = (this.shmbuf[1] != last_rendered);
+        debug(`wker '${process.pid}' acq rd lock, rendered ${rendered} vs. ${this.shmbuf[1]}, want quit? ${want_quit}, need render? ${need_render}`.blue_lt);
+        if (need_render && !want_quit) this.render();
+        rendered = this.shmbuf[1];
+        this.lock(); //release and allow main thread to update it
+        debug(`wker '${process.pid}' release rd lock`.blue_lt);
+        if (want_quit) break;
+    }
+    debug(`Worker '${process.pid}' quit`.blue_lt);
+}
+
+
+/*
 //start playback:
 function delay_playback(auto_play)
 {
@@ -359,8 +464,13 @@ function delay_playback(auto_play)
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
     if (!cluster.isMaster) return;
     if (!this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
-    if (auto_play) step(this.playback());
+    if (!auto_play) return;
+    
+    for (var w = 0, pending = num_wkers; w < num_wkers; ++w)
+console.log("TODO: wait for wkers".red_lt);
+    step(this.playback());
 }
+*/
 
 
 //perform atomic op on shared memory:
@@ -377,7 +487,7 @@ function atomic_method(func, args)
 //read/write lock:
 function lock_method(wr)
 {
-    var errstr = rwlock(this.shmbuf, 1, (wr === true)? RwlockOps.WRLOCK: (wr === false)? RwlockOps.RDLOCK: RwlockOps.UNLOCK);
+    var errstr = rwlock(this.shmbuf, HDRLEN, (wr === true)? RwlockOps.WRLOCK: (wr === false)? RwlockOps.RDLOCK: RwlockOps.UNLOCK);
     if (errstr) throw new Error(`GpuCanvas: un/lock failed: ${errstr}`.red_lt);
 
 //    const {caller/*, calledfrom, shortname*/} = require("./demos/shared/caller");
@@ -478,19 +588,49 @@ function paint_progress_method() //alt_pixels)
 }
 
 
-//give render stats to caller for debug / performance analysis:
-function render_stats_method(start)
+//delay next step:
+function wait_method(delay) //, frnum)
 {
-    if (start) this.save = {count: this.render_count || 0, sttime: Date.now()};
-    else
+//    if (canvas.isWorker) return BkgWker.wait(nxtfr);
+    delay *= 1000; //sec -> msec
+//    const overdue = (delay <= 1); //1 msec is too close for comfort; treat it as overdue
+//    if (isNaN(++wait.counts[overdue])) wait.counts = [!overdue, overdue];
+//    if (overdue) if (isNaN(++wait.overdue_count)) wait.overdue_count = 1;
+    if (this.wait_stats)
     {
-        var num = this.render_count - this.save.count;
-        var den = (Date.now() - this.save.sttime) / 1000; //sec
-        this.StatsAdjust = -den;
-//console.log("render.stats", num, den, num / den);
-        return num / den;
+        const overdue = (delay <= 1); //1 msec is too close for comfort; treat it as overdue
+        if (isNaN(++this.wait_stats[overdue])) Object.defineProperties(this.wait_stats, getOwnPropertyDescriptors( //init stats, delay execution of getters; need descriptors
+        {
+            [overdue]: 1, [!overdue]: 0, get count() { return this.false + this.true; },
+            total_delay: 0, max_delay: 0, min_delay: Number.MAX_SAFE_INTEGER,
+            get report() { return `wait stats: overdue frames ${commas(this.true)}/${commas(this.count)} (${trunc(100 * this.true / this.count, 10)}%), \
+                avg wait ${trunc(this.total_delay / this.count, 10)} msec, \
+                min wait[${this.min_when}] ${trunc(this.min_delay, 10)} msec, \
+                max wait[${this.max_when}] ${trunc(this.max_delay, 10)} msec`.replace(/\s+/gm, " ")[this.true? "red_lt": "green_lt"]; },
+        }));
+        this.wait_stats.total_delay += Math.max(delay, 0);
+        if (delay > this.wait_stats.max_delay) { this.wait_stats.max_delay = delay; this.wait_stats.max_when = this.wait_stats.count; } //wait.stats.false + wait.stats.true; }
+        if (delay < this.wait_stats.min_delay) { this.wait_stats.min_delay = delay; this.wait_stats.min_when = this.wait_stats.count; } //frnum; } //wait.stats.false + wait.stats.true; }
+        if ((this.wait_stats[overdue] < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
+            debug(`wait[${this.wait_stats.count}] ${commas(trunc(delay, 10))} msec`[overdue? "red_lt": "blue_lt"]); //, wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
     }
+    return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
 }
+
+
+//give render stats to caller for debug / performance analysis:
+//function render_stats_method(start)
+//{
+//    if (start) this.save = {count: this.render_count || 0, sttime: Date.now()};
+//    else
+//    {
+//        var num = this.render_count - this.save.count;
+//        var den = (Date.now() - this.save.sttime) / 1000; //sec
+//        this.StatsAdjust = -den;
+//console.log("render.stats", num, den, num / den);
+//        return num / den;
+//    }
+//}
 
 
 //validate ctor opts:
@@ -556,22 +696,24 @@ try{
 }
 
 
-//resume later:
-const run_later =
-module.exports.run_later =
-function run_later(delay)
-{
-    return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
-}
-
-
 //return first non-empty value:
 function firstOf(args) //prevval, curval) //, curinx, all)
 {
     for (var i = 0; i < arguments.length; ++i)
-        if (typeof arguments[i] != "undefined") return arguments[i];
+    {
+        var arg = arguments[i];
+        if (typeof arg == "undefined") continue;
+        return (typeof arg == "function")? arg(): arg;
+    }
 //    return (typeof prevval != "undefined")? prevval: curval;
     throw new Error("firstOf: no value found".red_lt);
+}
+
+
+//truncate decimal places:
+function trunc(val, digits)
+{
+    return Math.floor(val * (digits || 1) + 0.5) / (digits || 1); //round to desired precision
 }
 
 
@@ -582,6 +724,16 @@ function commas(val)
 //number.toLocaleString('en-US', {minimumFractionDigits: 2})
     return val.toLocaleString();
 }
+
+
+//polyfill:
+//no worky on getters without setters :(
+//function Object_getOwnPropertyDescriptors(obj)
+//{
+//    for (var i in obj)
+//        obj[i] = Object.getOwnPropertyDescriptor(obj, i);
+//    return obj;
+//}
 
 
 ////////////////////////////////////////////////////////////////////////////////
