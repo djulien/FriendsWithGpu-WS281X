@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-//Javascript wrapper to expose GpuCanvas class and Screen config object
+//Javascript wrapper to expose GpuCanvas class and Screen config object, manage threads.
+//Ideally, Node.js would support multiple threads within the same process so memory could be shared.
+//However, only the foreground thread can use the event loop or v8 so use multiple processes instead.
+//Shared memory is used to cut down on inter-process data communication overhead.
 
 "use strict"; //find bugs easier
 require('colors').enabled = true; //console output colors; allow bkg threads to use it also
@@ -193,6 +196,10 @@ const BLACK = 0xff000000; //NOTE: need A to affect output
 const WHITE = 0xffffffff;
 
 const U32SIZE = Uint32Array.BYTES_PER_ELEMENT; //reduce verbosity
+const MAGIC = 0x1234beef; //used to detect if shared memory is valid
+const HDRLEN = 2; //magic + sync count
+
+const QUIT = 0x7fffffff; //uint32 value to signal eof
 
 
 //const jsGpuCanvas =
@@ -256,6 +263,8 @@ new Proxy(function(){},
 //inherits(SharedCanvas, SimplerCanvas);
         THIS.devmode = firstOf((opts || {}).DEV_MODE, OPTS.DEV_MODE[1], true);
 
+//        THIS.READ = false;
+//        THIS.WRITE = true;
         THIS.atomic = atomic_method;
         THIS.lock = /*cluster.isMaster &&*/ num_wkers? lock_method: nop; //function(ignored) {};
 
@@ -282,7 +291,8 @@ new Proxy(function(){},
 
         const auto_play = firstOf((opts || {}).AUTO_PLAY, OPTS.AUTO_PLAY[1], true);
 //        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
-        process.nextTick(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
+debug("TODO: setImmediate or nextTick here?".red_lt)
+        /*process.nextTick*/ step(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
         return THIS;
 
         function nop() {} //dummy method for special methods on non-master copy
@@ -293,8 +303,6 @@ new Proxy(function(){},
 //set up shared memory:
 function memory(opts, num_wkers)
 {
-    const MAGIC = 0x1234beef; //used to detect if shared memory is valid
-    const HDRLEN = 2; //magic + sync count
 //keep pixel data local to reduce #API calls into Nan/v8
 //        THIS.pixels = new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
 //shared memory buffer for inter-process data:
@@ -371,11 +379,12 @@ function memory(opts, num_wkers)
 
 //finish master init asynchronously:
 //starts bkg wkers
-function master_async(num_wkers, auto_play)
+function* master_async(num_wkers, auto_play)
 {
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
     if (auto_play && !this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
 //    if (!cluster.isMaster) return;
+    this.shmbuf[1] = -num_wkers; //reserve dummy frame#s for wker acks
     for (var w = 0, pending = num_wkers; w < num_wkers; ++w)
     {
         var wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
@@ -398,14 +407,34 @@ function master_async(num_wkers, auto_play)
 //TODO: restart proc? state will be gone, might be problematic
         });
     }
-    debug(`GpuCanvas: ${this.prtype} ${num_wkers} wkers forked`.blue_lt);
-    this.shmbuf[1] = 0;
+    debug(`GpuCanvas: ${num_wkers} wkers forked, waiting for acks`.blue_lt);
+    for (;;)
+    {
+        var pending = -this.atomic(false, function() { return this.shmbuf[1]; }.bind(this)); //check #pending acks
+        debug(`Worker '${process.pid}' ready, ${pending} pending`.blue_lt);
+        if (!pending) break;
+        yield wait(.0167); //16.7 msec
+    }
+    debug(`GpuCanvas: all wkers acked, ready for playback`.blue_lt);
+    if (!auto_play) return; //TODO: emit event?
+//    yield* this.playback();
+    for (var frnum = 0; frnum < 100; ++frnum)
+    {
+        this.render(frnum, frnum * 0.0167);
+        yield this.wait(0.0125); //12.5 msec
+        this.atomic(true, function()
+        {
+            usleep(3000); //3 msec simulate encode
+            this.shmbuf[1] = frnum + 1; //request next frame#
+        }.bind(this));
+    }
+    this.atomic(true, function() { this.shmbuf[1] = QUIT; });
 }
 
 
 //finish wker init asynchronously:
 //acks parent then starts render loop
-function worker_async()
+function* worker_async()
 {
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
 //    if (!this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
@@ -439,18 +468,26 @@ function worker_async()
 */
 //    sync_bkgwker.init = true;
 //    process.send({ack: true}); //tell main thread ready for work
-    debug(`Worker '${process.pid}' ready`.blue_lt);
-    var rendered = -1;
+    this.render(0, 0); //pre-render first frame so it's ready to go
+    var pending = -this.atomic(true, function() { return ++this.shmbuf[1]; }.bind(this)); //send ready signal to master
+    debug(`Worker '${process.pid}' ready, ${pending} pending`.blue_lt);
+    if (pending < 0) throw new Error(`Wker ack: master wasn't waiting for me (${pending})`.red_lt);
+    var last_rendered = -1;
     for (;;)
     {
-        this.lock(false); //acquire rd lock (multiple readers); used to sync with main thread
-        var want_quit = (this.shmbuf[1] == 0xffffffff), need_render = (this.shmbuf[1] != last_rendered);
-        debug(`wker '${process.pid}' acq rd lock, rendered ${rendered} vs. ${this.shmbuf[1]}, want quit? ${want_quit}, need render? ${need_render}`.blue_lt);
-        if (need_render && !want_quit) this.render();
-        rendered = this.shmbuf[1];
-        this.lock(); //release and allow main thread to update it
-        debug(`wker '${process.pid}' release rd lock`.blue_lt);
+        /*var want_quit =*/ this.atomic(false, function()
+        {
+//        this.lock(false); //acquire rd lock (multiple readers); used to sync with main thread
+            var want_quit = (this.shmbuf[1] == QUIT), need_render = (last_rendered < this.shmbuf[1]) && !want_quit;
+            debug(`wker '${process.pid}' acq rd lock, want quit? ${want_quit}, need render? ${need_render}, last rendered ${last_rendered} vs. ${this.shmbuf[1]}`.blue_lt);
+            if (need_render) this.render(last_rendered++);
+//            ++last_rendered; //= this.shmbuf[1];
+//        this.lock(); //release rd lock to allow main thread to update
+//            return want_quit;
+        }.bind(this));
+        debug(`wker '${process.pid}' release rd lock, want_quit? ${want_quit}`.blue_lt);
         if (want_quit) break;
+        yield this.wait(1);
     }
     debug(`Worker '${process.pid}' quit`.blue_lt);
 }
@@ -474,12 +511,12 @@ console.log("TODO: wait for wkers".red_lt);
 
 
 //perform atomic op on shared memory:
-function atomic_method(func, args)
+function atomic_method(rw, func, args)
 {
-    this.lock(true);
+    this.lock(rw); //rd/wr lock
     try { return func.apply(null, Array.from(arguments).slice(1)); }
 //    catch (exc) { var svexc = exc; }
-    finally { this.lock(); }
+    finally { this.lock(); } //unlock
     return retval;
 }
 
@@ -487,9 +524,9 @@ function atomic_method(func, args)
 //read/write lock:
 function lock_method(wr)
 {
+//    const HDRLEN = this.shmbuf.byteLength / U32SIZE - RwlockOps.SIZE32;
     var errstr = rwlock(this.shmbuf, HDRLEN, (wr === true)? RwlockOps.WRLOCK: (wr === false)? RwlockOps.RDLOCK: RwlockOps.UNLOCK);
     if (errstr) throw new Error(`GpuCanvas: un/lock failed: ${errstr}`.red_lt);
-
 //    const {caller/*, calledfrom, shortname*/} = require("./demos/shared/caller");
 //    const from = caller(-2); //.replace("@pin-finder:", "");
 //    debug("lock(%d) from %s", wr, from);

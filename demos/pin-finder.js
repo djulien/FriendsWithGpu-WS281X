@@ -28,10 +28,6 @@ const {Screen, GpuCanvas/*, wait, elapsed, cluster, AtomicAdd*/} = require('gpu-
 //debug(`epoch ${EPOCH}, master? ${cluster.isMaster}`.blue_lt); //TODO: fix shared time base
 //console.log(JSON.stringify(Screen));
 //process.exit();
-debug("TODO: MP3 any".red_lt);
-debug("TODO: http stats server/monitor".red_lt);
-debug("TODO: js encode".red_lt);
-debug("TODO: emit warnings?".red_lt);
 
 /*
 const {shmbuf} = require('gpu-friends-ws281x');
@@ -109,6 +105,14 @@ debug("Screen %d x %d @%d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.widt
 //no-NOTE: must occur before creating models and bkg wkers (sets up shm, etc)
 //debug(`pid '${process.pid}' master? ${cluster.isMaster}, wker? ${cluster.isWorker}`.cyan_lt);
 const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
+
+if (canvas.isMaster)
+{
+    debug("TODO: MP3 any".red_lt);
+    debug("TODO: http stats server/monitor".red_lt);
+    debug("TODO: js encode".red_lt);
+    debug("TODO: emit warnings?".red_lt);    
+}
 
 //no worky:
 //process.on('uncaughtException', err => {
@@ -330,8 +334,12 @@ function* playback() //onexit)
 canvas.render =
 function render(frnum, timestamp)
 {
-    models.forEach(model => { model.render(frnum, timestamp); });
+    const {usleep} = require('gpu-friends-ws281x');
+
+//    models.forEach(model => { model.render(frnum, timestamp); });
+    debug(`TODO: ${this.prtype} '${process.pid}' render fr# ${frnum}, timestamp ${timestamp}`.red_lt);
 //    if (OPTS.NUM_WKERS && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; bypass remaining init
+    usleep(5000); //simulate processing (5 msec)
 }
 
 

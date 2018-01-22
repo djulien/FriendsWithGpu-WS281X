@@ -101,5 +101,9 @@
     "speaker": "https://github.com/djulien/node-speaker",
     "sprintf.js": "^0.1.4",
     "webworker-threads": "^0.7.13"
+  },
+  "devDependencies": {
+    "eslint": "^4.16.0",
+    "jshint": "^2.9.5"
   }
 }
