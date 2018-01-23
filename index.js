@@ -9,10 +9,12 @@ require('colors').enabled = true; //console output colors; allow bkg threads to 
 const fs = require('fs');
 const os = require('os');
 const glob = require('glob');
+
 const {PNG} = require('pngjs');
 const pathlib = require('path');
 //const Emitter = require('events');
 const cluster = require('cluster');
+const clock = require('posix-clock');
 const shm = require('shm-typed-array');
 //const {inherits} = require('util');
 //const bindings = require('bindings');
@@ -199,7 +201,7 @@ const U32SIZE = Uint32Array.BYTES_PER_ELEMENT; //reduce verbosity
 const MAGIC = 0x1234beef; //used to detect if shared memory is valid
 const HDRLEN = 2; //magic + sync count
 
-const QUIT = 0x7fffffff; //uint32 value to signal eof
+const QUIT = -1000; //0x7fffffff; //uint32 value to signal eof
 
 
 //const jsGpuCanvas =
@@ -381,10 +383,19 @@ function memory(opts, num_wkers)
 //starts bkg wkers
 function* master_async(num_wkers, auto_play)
 {
+    var clkRes = clock.getres(clock.MONOTONIC);
+    debug(`Resolution of CLOCK_MONOTONIC: ${clkRes.sec} sec + ${clkRes.nsec} nsec`, clkRes);
+    var clkTime = clock.gettime(clock.MONOTONIC);
+    debug(`Time from CLOCK_MONOTONIC: ${clkTime.sec} sec + ${clkTime.nsec} nsec`, clkTime);
+//    clock.nanosleep(clock.REALTIME, clock.TIMER_ABSTIME, { sec: 1234567890, nsec: 0 });
+    clock.nanosleep(clock.REALTIME, 0, { sec: 0, nsec: 123 });   
+    debug("woke up");
+    return;
+
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
     if (auto_play && !this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
 //    if (!cluster.isMaster) return;
-    this.shmbuf[1] = -num_wkers; //reserve dummy frame#s for wker acks
+    this.shmbuf[1] = -num_wkers; //use dummy frame#s as placeholders for wker acks
     for (var w = 0, pending = num_wkers; w < num_wkers; ++w)
     {
         var wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
@@ -407,28 +418,32 @@ function* master_async(num_wkers, auto_play)
 //TODO: restart proc? state will be gone, might be problematic
         });
     }
-    debug(`GpuCanvas: ${num_wkers} wkers forked, waiting for acks`.blue_lt);
+    const FPS = 10;
+    debug(`GpuCanvas: ${num_wkers} wkers forked, now wait for acks`.blue_lt);
     for (;;)
     {
-        var pending = -this.atomic(false, function() { return this.shmbuf[1]; }.bind(this)); //check #pending acks
-        debug(`Worker '${process.pid}' ready, ${pending} pending`.blue_lt);
+        var pending = -this.atomic(false, function() { return uint32toint(this.shmbuf[1]); }.bind(this)); //check #pending acks
+        debug(`master '${process.pid}': ${pending} pending`.blue_lt);
         if (!pending) break;
-        yield wait(.0167); //16.7 msec
+        debug("TODO: master dummy paint".yellow_lt);
+        yield this.wait(1 / FPS); //simulate 60 fps
     }
-    debug(`GpuCanvas: all wkers acked, ready for playback`.blue_lt);
-    if (!auto_play) return; //TODO: emit event?
+    debug(`GpuCanvas: all wkers acked master, ready for playback`.blue_lt);
+    if (!auto_play) return; //TODO: emit event or caller cb
 //    yield* this.playback();
-    for (var frnum = 0; frnum < 100; ++frnum)
+    for (var frnum = 0; frnum < 5 * FPS; ++frnum)
     {
-        this.render(frnum, frnum * 0.0167);
-        yield this.wait(0.0125); //12.5 msec
+        this.render(frnum, frnum / FPS);
+        yield this.wait(3/4 / FPS); //12.5 msec
         this.atomic(true, function()
         {
             usleep(3000); //3 msec simulate encode
-            this.shmbuf[1] = frnum + 1; //request next frame#
+            this.shmbuf[1] = frnum + 1; //request next frame# from wkers
+            debug(`master req fr#${frnum + 1}`.blue_lt)
         }.bind(this));
     }
-    this.atomic(true, function() { this.shmbuf[1] = QUIT; });
+    debug("master send eof".blue_lt)
+    this.atomic(true, function() { this.shmbuf[1] = QUIT; }.bind(this));
 }
 
 
@@ -469,18 +484,19 @@ function* worker_async()
 //    sync_bkgwker.init = true;
 //    process.send({ack: true}); //tell main thread ready for work
     this.render(0, 0); //pre-render first frame so it's ready to go
-    var pending = -this.atomic(true, function() { return ++this.shmbuf[1]; }.bind(this)); //send ready signal to master
+    var pending = -this.atomic(true, function() { return uint32toint(++this.shmbuf[1]); }.bind(this)); //send ready signal to master
     debug(`Worker '${process.pid}' ready, ${pending} pending`.blue_lt);
     if (pending < 0) throw new Error(`Wker ack: master wasn't waiting for me (${pending})`.red_lt);
     var last_rendered = -1;
     for (;;)
     {
-        /*var want_quit =*/ this.atomic(false, function()
+        var want_quit = this.atomic(false, function()
         {
 //        this.lock(false); //acquire rd lock (multiple readers); used to sync with main thread
-            var want_quit = (this.shmbuf[1] == QUIT), need_render = (last_rendered < this.shmbuf[1]) && !want_quit;
-            debug(`wker '${process.pid}' acq rd lock, want quit? ${want_quit}, need render? ${need_render}, last rendered ${last_rendered} vs. ${this.shmbuf[1]}`.blue_lt);
-            if (need_render) this.render(last_rendered++);
+            var requested = uint32toint(this.shmbuf[1]); //(this.shmbuf[1] <= 0x7fffffff)? this.shmbuf[1]: this.shmbuf[1] - 0x100000000;
+            var want_quit = (this.shmbuf[1] == QUIT), need_render = (last_rendered < requested); //&& !want_quit;
+            debug(`wker '${process.pid}' acq rd lock, want quit? ${want_quit}, need render? ${need_render}, last rendered ${last_rendered} vs. ${requested}`.blue_lt);
+            if (need_render) this.render(++last_rendered);
 //            ++last_rendered; //= this.shmbuf[1];
 //        this.lock(); //release rd lock to allow main thread to update
 //            return want_quit;
@@ -744,6 +760,12 @@ function firstOf(args) //prevval, curval) //, curinx, all)
     }
 //    return (typeof prevval != "undefined")? prevval: curval;
     throw new Error("firstOf: no value found".red_lt);
+}
+
+
+function uint32toint(val)
+{
+    return (val <= 0x7fffffff)? val: val - 0x100000000;
 }
 
 

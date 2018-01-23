@@ -3,6 +3,9 @@
 //readelf -Ws lib.so
 //ldd lib.so
 
+//TODO?
+//#include <time.h>
+//int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *request, struct timespec *remain);
 
 ////////////////////////////////////////////////////////////////////////////////
 ////

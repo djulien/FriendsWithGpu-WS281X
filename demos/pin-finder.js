@@ -108,10 +108,10 @@ const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 
 if (canvas.isMaster)
 {
-    debug("TODO: MP3 any".red_lt);
-    debug("TODO: http stats server/monitor".red_lt);
-    debug("TODO: js encode".red_lt);
-    debug("TODO: emit warnings?".red_lt);    
+    debug("TODO: MP3 any".yellow_lt);
+    debug("TODO: http stats server/monitor".yellow_lt);
+    debug("TODO: js encode".yellow_lt);
+    debug("TODO: emit warnings?".yellow_lt);    
 }
 
 //no worky:
@@ -337,7 +337,7 @@ function render(frnum, timestamp)
     const {usleep} = require('gpu-friends-ws281x');
 
 //    models.forEach(model => { model.render(frnum, timestamp); });
-    debug(`TODO: ${this.prtype} '${process.pid}' render fr# ${frnum}, timestamp ${timestamp}`.red_lt);
+    debug(`TODO: ${this.prtype} '${process.pid}' render fr# ${frnum}, timestamp ${timestamp}`.yellow_lt);
 //    if (OPTS.NUM_WKERS && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; bypass remaining init
     usleep(5000); //simulate processing (5 msec)
 }
