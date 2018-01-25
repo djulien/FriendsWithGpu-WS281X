@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 //Javascript wrapper to expose GpuCanvas class and Screen config object, manage threads.
 //Ideally, Node.js would support multiple threads within the same process so memory could be shared.
-//However, only the foreground thread can use the event loop or v8 so use multiple processes instead.
+//However, only the foreground thread can use the event loop or v8 so use we are forced to use multiple processes instead.
 //Shared memory is used to cut down on inter-process data communication overhead.
+//That leaves IPC latency s the main challenge.  (60 FPS only allows 16 msec total for fx gen + render)
 
 "use strict"; //find bugs easier
 require('colors').enabled = true; //console output colors; allow bkg threads to use it also
@@ -289,8 +290,9 @@ new Proxy(function(){},
 //        THIS.close = (num_wkers && cluster.isMaster)? function() { rwlock(THIS.shmbuf, 1, RwlockOps.DESTROY); }: nop;
 
         if (firstOf((opts || {}).WANT_STATS, OPTS.WANT_STATS[1], false)) THIS.wait_stats = {};
-        THIS.wait = cluster.isMaster? wait_method: nop;
+        THIS.wait = wait_method; //cluster.isMaster? wait_method: nop;
 
+        THIS.FPS = 10;
         const auto_play = firstOf((opts || {}).AUTO_PLAY, OPTS.AUTO_PLAY[1], true);
 //        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
 debug("TODO: setImmediate or nextTick here?".red_lt)
@@ -383,15 +385,14 @@ function memory(opts, num_wkers)
 //starts bkg wkers
 function* master_async(num_wkers, auto_play)
 {
-    var clkRes = clock.getres(clock.MONOTONIC);
-    debug(`Resolution of CLOCK_MONOTONIC: ${clkRes.sec} sec + ${clkRes.nsec} nsec`, clkRes);
-    var clkTime = clock.gettime(clock.MONOTONIC);
-    debug(`Time from CLOCK_MONOTONIC: ${clkTime.sec} sec + ${clkTime.nsec} nsec`, clkTime);
-//    clock.nanosleep(clock.REALTIME, clock.TIMER_ABSTIME, { sec: 1234567890, nsec: 0 });
-    clock.nanosleep(clock.REALTIME, 0, { sec: 0, nsec: 123 });   
-    debug("woke up");
-    return;
-
+//    var clkRes = clock.getres(clock.MONOTONIC);
+//    debug(`Resolution of CLOCK_MONOTONIC: ${clkRes.sec} sec + ${clkRes.nsec} nsec`, clkRes);
+//    var clkTime = clock.gettime(clock.MONOTONIC);
+//    debug(`Time from CLOCK_MONOTONIC: ${clkTime.sec} sec + ${clkTime.nsec} nsec`, clkTime);
+////    clock.nanosleep(clock.REALTIME, clock.TIMER_ABSTIME, { sec: 1234567890, nsec: 0 });
+//    clock.nanosleep(clock.REALTIME, 0, { sec: 0, nsec: 123 });   
+//    debug("woke up");
+//    return;
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
     if (auto_play && !this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
 //    if (!cluster.isMaster) return;
@@ -418,7 +419,6 @@ function* master_async(num_wkers, auto_play)
 //TODO: restart proc? state will be gone, might be problematic
         });
     }
-    const FPS = 10;
     debug(`GpuCanvas: ${num_wkers} wkers forked, now wait for acks`.blue_lt);
     for (;;)
     {
@@ -426,21 +426,24 @@ function* master_async(num_wkers, auto_play)
         debug(`master '${process.pid}': ${pending} pending`.blue_lt);
         if (!pending) break;
         debug("TODO: master dummy paint".yellow_lt);
-        yield this.wait(1 / FPS); //simulate 60 fps
+        yield this.wait(1 / this.FPS); //simulate 60 fps
     }
     debug(`GpuCanvas: all wkers acked master, ready for playback`.blue_lt);
     if (!auto_play) return; //TODO: emit event or caller cb
 //    yield* this.playback();
-    for (var frnum = 0; frnum < 5 * FPS; ++frnum)
+    for (var frnum = 0; frnum < 5 * this.FPS; ++frnum)
     {
-        this.render(frnum, frnum / FPS);
-        yield this.wait(3/4 / FPS); //12.5 msec
+        this.render(frnum, frnum / this.FPS);
+        yield this.wait(3/4 / this.FPS); //12.5 msec
+//CAUTION: blocking on wrlock also blocks evt loop
+        debug(`master wait for wr lock`.blue_lt);
         this.atomic(true, function()
         {
             usleep(3000); //3 msec simulate encode
             this.shmbuf[1] = frnum + 1; //request next frame# from wkers
             debug(`master req fr#${frnum + 1}`.blue_lt)
         }.bind(this));
+        debug(`master release wr lock`.blue_lt);
     }
     debug("master send eof".blue_lt)
     this.atomic(true, function() { this.shmbuf[1] = QUIT; }.bind(this));
@@ -487,23 +490,25 @@ function* worker_async()
     var pending = -this.atomic(true, function() { return uint32toint(++this.shmbuf[1]); }.bind(this)); //send ready signal to master
     debug(`Worker '${process.pid}' ready, ${pending} pending`.blue_lt);
     if (pending < 0) throw new Error(`Wker ack: master wasn't waiting for me (${pending})`.red_lt);
-    var last_rendered = -1;
+    var last_rendered = 0;
     for (;;)
     {
+//CAUTION: blocking on wrlock also blocks evt loop
+        debug(`wker '${process.pid}' wait for rd lock`.blue_lt);
         var want_quit = this.atomic(false, function()
         {
 //        this.lock(false); //acquire rd lock (multiple readers); used to sync with main thread
             var requested = uint32toint(this.shmbuf[1]); //(this.shmbuf[1] <= 0x7fffffff)? this.shmbuf[1]: this.shmbuf[1] - 0x100000000;
-            var want_quit = (this.shmbuf[1] == QUIT), need_render = (last_rendered < requested); //&& !want_quit;
+            var want_quit = (requested == QUIT), need_render = (last_rendered < requested); //&& !want_quit;
             debug(`wker '${process.pid}' acq rd lock, want quit? ${want_quit}, need render? ${need_render}, last rendered ${last_rendered} vs. ${requested}`.blue_lt);
-            if (need_render) this.render(++last_rendered);
+            if (need_render) this.render(++last_rendered, last_rendered / this.FPS);
 //            ++last_rendered; //= this.shmbuf[1];
 //        this.lock(); //release rd lock to allow main thread to update
-//            return want_quit;
+            return want_quit;
         }.bind(this));
         debug(`wker '${process.pid}' release rd lock, want_quit? ${want_quit}`.blue_lt);
         if (want_quit) break;
-        yield this.wait(1);
+        yield this.wait(1 / this.FPS / 2);
     }
     debug(`Worker '${process.pid}' quit`.blue_lt);
 }
@@ -665,7 +670,7 @@ function wait_method(delay) //, frnum)
         if (delay > this.wait_stats.max_delay) { this.wait_stats.max_delay = delay; this.wait_stats.max_when = this.wait_stats.count; } //wait.stats.false + wait.stats.true; }
         if (delay < this.wait_stats.min_delay) { this.wait_stats.min_delay = delay; this.wait_stats.min_when = this.wait_stats.count; } //frnum; } //wait.stats.false + wait.stats.true; }
         if ((this.wait_stats[overdue] < 10) || overdue) //reduce verbosity: only show first 10 non-overdue
-            debug(`wait[${this.wait_stats.count}] ${commas(trunc(delay, 10))} msec`[overdue? "red_lt": "blue_lt"]); //, wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
+            debug(`${this.prtype} '${process.pid}' wait[${this.wait_stats.count}] ${commas(trunc(delay, 10))} msec`[overdue? "red_lt": "blue_lt"]); //, wait.stats.false + wait.stats.true - 1, commas(trunc(delay, 10))); //, JSON.stringify(wait.counts));
     }
     return (delay > 1)? setTimeout.bind(null, step, delay): setImmediate.bind(null, step);
 }
