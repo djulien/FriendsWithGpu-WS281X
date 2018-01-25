@@ -396,7 +396,7 @@ function* master_async(num_wkers, auto_play)
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
     if (auto_play && !this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
 //    if (!cluster.isMaster) return;
-    this.shmbuf[1] = -num_wkers; //use dummy frame#s as placeholders for wker acks
+    this.shmbuf[1] = 0; //set next frame# to render; //-num_wkers; //no-use dummy frame#s as placeholders for wker acks
     for (var w = 0, pending = num_wkers; w < num_wkers; ++w)
     {
         var wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
@@ -419,6 +419,7 @@ function* master_async(num_wkers, auto_play)
 //TODO: restart proc? state will be gone, might be problematic
         });
     }
+/*
     debug(`GpuCanvas: ${num_wkers} wkers forked, now wait for acks`.blue_lt);
     for (;;)
     {
@@ -428,11 +429,29 @@ function* master_async(num_wkers, auto_play)
         debug("TODO: master dummy paint".yellow_lt);
         yield this.wait(1 / this.FPS); //simulate 60 fps
     }
-    debug(`GpuCanvas: all wkers acked master, ready for playback`.blue_lt);
+*/
+    debug(`GpuCanvas: all wkers launched, ready for playback`.blue_lt);
     if (!auto_play) return; //TODO: emit event or caller cb
 //    yield* this.playback();
-    for (var frnum = 0; frnum < 5 * this.FPS; ++frnum)
+    const DURATION = 5; //TODO
+    for (var frnum = 0; frnum < DURATION * this.FPS; ++frnum)
     {
+        yield this.render(frnum);
+        yield this.paint();
+        
+        function this.render(frnum)
+        {
+            wait_for_last_wker_to_render(frnum); //blocking
+            encode_bkg(); //blocking
+            wakeWkers(frnum+1);
+        }
+        function this.paint()
+        {
+            throttle();
+            RenderPresent_bkg(); //blocking
+        }
+    }
+/*
         this.render(frnum, frnum / this.FPS);
         yield this.wait(3/4 / this.FPS); //12.5 msec
 //CAUTION: blocking on wrlock also blocks evt loop
@@ -445,8 +464,10 @@ function* master_async(num_wkers, auto_play)
         }.bind(this));
         debug(`master release wr lock`.blue_lt);
     }
+*/
     debug("master send eof".blue_lt)
-    this.atomic(true, function() { this.shmbuf[1] = QUIT; }.bind(this));
+//    this.atomic(true, function() { this.shmbuf[1] = QUIT; }.bind(this));
+    wake_wkers(QUIT);
 }
 
 
@@ -486,6 +507,7 @@ function* worker_async()
 */
 //    sync_bkgwker.init = true;
 //    process.send({ack: true}); //tell main thread ready for work
+/*
     this.render(0, 0); //pre-render first frame so it's ready to go
     var pending = -this.atomic(true, function() { return uint32toint(++this.shmbuf[1]); }.bind(this)); //send ready signal to master
     debug(`Worker '${process.pid}' ready, ${pending} pending`.blue_lt);
@@ -509,6 +531,21 @@ function* worker_async()
         debug(`wker '${process.pid}' release rd lock, want_quit? ${want_quit}`.blue_lt);
         if (want_quit) break;
         yield this.wait(1 / this.FPS / 2);
+    }
+*/
+    var frnum = 0;
+    for (;;)
+    {
+        this.render(frnum, frnum / this.FPS);
+        frnum = yield this.paint(); //wait for master to paint (encode, actually) and request another frame
+        if (frnum == QUIT) break;
+
+        function this.paint()
+        {
+            if (++wkers_done == num_wkers) wakeup_master();
+            wait_for_wkup(); //blocking
+            step.retval = this.shmbuf[1]; //next fr#
+        }
     }
     debug(`Worker '${process.pid}' quit`.blue_lt);
 }
@@ -540,6 +577,7 @@ function atomic_method(rw, func, args)
     finally { this.lock(); } //unlock
     return retval;
 }
+
 
 
 //read/write lock:

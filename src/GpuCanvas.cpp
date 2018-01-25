@@ -21,8 +21,8 @@
 //lock-free (wait-free) fifo: http://moodycamel.com/blog/2013/a-fast-lock-free-queue-for-c++
 // https://github.com/cameron314/concurrentqueue
 
-//on end of encode: ++frnum; wake up all wkers
-//on end of last wker render: wake up main; encode_start();
+//master: on end of encode: ++frnum; wake up all wkers
+//wker: on end of last wker render: wake up main; encode_start();
 //via mutex + cond, mutex, semaphore, rwlock, or lock-less (atomic)?
 
 
