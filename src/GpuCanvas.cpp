@@ -6,6 +6,25 @@
 //TODO?
 //#include <time.h>
 //int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *request, struct timespec *remain);
+//https://stackoverflow.com/questions/7979164/lowest-latency-notification-method-between-process-under-linux
+//?? https://nodeaddons.com/streaming-data-from-c-to-node-js/
+// https://github.com/paulhauner/example-async-node-addon/blob/master/async-addon/async-addon.cc
+// https://github.com/freezer333/nodecpp-demo/tree/master/streaming
+// https://nodeaddons.com/c-processing-from-node-js-part-4-asynchronous-addons/
+
+//NOTE from https://stackoverflow.com/questions/1277627/overhead-of-pthread-mutexes
+//about atomic: In practice, you can assume that int and other integer types no longer than int are atomic. You can also assume that pointer types are atomic
+// http://axisofeval.blogspot.com/2010/11/numbers-everybody-should-know.html
+
+//audio/real-time considerations (consider worst case): http://www.rossbencina.com/code/real-time-audio-programming-101-time-waits-for-nothing
+//mlock/munlock: http://man7.org/linux/man-pages/man2/mlock.2.html
+//lock-free (wait-free) fifo: http://moodycamel.com/blog/2013/a-fast-lock-free-queue-for-c++
+// https://github.com/cameron314/concurrentqueue
+
+//on end of encode: ++frnum; wake up all wkers
+//on end of last wker render: wake up main; encode_start();
+//via mutex + cond, mutex, semaphore, rwlock, or lock-less (atomic)?
+
 
 ////////////////////////////////////////////////////////////////////////////////
 ////
