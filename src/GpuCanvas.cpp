@@ -3394,6 +3394,10 @@ NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 sta
 //    Nan::TypedArrayContents<uint32_t> pixels(info[0].As<v8::Uint32Array>());
 //https://github.com/casualjavascript/blog/issues/12
 //http://brendanashworth.github.io/v8-docs/classv8_1_1_typed_array.html
+
+TODO:
+https://nodeaddons.com/c-processing-from-node-js-part-4-asynchronous-addons/
+https://gist.github.com/dmh2000/9519489
     uint32_t* pixels = 0;
     if (info.Length())
     {
