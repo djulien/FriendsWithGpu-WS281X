@@ -396,20 +396,23 @@ function* master_async(num_wkers, auto_play)
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
     if (auto_play && !this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
 //    if (!cluster.isMaster) return;
-    this.shmbuf[1] = 0; //set next frame# to render; //-num_wkers; //no-use dummy frame#s as placeholders for wker acks
-    for (var w = 0, pending = num_wkers; w < num_wkers; ++w)
+//    this.shmbuf[1] = 0; //set next frame# to render; //-num_wkers; //no-use dummy frame#s as placeholders for wker acks
+    var frnum = 0;
+    var pending = 0; //#remaining replies
+    for (var w = 0; w < num_wkers; ++w)
     {
         var wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
 //        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
-/*
         wker.on('message', (msg) =>
         {
-//        debug(`got reply ${JSON.stringify(msg)} from bkg wker`.blue_lt);
+//            debug(`got msg ${JSON.stringify(msg)} from bkg wker`.blue_lt);
             debug(`master '${process.pid}' got msg ${JSON.stringify(msg)}, pending ${pending}`.blue_lt);
-            if (msg.ack) { if (!--pending) step(); return; } //all wkers replied; wake up master
-            throw new Error(`Unhandled msg: ${JSON.stringify(msg)}`.red_lt);
+//            if (msg.ack) { if (!--pending) step(); return; } //all wkers replied; wake up master
+//            throw new Error(`Unhandled msg: ${JSON.stringify(msg)}`.red_lt);
+            if (msg.rendered != frnum) throw new Error(`reply mismatch: got fr#${msg.rendered}, expected ${frnum}`.red_lt);
+            if (--pending < 0) throw new Error(`too many replies for fr#${frnum}`.red_lt);
+            if (!pending) step();
         });
-*/
 //    cluster.on('exit', (wker, code, signal) =>
         wker.on('exit', (code, signal) =>
         {
@@ -434,23 +437,19 @@ function* master_async(num_wkers, auto_play)
     if (!auto_play) return; //TODO: emit event or caller cb
 //    yield* this.playback();
     const DURATION = 5; //TODO
-    for (var frnum = 0; frnum < DURATION * this.FPS; ++frnum)
+    for (/*var frnum = 0*/; frnum < DURATION * this.FPS; ++frnum)
     {
-        yield this.render(frnum);
-        yield this.paint();
-        
-        function this.render(frnum)
-        {
-            wait_for_last_wker_to_render(frnum); //blocking
-            encode_bkg(); //blocking
-            wakeWkers(frnum+1);
-        }
-        function this.paint()
-        {
-            throttle();
-            RenderPresent_bkg(); //blocking
-        }
+//        yield this.render(frnum);
+        yield; //wait for all wkers to render+reply
+//        encode_bkg(); //blocking
+        yield this.paint_bkg(function() { broadcast({frnum: frnum + 1}); step(); }); //blocking, wake up children after encode
+//        yield this.paint();
+        yield this.wait((frnum + 1) / this.FPS); //throttle
+        RenderPresent_bkg(); //blocking
     }
+    debug("master send eof".blue_lt)
+//    this.atomic(true, function() { this.shmbuf[1] = QUIT; }.bind(this));
+    broadcast({frnum: QUIT});
 /*
         this.render(frnum, frnum / this.FPS);
         yield this.wait(3/4 / this.FPS); //12.5 msec
@@ -465,9 +464,15 @@ function* master_async(num_wkers, auto_play)
         debug(`master release wr lock`.blue_lt);
     }
 */
-    debug("master send eof".blue_lt)
-//    this.atomic(true, function() { this.shmbuf[1] = QUIT; }.bind(this));
-    wake_wkers(QUIT);
+    function broadcast(msg)
+    {
+        pending += num_wkers; //#replies expected
+//        cluster.workers.forEach((wker) => { wker.send(msg); });
+        Object.keys(cluster.workers).forEach(function(id)
+        {
+            cluster.workers[id].send(msg);
+        });
+    }
 }
 
 
@@ -477,16 +482,25 @@ function* worker_async()
 {
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
 //    if (!this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
-//handle msg from main thread:
-/*
+//handle msgs from main thread:
     process.on('message', (msg) =>
     {
 //        debug("cur val: %d", canvas.extra[0]);
-        var remaining = canvas.atomic(Pending, 0); //, "rcv msg"); //AtomicAdd(canvas.extra, 0, 0);
+//        var remaining = canvas.atomic(Pending, 0); //, "rcv msg"); //AtomicAdd(canvas.extra, 0, 0);
 //        debug(`${canvas.prtype} '${process.pid}' rcv msg ${JSON.stringify(msg)}, atomic chk ${remaining} still pending`.blue_lt);
+        var frnum = uint32toint(msg.frnum);
+        debug(`wker ${this.WKER_ID} '${process.pid}' rcv msg ${JSON.stringify(msg)}, fr# ${frnum}`.blue_lt);
+        if (frnum == QUIT)
+        {
+            debug(`Worker '${process.pid}' quit`.blue_lt);
+            process.exit(0);
+        }
+        this.render(frnum, frnum / this.FPS);
+        process.send({rendered: frnum, WKER_ID: process.env.WKER_ID});
+/*
         if (msg.render)
         {
-            if (!remaining) throw new Error("render msg: main not expecting a response".red_lt);
+//            if (!remaining) throw new Error("render msg: main not expecting a response".red_lt);
             debug(`BkgWker '${process.pid}' render req fr# ${msg.frnum}, ${models.length} model(s)`.blue_lt);
 //            models.renderAll(msg.frnum);
 //            process.send({reply: frnum});
@@ -503,8 +517,10 @@ function* worker_async()
             return;
         }
         throw new Error(`Bkg wker unknown msg type: ${JSON.stringify(msg)}`.red_lt);
-    });
 */
+    });
+    this.render(0, 0);
+    process.send({rendered: 0, WKER_ID: process.env.WKER_ID});
 //    sync_bkgwker.init = true;
 //    process.send({ack: true}); //tell main thread ready for work
 /*
@@ -533,6 +549,7 @@ function* worker_async()
         yield this.wait(1 / this.FPS / 2);
     }
 */
+/*
     var frnum = 0;
     for (;;)
     {
@@ -548,6 +565,7 @@ function* worker_async()
         }
     }
     debug(`Worker '${process.pid}' quit`.blue_lt);
+*/
 }
 
 

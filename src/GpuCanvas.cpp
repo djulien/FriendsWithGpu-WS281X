@@ -1335,6 +1335,7 @@ WH ScreenInfo()
 #define TXR_WIDTH  (3 * WS281X_BITS) //- 1) //data signal is generated at 3x bit rate, last bit overlaps H blank
 
 //#define MULTI_THREADED
+#define SINGLE_THREADED_BKG
 //#ifdef MULTI_THREADED
 // #define IFMULTI(stmt)  stmt
 // #define IFSINGLE(stmt)  //noop
@@ -1347,7 +1348,12 @@ WH ScreenInfo()
 //window create and redraw:
 //MULTI: all GPU work done in bkg thread (asynchronously)
 //SINGLE: all GPU work done in fg thread (synchronously)
+//BKG (single threaded): all GPU work done in bkg thread
+#ifdef SINGLE_THREADED_BKG
+class GpuCanvas: public Thread
+#else
 class GpuCanvas //: public Thread
+#endif
 {
 private:
 //    auto_ptr<SDL_lib> sdl; //NOTE: this must occur before thread? most sources say do this once only; TODO: use ref counter?
@@ -1415,7 +1421,51 @@ private:
     std::vector<auto_ptr<ChplexEncoder<NUM_SSR>>> encoders;
 public:
 //ctor/dtor:
-#ifdef MULTI_THREADED
+#ifdef SINGLE_THREADED_BKG
+    struct { const char* title; int num_univ; int univ_len; } CtorParams;
+    GpuCanvas(const char* title, int num_univ, int univ_len): Thread("GpuCanvas-bkg", true), started(now()) //, StatsAdjust(0)
+    {
+        myprintf(22, BLUE_LT "GpuCanvas init via bkg thread" ENDCOLOR);
+        CtorParams.title = title;
+        CtorParams.num_univ = num_univ;
+        CtorParams.univ_len = univ_len;
+        this->wake((void*)0x1234); //run main() asynchronously in bkg thread
+//        myprintf(22, BLUE_LT "GpuCanvas wait for bkg" ENDCOLOR);
+        this->wait(); //wait for bkg thread to init
+        myprintf(22, BLUE_LT "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
+    }
+    void* main(void* ignored)
+    {
+        ctor_bkg(CtorParams.title, CtorParams.num_univ, CtorParams.univ_len);
+        out.wake((void*)true); //tell main thread i'm ready
+        for (;;) //req loop
+        {
+            void* req = in.wait();
+            if (!req) break; //eof
+            bool ok = Paint(PaintParams.pixels, PaintParams.cb1);
+//no; async completion            out.wake((void*)ok);
+            if (PaintParams.cb2) PaintParams.cb2();
+        }
+        myprintf(8, MAGENTA_LT "bkg renderer thread: exit after %2.1f msec" ENDCOLOR, elapsed(started));
+//        done = true;
+        return (void*)true; //SDL_Success
+    }
+    typedef void (*callback)(void);
+    struct { uint32_t* pixels; callback cb1, cb2; } PaintParams;
+    bool Paint_bkg(uint32_t* pixels = 0, callback cb1 = 0, callback cb2 = 0)
+    {
+        myprintf(22, BLUE_LT "GpuCanvas paint via bkg thread" ENDCOLOR);
+        PaintParams.pixels = pixels;
+        PaintParams.cb1 = cb1;
+        PaintParams.cb2 = cb2;
+        this->wake((void*)0x5678); //run Paint() asynchronously in bkg thread
+//        myprintf(22, BLUE_LT "GpuCanvas wait for bkg" ENDCOLOR);
+//no; async completion        bool ok = (bool)this->wait(); //wait for bkg thread to paint
+//        myprintf(22, BLUE_LT "GpuCanvas paint bkg thread done, ret to caller" ENDCOLOR);
+        return true; //ok;
+    }
+    void ctor_bkg(const char* title, int num_univ, int univ_len)
+#elif defined(MULTI_THREADED)
     GpuCanvas(const char* title, int num_univ, int univ_len, bool want_pivot = true): Thread("GpuCanvas", true), started(now()), /*StatsAdjust(0),*/ dump_count(0)
 #else
     GpuCanvas(const char* title, int num_univ, int univ_len): started(now()) //, StatsAdjust(0)
@@ -1524,6 +1574,10 @@ public:
     }
     ~GpuCanvas()
     {
+#ifdef SINGLE_THREADED_BKG
+        myprintf(22, YELLOW_LT "TODO: mv GpuCanvas dtor to bkg thread?" ENDCOLOR);
+        this->wake(); //eof; tell bkg thread to quit (if it's waiting)
+#endif
 //        myprintf(22, BLUE_LT "GpuCanvas dtor" ENDCOLOR);
 //        if (reported != times.previous) stats();
 #ifdef MULTI_THREADED
@@ -1814,7 +1868,7 @@ public:
 //NOTE: caller owns pixel buf; leave it in caller's memory so it can be updated (need to copy here for pivot anyway)
 //NOTE: pixel array assumed to be the correct size here (already checked by Javascript wrapper before calling)
 //    inline int xyofs(int x, int y) { return x * this->univ_len + y; }
-    bool Paint(uint32_t* pixels = 0) //, void* cb)
+    bool Paint(uint32_t* pixels = 0, callback cb = 0) //void (*cb)(void) = 0) //, void* cb)
     {
         uint64_t delta;
         delta = now() - times.previous; times.previous += delta; times.caller += delta;
@@ -1830,6 +1884,7 @@ public:
                 encode(pixels, (uint32_t*)lock.data.surf.pixels);
                 delta = now() - times.previous; times.previous += delta; times.encode += delta;
             }
+            if (cb) cb();
 //            delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
 //slower; doesn't work with streaming texture?
 //        if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
@@ -1841,6 +1896,7 @@ public:
             }
             delta = now() - times.previous; times.previous += delta; times.encode += delta;
         }
+        else if (cb) cb();
         SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
         delta = now() - times.previous; times.previous += delta; times.render += delta;
 //myprintf(22, "render present: old ts %2.3f sec, new ts %2.3f, rate %2.3f + %2.3f = %2.3f" ENDCOLOR, 
@@ -1861,6 +1917,7 @@ public:
         double frrate[SIZE(frame_rate)], avg_fps;
         double caller_time, encode_time, update_time, render_time;
     } stats_report;
+//TODO: okay across threads?
     /*bool*/ void stats(bool display = false)
     {
 //TODO: skip if numfr already reported
@@ -3346,7 +3403,11 @@ NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 sta
         pixels = static_cast<uint32_t*>(data);
     }
 myprintf(33, "js paint(0x%x) %d arg(s): pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, info.Length(), pixels[0], pixels[1], pixels[2]);
+#ifdef SINGLE_THREADED_BKG
+    if (!canvas->inner.cast->Paint_bkg(pixels)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
+#else
     if (!canvas->inner.cast->Paint(pixels)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
+#endif
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
 
