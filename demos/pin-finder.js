@@ -238,6 +238,7 @@ function calibrate()
 canvas.playback =
 function* playback() //onexit)
 {
+throw new Error("todo".red_lt);
     debug(`begin: startup took %d sec, now run fx for %d sec`.green_lt, trunc(process.uptime(), 10), DURATION);
     var perf = {render: 0, idle: 0, paint: 0, cpu: process.cpuUsage()};
 //    this.on('stats', stats_cb, perf);
@@ -453,4 +454,5 @@ function trunc(val, digits)
 //    return Date.now() / 1000;
 //}
 
+debug("eof".blue_lt);
 //eof

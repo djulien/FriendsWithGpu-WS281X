@@ -296,6 +296,7 @@ new Proxy(function(){},
         const auto_play = firstOf((opts || {}).AUTO_PLAY, OPTS.AUTO_PLAY[1], true);
 //        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
 debug("TODO: setImmediate or nextTick here?".red_lt)
+debug(optznStatus(THIS.));
         /*process.nextTick*/ step(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
         return THIS;
 
@@ -398,7 +399,7 @@ function* master_async(num_wkers, auto_play)
 //    if (!cluster.isMaster) return;
 //    this.shmbuf[1] = 0; //set next frame# to render; //-num_wkers; //no-use dummy frame#s as placeholders for wker acks
     var frnum = 0;
-    var pending = 0; //#remaining replies
+    var pending = num_wkers; //#remaining replies
     for (var w = 0; w < num_wkers; ++w)
     {
         var wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
@@ -433,19 +434,25 @@ function* master_async(num_wkers, auto_play)
         yield this.wait(1 / this.FPS); //simulate 60 fps
     }
 */
-    debug(`GpuCanvas: all wkers launched, ready for playback`.blue_lt);
+    debug(`GpuCanvas: ${num_wkers} wkers launched, ready for playback`.blue_lt);
     if (!auto_play) return; //TODO: emit event or caller cb
 //    yield* this.playback();
+    this.elapsed = 0;
     const DURATION = 5; //TODO
     for (/*var frnum = 0*/; frnum < DURATION * this.FPS; ++frnum)
     {
 //        yield this.render(frnum);
         yield; //wait for all wkers to render+reply
 //        encode_bkg(); //blocking
-        yield this.paint_bkg(function() { broadcast({frnum: frnum + 1}); step(); }); //blocking, wake up children after encode
 //        yield this.paint();
-        yield this.wait((frnum + 1) / this.FPS); //throttle
-        RenderPresent_bkg(); //blocking
+        yield this.paint(this.pixels, (frnum + 1) / this.FPS, (done) => //async, double-blocking (cb called 2x)
+        {
+            debug(`async paint cb(done ${done}`.blue_lt);
+            if (!done) return broadcast({frnum: frnum + 1}); //wake up children after encode
+//            yield this.wait((frnum + 1) / this.FPS); //throttle
+//            RenderPresent_bkg(); //blocking
+            step(); //wake up master after RenderPresent
+        });
     }
     debug("master send eof".blue_lt)
 //    this.atomic(true, function() { this.shmbuf[1] = QUIT; }.bind(this));
@@ -674,7 +681,7 @@ function load_img_method(path)
 
 
 //send pixel data on screen:
-function paint_method() //alt_pixels)
+function paint_method(pixels, delay, cb) //alt_pixels)
 {
 //        if (WANT_SHARED && !cluster.isMaster) return process.send({done: true});
 //console.log(`paint: ${this.width} x ${this.height}, progress? ${this.SHOW_PROGRESS}, elapsed ${this.elapsed || 0}, duration ${this.duration}, x-limit %d %d`, this.width * (this.elapsed || 0) / this.duration, Math.round(this.width * (this.elapsed || 0) / this.duration));
@@ -687,18 +694,18 @@ function paint_method() //alt_pixels)
 //        super.paint(alt_pixels || this.pixels); //CAUTION: blocks a few msec for bkg renderer
 //    if (arguments.length) GpuCanvas.prototype.paint.call(this, alt_pixels); //CAUTION: blocks a few msec for bkg renderer
 //    else GpuCanvas.prototype.paint.call(this); //CAUTION: blocks a few msec for bkg renderer
-    GpuCanvas.prototype.paint.call(this, this.pixels); //CAUTION: blocks a few msec for bkg renderer
+    GpuCanvas.prototype.paint.apply(this, arguments); //CAUTION: blocks a few msec for bkg renderer
     if (isNaN(++this.render_count)) this.render_count = 1;
 //    debug(`paint# ${this.render_count}, ${arguments.length} arg(s)`.blue_lt);
     return this; //fluent
 } //.bind(this);
-function paint_progress_method() //alt_pixels)
+function paint_progress_method(pixels, delay, cb) //alt_pixels)
 {
 //debug("paint[%d @%d]: prog 0..%d/%d", this.render_count || 0, this.elapsed, (this.width * (this.elapsed || 0) / this.duration), this.width);
     if (/*this.SHOW_PROGRESS &&*/ this.duration) //kludge: use last row of pixels to display progress bar
         for (var x = 0, xofs = x * this.height; x < Math.round(this.width * (this.elapsed || 0) / this.duration); ++x, xofs += this.height)
             this.pixels[xofs + this.height -1] = WHITE;
-    return paint_method.call(this);
+    return paint_method.apply(this, arguments);
 }
 
 
@@ -823,6 +830,20 @@ function firstOf(args) //prevval, curval) //, curinx, all)
     throw new Error("firstOf: no value found".red_lt);
 }
 
+
+//show optimization status:
+function optznStatus(fn)
+{
+    var name = fn.name;
+    switch (%GetOptimizationStatus(fn))
+    {
+        case 1: console.log(fn.name, "function is optimized"); break;
+        case 2: console.log(fn.name, "function is not optimized"); break;
+        case 3: console.log(fn.name, "function is always optimized"); break;
+        case 4: console.log(fn.name, "function is never optimized"); break;
+        case 6: console.log(fn.name, "function is maybe deoptimized"); break;
+    }
+}
 
 function uint32toint(val)
 {

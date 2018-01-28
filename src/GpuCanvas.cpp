@@ -389,14 +389,14 @@ int stdlog::count = 0;
 //ANSI color codes (for console output):
 //https://en.wikipedia.org/wiki/ANSI_escape_code
 #define ANSI_COLOR(code)  "\x1b[" code "m"
-#define RED_LT  ANSI_COLOR("1;31") //too dark: "0;31"
-#define GREEN_LT  ANSI_COLOR("1;32")
-#define YELLOW_LT  ANSI_COLOR("1;33")
-#define BLUE_LT  ANSI_COLOR("1;34")
-#define MAGENTA_LT  ANSI_COLOR("1;35")
-#define PINK_LT  MAGENTA_LT
-#define CYAN_LT  ANSI_COLOR("1;36")
-#define GRAY_LT  ANSI_COLOR("0;37")
+#define RED_MSG  ANSI_COLOR("1;31") //too dark: "0;31"
+#define GREEN_MSG  ANSI_COLOR("1;32")
+#define YELLOW_MSG  ANSI_COLOR("1;33")
+#define BLUE_MSG  ANSI_COLOR("1;34")
+#define MAGENTA_MSG  ANSI_COLOR("1;35")
+#define PINK_MSG  MAGENTA_MSG
+#define CYAN_MSG  ANSI_COLOR("1;36")
+#define GRAY_MSG  ANSI_COLOR("0;37")
 //#define ENDCOLOR  ANSI_COLOR("0")
 //append the src line# to make debug easier:
 #define ENDCOLOR_ATLINE(n)  " &" TOSTR(n) ANSI_COLOR("0") //"\n"
@@ -539,7 +539,7 @@ inline const char* TypeName(const SDL_Thread*) { return "SDL_Thread"; }
 //overloaded deallocator function for each type:
 //avoids logic specialization by object type
 //TODO: remove printf
-#define debug(ptr)  myprintf(28, YELLOW_LT "dealloc %s 0x%x" ENDCOLOR, TypeName(ptr), toint(ptr))
+#define debug(ptr)  myprintf(28, YELLOW_MSG "dealloc %s 0x%x" ENDCOLOR, TypeName(ptr), toint(ptr))
 #define NOdebug(ptr)
 inline int Release(/*const*/ SDL_lib* that) { debug(that); SDL_Quit(); return SDL_Success; }
 //inline int Release(IMG_lib* that) { IMG_Quit(); return SDL_Success; }
@@ -578,14 +578,14 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
     if (already == flags) retval = &ok;
     else if (already) retval = OK(SDL_InitSubSystem(flags & ~already))? &ok: NULL;
     else retval = OK(SDL_Init(flags))? &ok: NULL;
-    if (!retval) return (SDL_lib*)exc(RED_LT "SDL_Init %s (0x%x) failed" ENDCOLOR_MYLINE, subsys.str().c_str() + 1, flags, where); //throw SDL_Exception("SDL_Init");
+    if (!retval) return (SDL_lib*)exc(RED_MSG "SDL_Init %s (0x%x) failed" ENDCOLOR_MYLINE, subsys.str().c_str() + 1, flags, where); //throw SDL_Exception("SDL_Init");
 #if 0
     if (ok.evtid); //already inited //!= UNDEF_EVTID)
-    else if (!OK(ok.evtid = SDL_RegisterEvents(2))) return (SDL_lib*)exc(RED_LT "SDL_RegisterEvents failed" ENDCOLOR_MYLINE, where);
+    else if (!OK(ok.evtid = SDL_RegisterEvents(2))) return (SDL_lib*)exc(RED_MSG "SDL_RegisterEvents failed" ENDCOLOR_MYLINE, where);
     else ++ok.evtid; //kludge: ask for 2 evt ids so last one != 0; then we can check for 0 instead of "(uint32_t)-1"
 #endif
-    if (already) myprintf(22, YELLOW_LT "SDL %s (0x%x) was already %sinitialized (0x%x) from %d" ENDCOLOR, subsys.str().c_str() + 1, flags, (already != flags)? "partly ": "", already, where);
-    if (where) myprintf(22, YELLOW_LT "SDL_Init %s (0x%x) = 0x%x ok? %d (from %d)" ENDCOLOR, subsys.str().c_str() + 1, flags, toint(retval), !!retval, where);
+    if (already) myprintf(22, YELLOW_MSG "SDL %s (0x%x) was already %sinitialized (0x%x) from %d" ENDCOLOR, subsys.str().c_str() + 1, flags, (already != flags)? "partly ": "", already, where);
+    if (where) myprintf(22, YELLOW_MSG "SDL_Init %s (0x%x) = 0x%x ok? %d (from %d)" ENDCOLOR, subsys.str().c_str() + 1, flags, toint(retval), !!retval, where);
     return retval;
 }
 //#define IMG_INIT(flags)  ((IMG_Init(flags) & (flags)) != (flags)) //0 == Success
@@ -597,9 +597,9 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
 /*inline*/ SDL_LockedMutex* SDL_LOCK(SDL_LockedMutex& locked, SDL_mutex* mutex, int where) //= 0)
 {
     /*static SDL_LockedMutex*/ locked = {0};
-    if (!mutex) return (SDL_LockedMutex*)exc(RED_LT "No SDL_mutex to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
-    if (!OK(SDL_LockMutex(mutex))) return (SDL_LockedMutex*)exc(RED_LT "SDL_LockMutex 0x%x failed" ENDCOLOR_MYLINE, mutex, where); //throw SDL_Exception("SDL_LockMutex");
-    if (where) myprintf(32, YELLOW_LT "SDL_LockMutex 0x%x ok (from %d)" ENDCOLOR, toint(mutex), where);
+    if (!mutex) return (SDL_LockedMutex*)exc(RED_MSG "No SDL_mutex to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
+    if (!OK(SDL_LockMutex(mutex))) return (SDL_LockedMutex*)exc(RED_MSG "SDL_LockMutex 0x%x failed" ENDCOLOR_MYLINE, mutex, where); //throw SDL_Exception("SDL_LockMutex");
+    if (where) myprintf(32, YELLOW_MSG "SDL_LockMutex 0x%x ok (from %d)" ENDCOLOR, toint(mutex), where);
     locked.mutex = mutex;
     return &locked;
 }
@@ -608,9 +608,9 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
 /*inline*/ SDL_LockedSemaphore* SDL_LOCK(SDL_LockedSemaphore& locked, SDL_sem* sem, int where) //= 0)
 {
     /*static SDL_LockedSemaphore*/ locked = {0};
-    if (!sem) return (SDL_LockedSemaphore*)exc(RED_LT "No SDL_sem to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
-    if (!OK(SDL_SemWait(sem))) return (SDL_LockedSemaphore*)exc(RED_LT "SDL_SemWait 0x%x failed" ENDCOLOR_MYLINE, sem, where); //throw SDL_Exception("SDL_LockMutex");
-    if (where) myprintf(32, YELLOW_LT "SDL_LockSemaphore 0x%x ok (from %d)" ENDCOLOR, toint(sem), where);
+    if (!sem) return (SDL_LockedSemaphore*)exc(RED_MSG "No SDL_sem to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
+    if (!OK(SDL_SemWait(sem))) return (SDL_LockedSemaphore*)exc(RED_MSG "SDL_SemWait 0x%x failed" ENDCOLOR_MYLINE, sem, where); //throw SDL_Exception("SDL_LockMutex");
+    if (where) myprintf(32, YELLOW_MSG "SDL_LockSemaphore 0x%x ok (from %d)" ENDCOLOR, toint(sem), where);
     locked.sem = sem;
     return &locked;
 }
@@ -619,19 +619,19 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
 /*inline*/ SDL_LockedTexture* SDL_LOCK(SDL_LockedTexture& locked, SDL_Texture* txr, int where /*= 0*/, int chk_w = 0, int chk_h = 0, uint32_t chk_fmt = 0)
 {
     /*static SDL_LockedTexture*/ locked = {0};
-    if (!txr) return (SDL_LockedTexture*)exc(RED_LT "No SDL_Texture to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
-    if (!OK(SDL_QueryTexture(txr, &locked.fmt, &locked.acc, &locked.surf.w, &locked.surf.h))) return (SDL_LockedTexture*)exc(RED_LT "SDL_QueryTexture 0x%x failed" ENDCOLOR_MYLINE, txr, where); //throw SDL_Exception("SDL_LockMutex");
-    if (!OK(SDL_LockTexture(txr, NORECT, &locked.surf.pixels, &locked.surf.pitch))) return (SDL_LockedTexture*)exc(RED_LT "SDL_LockTexture 0x%x failed" ENDCOLOR_MYLINE, txr, where); //throw SDL_Exception("SDL_LockMutex");
-    if (where) myprintf(32, YELLOW_LT "SDL_LockTexture 0x%x ok (from %d)" ENDCOLOR, toint(txr), where);
+    if (!txr) return (SDL_LockedTexture*)exc(RED_MSG "No SDL_Texture to lock" ENDCOLOR_MYLINE, where); //throw SDL_Exception("SDL_LockMutex");
+    if (!OK(SDL_QueryTexture(txr, &locked.fmt, &locked.acc, &locked.surf.w, &locked.surf.h))) return (SDL_LockedTexture*)exc(RED_MSG "SDL_QueryTexture 0x%x failed" ENDCOLOR_MYLINE, txr, where); //throw SDL_Exception("SDL_LockMutex");
+    if (!OK(SDL_LockTexture(txr, NORECT, &locked.surf.pixels, &locked.surf.pitch))) return (SDL_LockedTexture*)exc(RED_MSG "SDL_LockTexture 0x%x failed" ENDCOLOR_MYLINE, txr, where); //throw SDL_Exception("SDL_LockMutex");
+    if (where) myprintf(32, YELLOW_MSG "SDL_LockTexture 0x%x ok (from %d)" ENDCOLOR, toint(txr), where);
 //additional validation:
     if (!locked.surf.w || (chk_w && (locked.surf.w != chk_w)) || !locked.surf.h || (chk_h && (locked.surf.h != chk_h)))
-        return (SDL_LockedTexture*)err(RED_LT "Unexpected texture size: %dx%d should be %dx%d" ENDCOLOR_MYLINE, locked.surf.w, locked.surf.h, chk_w, chk_h, where), (SDL_LockedTexture*)NULL; //NUM_UNIV, UNIV_LEN);
+        return (SDL_LockedTexture*)err(RED_MSG "Unexpected texture size: %dx%d should be %dx%d" ENDCOLOR_MYLINE, locked.surf.w, locked.surf.h, chk_w, chk_h, where), (SDL_LockedTexture*)NULL; //NUM_UNIV, UNIV_LEN);
     if (!locked.surf.pixels || (toint(locked.surf.pixels) & 7))
-        return (SDL_LockedTexture*)err(RED_LT "Texture pixels not aligned on 8-byte boundary" ENDCOLOR_MYLINE, where), (SDL_LockedTexture*)NULL; //*(auto_ptr*)0;
+        return (SDL_LockedTexture*)err(RED_MSG "Texture pixels not aligned on 8-byte boundary" ENDCOLOR_MYLINE, where), (SDL_LockedTexture*)NULL; //*(auto_ptr*)0;
     if ((size_t)locked.surf.pitch != sizeof(uint32_t) * locked.surf.w)
-        return (SDL_LockedTexture*)err(RED_LT "Unexpected pitch: %d should be %zu * %d = %zu" ENDCOLOR_MYLINE, locked.surf.pitch, sizeof(uint32_t), locked.surf.w, sizeof(uint32_t) * locked.surf.w, where), (SDL_LockedTexture*)NULL;
+        return (SDL_LockedTexture*)err(RED_MSG "Unexpected pitch: %d should be %zu * %d = %zu" ENDCOLOR_MYLINE, locked.surf.pitch, sizeof(uint32_t), locked.surf.w, sizeof(uint32_t) * locked.surf.w, where), (SDL_LockedTexture*)NULL;
     if (!locked.fmt || (chk_fmt && (locked.fmt != chk_fmt)))
-        return (SDL_LockedTexture*)err(RED_LT "Unexpected texture format: %i bpp %s should be %i bpp %s" ENDCOLOR_MYLINE, SDL_BITSPERPIXEL(locked.fmt), SDL_PixelFormatShortName(locked.fmt), SDL_BITSPERPIXEL(chk_fmt), SDL_PixelFormatShortName(chk_fmt), where), (SDL_LockedTexture*)NULL;
+        return (SDL_LockedTexture*)err(RED_MSG "Unexpected texture format: %i bpp %s should be %i bpp %s" ENDCOLOR_MYLINE, SDL_BITSPERPIXEL(locked.fmt), SDL_PixelFormatShortName(locked.fmt), SDL_BITSPERPIXEL(chk_fmt), SDL_PixelFormatShortName(chk_fmt), where), (SDL_LockedTexture*)NULL;
     locked.txr = txr;
     return &locked;
 }
@@ -662,7 +662,7 @@ public:
     DataType* cast;
 public:
 //ctor/dtor:
-    auto_ptr(DataType* that = NULL): cast(that) {}; // myprintf(22, YELLOW_LT "assign %s 0x%x" ENDCOLOR, TypeName(that), toint(that)); };
+    auto_ptr(DataType* that = NULL): cast(that) {}; // myprintf(22, YELLOW_MSG "assign %s 0x%x" ENDCOLOR, TypeName(that), toint(that)); };
     ~auto_ptr() { this->release(); }
 //cast to regular pointer:
 //    operator const PtrType*() { return this->cast; }
@@ -677,7 +677,7 @@ public:
         {
             this->release();
 //set new state:
-//            myprintf(22, YELLOW_LT "reassign %s 0x%x" ENDCOLOR, TypeName(that), toint(that));
+//            myprintf(22, YELLOW_MSG "reassign %s 0x%x" ENDCOLOR, TypeName(that), toint(that));
             this->cast = that; //now i'm responsible for releasing new object (no ref counting)
         }
         return *this; //fluent (chainable)
@@ -688,7 +688,7 @@ public:
     {
 		friend class auto_ptr;
     public:
-        lock() { myprintf(1, YELLOW_LT "TODO" ENDCOLOR); };
+        lock() { myprintf(1, YELLOW_MSG "TODO" ENDCOLOR); };
         ~lock() {};
     };
 public:
@@ -826,24 +826,25 @@ public:
 
 
 //send or wait for a signal (cond + mutex):
+//uses FIFO of messages to compensate for SDL_cond limitations
 class Signal
 {
 private:
     std::vector<void*> pending; //SDL discards signal if nobody waiting (CondWait must occur before CondSignal), so remember it
     auto_ptr<SDL_cond> cond;
 //TODO: use smart_ptr with ref count
-    static auto_ptr<SDL_mutex> mutex; //low usage, so share it across all signals
+    static auto_ptr<SDL_mutex> mutex; //assume low usage, share across all signals
     static int count;
 //NO-doesn't make sense to send-then-rcv immediately, and rcv-then-send needs processing in between:
 //    enum Direction {SendOnly = 1, RcvOnly = 2, Both = 3};
 public:
     Signal() //: cond(NULL)
     {
-        myprintf(22, BLUE_LT "sig ctor: count %d, m 0x%x, c 0x%x" ENDCOLOR, count, toint(mutex.cast), toint(cond.cast));
+        myprintf(22, BLUE_MSG "sig ctor: count %d, m 0x%x, c 0x%x" ENDCOLOR, count, toint(mutex.cast), toint(cond.cast));
         if (!count++)
-            if (!(mutex = SDL_CreateMutex())) exc(RED_LT "Can't create signal mutex" ENDCOLOR); //throw SDL_Exception("SDL_CreateMutex");
-        if (!(cond = SDL_CreateCond())) exc(RED_LT "Can't create signal cond" ENDCOLOR); //throw SDL_Exception("SDL_CreateCond");
-        myprintf(22, YELLOW_LT "signal 0x%x has m 0x%x, c 0x%x" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast));
+            if (!(mutex = SDL_CreateMutex())) exc(RED_MSG "Can't create signal mutex" ENDCOLOR); //throw SDL_Exception("SDL_CreateMutex");
+        if (!(cond = SDL_CreateCond())) exc(RED_MSG "Can't create signal cond" ENDCOLOR); //throw SDL_Exception("SDL_CreateCond");
+        myprintf(22, YELLOW_MSG "signal 0x%x has m 0x%x, c 0x%x" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast));
     }
     ~Signal() { if (!--count) mutex = NULL; }
 public:
@@ -853,13 +854,13 @@ public:
         myprintf(33, "here-rcv 0x%x 0x%x, pending %d" ENDCOLOR, toint(mutex.cast), toint(cond.cast), this->pending.size());
         while (!this->pending.size()) //NOTE: need loop in order to handle "spurious wakeups"
         {
-            if (/*!cond ||*/ !OK(SDL_CondWait(cond, mutex))) exc(RED_LT "Wait for signal 0x%x:(0x%x,0x%x) failed" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast)); //throw SDL_Exception("SDL_CondWait");
-            if (!this->pending.size()) err(YELLOW_LT "Ignoring spurious wakeup" ENDCOLOR); //paranoid
+            if (/*!cond ||*/ !OK(SDL_CondWait(cond, mutex))) exc(RED_MSG "Wait for signal 0x%x:(0x%x,0x%x) failed" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast)); //throw SDL_Exception("SDL_CondWait");
+            if (!this->pending.size()) err(YELLOW_MSG "Ignoring spurious wakeup" ENDCOLOR); //paranoid
         }
         void* data = pending.back(); //signal already happened
 //        myprintf(33, "here-rcv got 0x%x" ENDCOLOR, toint(data));
         pending.pop_back();
-        myprintf(30, BLUE_LT "rcved[%d] 0x%x from signal 0x%x" ENDCOLOR, this->pending.size(), toint(data), toint(this));
+        myprintf(30, BLUE_MSG "rcved[%d] 0x%x from signal 0x%x" ENDCOLOR, this->pending.size(), toint(data), toint(this));
         return data;
     }
     void wake(void* msg = NULL)
@@ -867,9 +868,9 @@ public:
         auto_ptr<SDL_LockedMutex> lock_HERE(mutex.cast); //SDL_LOCK(mutex));
         myprintf(33, "here-send 0x%x 0x%x, pending %d, msg 0x%x" ENDCOLOR, toint(mutex.cast), toint(cond.cast), this->pending.size(), toint(msg));
         this->pending.push_back(msg); //remember signal happened in case receiver is not listening yet
-        if (/*!cond ||*/ !OK(SDL_CondSignal(cond))) exc(RED_LT "Send signal 0x%x failed" ENDCOLOR, toint(this)); //throw SDL_Exception("SDL_CondSignal");
+        if (/*!cond ||*/ !OK(SDL_CondSignal(cond))) exc(RED_MSG "Send signal 0x%x failed" ENDCOLOR, toint(this)); //throw SDL_Exception("SDL_CondSignal");
 //        myprintf(33, "here-sent 0x%x" ENDCOLOR, toint(msg));
-        myprintf(30, BLUE_LT "sent[%d] 0x%x to signal 0x%x" ENDCOLOR, this->pending.size(), toint(msg), toint(this));
+        myprintf(30, BLUE_MSG "sent[%d] 0x%x to signal 0x%x" ENDCOLOR, this->pending.size(), toint(msg), toint(this));
     }
 };
 auto_ptr<SDL_mutex> Signal::mutex;
@@ -899,7 +900,7 @@ public:
 //        if (!OK(SDL_LockMutex(mutex))) throw Exception("SDL_LockMutex");
 //CAUTION: don't call start thread() until Signals are inited!
         auto_ptr<SDL_Thread>::operator=(SDL_CreateThread(start_thread, name, this));
-        if (!this->cast) exc(RED_LT "Can't create thead '%s'" ENDCOLOR, name);
+        if (!this->cast) exc(RED_MSG "Can't create thead '%s'" ENDCOLOR, name);
 //        serialize.lock(); //not really needed (only one bkg thread created), but just in case
         std::lock_guard<std::mutex> lock(protect);
         all.push_back(SDL_GetThreadID(this->cast)); //make it easier to distinguish bkg from main thread; NOTE: only suitable for long-lived threads; list is not cleaned up after thread exits (lazy coder :)
@@ -929,7 +930,7 @@ public:
         {
             this->release();
 //set new state:
-            myprintf(22, YELLOW_LT "reassign %s 0x%x" ENDCOLOR, TypeName(that), toint(that));
+            myprintf(22, YELLOW_MSG "reassign %s 0x%x" ENDCOLOR, TypeName(that), toint(that));
             this->cast = that; //now i'm responsible for releasing new object (no ref counting)
 //            if (that) latest = that;
         }
@@ -941,10 +942,10 @@ private:
     void init_delayed()
     {
         if (this->started) return; //this->cast) return; //thread already started
-        myprintf(22, CYAN_LT "launch thread '%s', async %d" ENDCOLOR, svname, svasync);
+        myprintf(22, CYAN_MSG "launch thread '%s', async %d" ENDCOLOR, svname, svasync);
 //CAUTION: don't call start_thread() until Signals are inited and vtable is populated!
         auto_ptr<SDL_Thread>::operator=(SDL_CreateThread(start_thread, svname, this));
-        if (!this->cast) return_void(exc(RED_LT "Can't create thead '%s'" ENDCOLOR, svname));
+        if (!this->cast) return_void(exc(RED_MSG "Can't create thead '%s'" ENDCOLOR, svname));
         this->started = true; //don't start it again
 //        std::lock_guard<std::mutex> lock(protect);
         all.push_back(SDL_GetThreadID(this->cast)); //make it easier to distinguish bkg from main thread; NOTE: only suitable for long-lived threads; list is not cleaned up after thread exits (lazy coder :)
@@ -1059,7 +1060,7 @@ public:
     void write(int val)
     {
 //    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
-        if (count >= NUM_SSR * (NUM_SSR - 1)) { printf(RED_LT "overflow" ENDCOLOR); return; }
+        if (count >= NUM_SSR * (NUM_SSR - 1)) { printf(RED_MSG "overflow" ENDCOLOR); return; }
         struct DimRowEntry* ptr = &DimRowList[count];
 //    ptr->rownum_numcols = ROW_bits(rcinx) | 1;
 //    ptr->colmap = 0x80 >> COL(rcinx);
@@ -1067,7 +1068,7 @@ public:
 //    ptr->rowmap = 0x80 >> ROW(rcinx);
         for (int i = 0; i < NUM_SSR; ++i) ptr->colmaps[i] = 0; //TODO: better to do this 1x at start, or incrementally as needed?
         ptr->colmaps[ROW(rcinx)] = 0x80 >> COL(rcinx);
-no_myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
+no_myprintf(14, BLUE_MSG "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
         ptr->numrows = 1;
         ++total_rows;
         ++count;
@@ -1083,11 +1084,11 @@ no_myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
 
     void insert(int newvalue)
     {
-        no_myprintf(18, BLUE_LT "INS[%d] %d [r %d,c %d]: " ENDCOLOR, count, newvalue, ROW(rcinx), COL(rcinx));
-        if (ISDIAG(rcinx)) { ++rcinx; no_myprintf(18, BLUE_LT "skip diagonal" ENDCOLOR); return; }
+        no_myprintf(18, BLUE_MSG "INS[%d] %d [r %d,c %d]: " ENDCOLOR, count, newvalue, ROW(rcinx), COL(rcinx));
+        if (ISDIAG(rcinx)) { ++rcinx; no_myprintf(18, BLUE_MSG "skip diagonal" ENDCOLOR); return; }
 //    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
-        if (!newvalue) { /*sorted[count - 1] = 0*/; ++rcinx; no_myprintf(18, BLUE_LT "skip null" ENDCOLOR); return; } //don't need to store this one
-        if (rcinx >= NUM_SSR * NUM_SSR) { myprintf(18, RED_LT "overflow" ENDCOLOR); return; }
+        if (!newvalue) { /*sorted[count - 1] = 0*/; ++rcinx; no_myprintf(18, BLUE_MSG "skip null" ENDCOLOR); return; } //don't need to store this one
+        if (rcinx >= NUM_SSR * NUM_SSR) { myprintf(18, RED_MSG "overflow" ENDCOLOR); return; }
 //    if (newvalue == 233) showkeys(newvalue);
         int start, end;
 //check if entry already exists using binary search:
@@ -1109,8 +1110,8 @@ no_myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
             if (!ptr->colmaps[ROW(rcinx)]) { ++ptr->numrows; ++total_rows; }
             ptr->colmaps[ROW(rcinx)] |= 0x80 >> COL(rcinx);
 //        ptr->rowmap |= 0x80 >> ROW(rcinx);
-//printf(YELLOW_LT "found: add col, new count: %d" ENDCOLOR, COL(ptr->rownum_numcols + 1));
-//        if (!COL(ptr->rownum_numcols + 1)) printf(RED_LT "#col wrap" ENDCOLOR);
+//printf(YELLOW_MSG "found: add col, new count: %d" ENDCOLOR, COL(ptr->rownum_numcols + 1));
+//        if (!COL(ptr->rownum_numcols + 1)) printf(RED_MSG "#col wrap" ENDCOLOR);
 //        ++ptr->rownum_numcols;
 //        ptr->colmap |= 0x80 >> COL(rcinx);
 //fill in list tail:
@@ -1120,7 +1121,7 @@ no_myprintf(14, BLUE_LT "colmap[0] 0x%x" ENDCOLOR, ptr->colmaps[ROW(rcinx)]);
             return;
         }
 //create a new entry, insert into correct position:
-no_myprintf(18, BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newvalue, start, count - start);
+no_myprintf(18, BLUE_MSG "ins new val %d at %d, shift %d entries" ENDCOLOR, newvalue, start, count - start);
         for (int i = count; i > start; --i) sorted[i] = sorted[i - 1];
         sorted[start] = count;
         write(newvalue);
@@ -1148,7 +1149,7 @@ no_myprintf(18, BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newva
     void resolve_conflicts()
     {
 //    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
-        no_myprintf(18, BLUE_LT "resolve dups rc %d, # %d" ENDCOLOR, rcinx, count);
+        no_myprintf(18, BLUE_MSG "resolve dups rc %d, # %d" ENDCOLOR, rcinx, count);
         disp_count = checksum = 0;
         uint8_t max = 255, min = total_rows;
         for (int i = 0; i < count; ++i)
@@ -1169,9 +1170,9 @@ no_myprintf(18, BLUE_LT "ins new val %d at %d, shift %d entries" ENDCOLOR, newva
 #endif
             min -= ptr->numrows; //update min for this group
             int adjust = (ptr->numrows - 1) / 2; //UPSHIFT(ptr);
-            if (ptr->delay + adjust > max) { adjust = max - ptr->delay; no_myprintf(18, YELLOW_LT "can only upshift delay[%d/%d] %d by <= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
-            else if (ptr->delay + adjust - ptr->numrows < min) { adjust = min - (ptr->delay - ptr->numrows); no_myprintf(18, YELLOW_LT "must upshift delay[%d/%d] %d by >= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
-            else if (adjust) no_myprintf(18, BLUE_LT "upshifted delay[%d/%d] %d by +%d" ENDCOLOR, i, count, ptr->delay, adjust);
+            if (ptr->delay + adjust > max) { adjust = max - ptr->delay; no_myprintf(18, YELLOW_MSG "can only upshift delay[%d/%d] %d by <= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
+            else if (ptr->delay + adjust - ptr->numrows < min) { adjust = min - (ptr->delay - ptr->numrows); no_myprintf(18, YELLOW_MSG "must upshift delay[%d/%d] %d by >= %d" ENDCOLOR, i, count, ptr->delay, adjust); }
+            else if (adjust) no_myprintf(18, BLUE_MSG "upshifted delay[%d/%d] %d by +%d" ENDCOLOR, i, count, ptr->delay, adjust);
             ptr->delay += adjust;
 //TODO: order rows according to #cols?
             bool firstrow = true;
@@ -1211,9 +1212,9 @@ public:
 /*
     void showkeys(int newvalue)
     {
-        printf(BLUE_LT "keys now (%d): ", newvalue);
+        printf(BLUE_MSG "keys now (%d): ", newvalue);
         for (int i = 0; i < count; ++i)
-            printf("%s[%d] %d, ", (!i || (DimRowList[sorted[i - 1]].delay > DimRowList[sorted[i]].delay))? GREEN_LT: RED_LT, i, DimRowList[sorted[i]].delay);
+            printf("%s[%d] %d, ", (!i || (DimRowList[sorted[i - 1]].delay > DimRowList[sorted[i]].delay))? GREEN_MSG: RED_MSG, i, DimRowList[sorted[i]].delay);
         printf(ENDCOLOR);
     }
 */
@@ -1221,14 +1222,14 @@ public:
     void show_list(const char* desc)
     {
 //    int count = rcinx - ROW(rcinx) - HASDIAG(rcinx); //skip diagonal ch*plex row/col address
-        no_myprintf(18, CYAN_LT "%s %d entries (%d total rows):" ENDCOLOR, desc, count, total_rows);
+        no_myprintf(18, CYAN_MSG "%s %d entries (%d total rows):" ENDCOLOR, desc, count, total_rows);
         for (int i = 0; i < count; ++i)
         {
 //        if (ISDIAG(i)) continue; //skip diagonal ch*plex row/col address
 //        int ii = i - ROW(i) - HASDIAG(i); //skip diagonal ch*plex row/col address
             struct DimRowEntry* ptr = &DimRowList[sorted[i]];
-//        printf(PINK_LT "[%d/%d=%d]: delay %d, row# %d, #cols %d, cols 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ROW(ptr->rownum_numcols), COL(ptr->rownum_numcols), ptr->colmap);
-            no_myprintf(18, PINK_LT "[%d/%d=%d]: delay %d, #rows %d, cols 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ptr->numrows, ptr->colmaps[0], ptr->colmaps[1], ptr->colmaps[2], ptr->colmaps[3], ptr->colmaps[4], ptr->colmaps[5], ptr->colmaps[6], ptr->colmaps[7]);
+//        printf(PINK_MSG "[%d/%d=%d]: delay %d, row# %d, #cols %d, cols 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ROW(ptr->rownum_numcols), COL(ptr->rownum_numcols), ptr->colmap);
+            no_myprintf(18, PINK_MSG "[%d/%d=%d]: delay %d, #rows %d, cols 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x" ENDCOLOR, i, count, sorted[i], ptr->delay, ptr->numrows, ptr->colmaps[0], ptr->colmaps[1], ptr->colmaps[2], ptr->colmaps[3], ptr->colmaps[4], ptr->colmaps[5], ptr->colmaps[6], ptr->colmaps[7]);
 //        if (!ptr->delay) break; //eof
         }
     }
@@ -1275,7 +1276,7 @@ bool isRPi()
 //    static std::mutex protect;
 //    std::lock_guard<std::mutex> lock(protect); //not really needed (low freq api), but just in case
 
-//    myprintf(3, BLUE_LT "isRPi()" ENDCOLOR);
+//    myprintf(3, BLUE_MSG "isRPi()" ENDCOLOR);
 //    serialize.lock(); //not really needed (low freq api), but just in case
     if (isrpi == Maybe) isrpi = exists("/boot/config.txt")? Yes: No;
 //    serialize.unlock();
@@ -1302,15 +1303,15 @@ WH ScreenInfo()
 //        auto_ptr<SDL_lib> sdl(SDL_INIT(SDL_INIT_VIDEO)); //for access to video info; do this in case not already done
         if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
 
-        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get screen info before SDL_Init" ENDCOLOR);
-//        if (!sdl && !(sdl = SDL_INIT(SDL_INIT_VIDEO))) err(RED_LT "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
-        myprintf(22, BLUE_LT "%d display(s):" ENDCOLOR, SDL_GetNumVideoDisplays());
+        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_MSG "ERROR: Tried to get screen info before SDL_Init" ENDCOLOR);
+//        if (!sdl && !(sdl = SDL_INIT(SDL_INIT_VIDEO))) err(RED_MSG "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
+        myprintf(22, BLUE_MSG "%d display(s):" ENDCOLOR, SDL_GetNumVideoDisplays());
         for (int i = 0; i < SDL_GetNumVideoDisplays(); ++i)
         {
             SDL_DisplayMode mode = {0};
             if (!OK(SDL_GetCurrentDisplayMode(i, &mode))) //NOTE: SDL_GetDesktopDisplayMode returns previous mode if full screen mode
-                err(RED_LT "Can't get display[%d/%d]" ENDCOLOR, i, SDL_GetNumVideoDisplays());
-            else myprintf(22, BLUE_LT "Display[%d/%d]: %d x %d px @%dHz, %i bbp %s" ENDCOLOR, i, SDL_GetNumVideoDisplays(), mode.w, mode.h, mode.refresh_rate, SDL_BITSPERPIXEL(mode.format), SDL_PixelFormatShortName(mode.format));
+                err(RED_MSG "Can't get display[%d/%d]" ENDCOLOR, i, SDL_GetNumVideoDisplays());
+            else myprintf(22, BLUE_MSG "Display[%d/%d]: %d x %d px @%dHz, %i bbp %s" ENDCOLOR, i, SDL_GetNumVideoDisplays(), mode.w, mode.h, mode.refresh_rate, SDL_BITSPERPIXEL(mode.format), SDL_PixelFormatShortName(mode.format));
             if (!wh.w || !wh.h) { wh.w = mode.w; wh.h = mode.h; } //take first one, continue (for debug)
 //            break; //TODO: take first one or last one?
         }
@@ -1319,10 +1320,10 @@ WH ScreenInfo()
 //set reasonable values if can't get info:
     if (!wh.w || !wh.h)
     {
-        /*throw std::runtime_error*/ exc(RED_LT "Can't get screen size" ENDCOLOR);
+        /*throw std::runtime_error*/ exc(RED_MSG "Can't get screen size" ENDCOLOR);
         wh.w = 1536;
         wh.h = wh.w * 3 / 4; //4:3 aspect ratio
-        myprintf(22, YELLOW_LT "Using dummy display mode %dx%d" ENDCOLOR, wh.w, wh.h);
+        myprintf(22, YELLOW_MSG "Using dummy display mode %dx%d" ENDCOLOR, wh.w, wh.h);
     }
     return wh;
 }
@@ -1384,7 +1385,7 @@ private:
     const bool want_pivot = false;
 //NO: could be updated by another thread
     uint32_t numfr, numerr, num_dirty;
-    struct { uint64_t previous, caller, update, encode, render; } times;
+    struct { uint64_t previous, caller, encode, update, throttle, render; } times;
 #endif //def MULTI_THREADED
 //    bool reported;
     int num_univ, univ_len; //caller-defined
@@ -1408,7 +1409,7 @@ public:
         UniverseTypes oldtype = this->univ_types[inx];
         if ((newtype != INVALID) && (UTYPEOF(newtype) != UTYPEOF(oldtype)))
         {
-//            myprintf(14, (UTYPEOF(newtype) != UTYPEOF(INVALID))? BLUE_LT "GpuCanvas: UnivType[%d] was %d + flags 0x%d -> is now %d + flags 0x%x" ENDCOLOR: BLUE_LT "GpuCanvas: UnivType[%d] is %d + flags 0x%d" ENDCOLOR, inx, oldtype & TYPEBITS, oldtype & ~TYPEBITS & 0xFF, newtype & TYPEBITS, newtype & ~TYPEBITS & 0xFF);
+//            myprintf(14, (UTYPEOF(newtype) != UTYPEOF(INVALID))? BLUE_MSG "GpuCanvas: UnivType[%d] was %d + flags 0x%d -> is now %d + flags 0x%x" ENDCOLOR: BLUE_MSG "GpuCanvas: UnivType[%d] is %d + flags 0x%d" ENDCOLOR, inx, oldtype & TYPEBITS, oldtype & ~TYPEBITS & 0xFF, newtype & TYPEBITS, newtype & ~TYPEBITS & 0xFF);
             if (UTYPEOF(newtype) == UTYPEOF(CHPLEX_SSR)) encoders[inx] = new ChplexEncoder<NUM_SSR>; //alloc memory while caller is still in prep, prior to playback
             this->univ_types[inx] = newtype;
         }
@@ -1425,14 +1426,14 @@ public:
     struct { const char* title; int num_univ; int univ_len; } CtorParams;
     GpuCanvas(const char* title, int num_univ, int univ_len): Thread("GpuCanvas-bkg", true), started(now()) //, StatsAdjust(0)
     {
-        myprintf(22, BLUE_LT "GpuCanvas init via bkg thread" ENDCOLOR);
+        myprintf(22, BLUE_MSG "GpuCanvas init via bkg thread" ENDCOLOR);
         CtorParams.title = title;
         CtorParams.num_univ = num_univ;
         CtorParams.univ_len = univ_len;
         this->wake((void*)0x1234); //run main() asynchronously in bkg thread
-//        myprintf(22, BLUE_LT "GpuCanvas wait for bkg" ENDCOLOR);
+//        myprintf(22, BLUE_MSG "GpuCanvas wait for bkg" ENDCOLOR);
         this->wait(); //wait for bkg thread to init
-        myprintf(22, BLUE_LT "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
+        myprintf(22, BLUE_MSG "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
     }
     void* main(void* ignored)
     {
@@ -1442,27 +1443,29 @@ public:
         {
             void* req = in.wait();
             if (!req) break; //eof
-            bool ok = Paint(PaintParams.pixels, PaintParams.cb1);
+            myprintf(28, BLUE_MSG "main_bkg: woke, now paint" ENDCOLOR);
+            bool ok = Paint(PaintParams.pixels, PaintParams.delay, PaintParams.cb);
 //no; async completion            out.wake((void*)ok);
-            if (PaintParams.cb2) PaintParams.cb2();
+            if (PaintParams.cb) PaintParams.cb(PaintParams.cbdata, true);
         }
-        myprintf(8, MAGENTA_LT "bkg renderer thread: exit after %2.1f msec" ENDCOLOR, elapsed(started));
+        myprintf(8, MAGENTA_MSG "bkg renderer thread: exit after %2.1f msec" ENDCOLOR, elapsed(started));
 //        done = true;
-        return (void*)true; //SDL_Success
+        return (void*)true; //SDL_Success (async completion)
     }
-    typedef void (*callback)(void);
-    struct { uint32_t* pixels; callback cb1, cb2; } PaintParams;
-    bool Paint_bkg(uint32_t* pixels = 0, callback cb1 = 0, callback cb2 = 0)
+    typedef void (*callback)(void* data, bool done);
+    struct { uint32_t* pixels; callback cb; uint64_t delay; void* cbdata; } PaintParams;
+    bool Paint_bkg(uint32_t* pixels = 0, uint64_t render_delay = 0, callback cb = 0, void* cbdata = 0)
     {
-        myprintf(22, BLUE_LT "GpuCanvas paint via bkg thread" ENDCOLOR);
+        myprintf(22, BLUE_MSG "GpuCanvas paint via bkg thread" ENDCOLOR);
         PaintParams.pixels = pixels;
-        PaintParams.cb1 = cb1;
-        PaintParams.cb2 = cb2;
+        PaintParams.delay = render_delay;
+        PaintParams.cb = cb;
+        PaintParams.cbdata = cbdata;
         this->wake((void*)0x5678); //run Paint() asynchronously in bkg thread
-//        myprintf(22, BLUE_LT "GpuCanvas wait for bkg" ENDCOLOR);
+//        myprintf(22, BLUE_MSG "GpuCanvas wait for bkg" ENDCOLOR);
 //no; async completion        bool ok = (bool)this->wait(); //wait for bkg thread to paint
-//        myprintf(22, BLUE_LT "GpuCanvas paint bkg thread done, ret to caller" ENDCOLOR);
-        return true; //ok;
+//        myprintf(22, BLUE_MSG "GpuCanvas paint bkg thread done, ret to caller" ENDCOLOR);
+        return true; //NOTE: finishes asynchronously; //ok;
     }
     void ctor_bkg(const char* title, int num_univ, int univ_len)
 #elif defined(MULTI_THREADED)
@@ -1473,14 +1476,14 @@ public:
     {
         if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
 //        myprintf(33, "GpuCanvas ctor" ENDCOLOR);
-        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
+        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_MSG "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
 //        if (!count++) Init();
         if (!title) title = "GpuCanvas";
-        myprintf(3, BLUE_LT "Init: title '%s', #univ %d, univ len %d" ENDCOLOR, title, num_univ, univ_len); //, want_pivot);
+        myprintf(3, BLUE_MSG "Init: title '%s', #univ %d, univ len %d" ENDCOLOR, title, num_univ, univ_len); //, want_pivot);
 
 //NOTE: scaling *must* be set to nearest pixel sampling (0) because texture is stretched horizontally to fill screen
         if (SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0") != SDL_TRUE) //set texture filtering to linear; TODO: is this needed?
-            err(YELLOW_LT "Warning: Linear texture filtering not enabled" ENDCOLOR);
+            err(YELLOW_MSG "Warning: Linear texture filtering not enabled" ENDCOLOR);
 //TODO??    SDL_bool SDL_SetHintWithPriority(const char*      name, const char*      value,SDL_HintPriority priority)
 
 #define IGNORED_X_Y_W_H  0, 0, 200, 100 //not used for full screen mode
@@ -1489,27 +1492,27 @@ public:
         window = isRPi()?
             SDL_CreateWindow(title, IGNORED_X_Y_W_H, SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_SHOWN): //| SDL_WINDOW_OPENGL): //don't use OpenGL; too slow
             SDL_CreateWindow(title, 10, 10, MaxFit().w, MaxFit().h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN); //| SDL_WINDOW_OPENGL);
-        if (!window) return_void(exc(RED_LT "Create window failed" ENDCOLOR));
+        if (!window) return_void(exc(RED_MSG "Create window failed" ENDCOLOR));
         uint32_t fmt = SDL_GetWindowPixelFormat(window); //desktop OpenGL: 24 RGB8888, RPi: 32 ARGB8888
-        if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(exc(RED_LT "Can't get window format" ENDCOLOR));
+        if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(exc(RED_MSG "Can't get window format" ENDCOLOR));
         int wndw, wndh;
         SDL_GL_GetDrawableSize(window, &wndw, &wndh);
-        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+        myprintf(22, BLUE_MSG "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
 //        SDL_GetWindowSize(window, &wndw, &wndh);
-//        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+//        myprintf(22, BLUE_MSG "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
 //        SDL_GetWindowMaximumSize(window, &wndw, &wndh);
-//        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+//        myprintf(22, BLUE_MSG "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
 //        int top, left, bottom, right;
-//        if (!OK(SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right))) return_void(exc(RED_LT "Can't get window border size" ENDCOLOR));
-//        myprintf(22, BLUE_LT "wnd border size: t %d, l %d, b %d, r %d" ENDCOLOR, top, left, bottom, right);
+//        if (!OK(SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right))) return_void(exc(RED_MSG "Can't get window border size" ENDCOLOR));
+//        myprintf(22, BLUE_MSG "wnd border size: t %d, l %d, b %d, r %d" ENDCOLOR, top, left, bottom, right);
         debug_info(window);
 #undef IGNORED_X_Y_W_H
 
-        if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_LT "Bad number of universes: %d (should be 1..%d)" ENDCOLOR, num_univ, WS281X_BITS));
-        if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_LT "Bad universe size: %d (should be 1..%d)" ENDCOLOR, univ_len, wndh));
+        if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_MSG "Bad number of universes: %d (should be 1..%d)" ENDCOLOR, num_univ, WS281X_BITS));
+        if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_MSG "Bad universe size: %d (should be 1..%d)" ENDCOLOR, univ_len, wndh));
 //NOTE: to avoid fractional pixels, screen/window width should be a multiple of 71, height should be a multiple of univ_len
-        if (wndw % (TXR_WIDTH - 1)) myprintf(1, YELLOW_LT "Window width %d !multiple of txr width %d: check for correct edges" ENDCOLOR, wndw, TXR_WIDTH - 1);
-        if (wndh % univ_len) myprintf(1, YELLOW_LT "Window height %d !multiple of univ len %d: check for correct edges" ENDCOLOR, wndh, univ_len);
+        if (wndw % (TXR_WIDTH - 1)) myprintf(1, YELLOW_MSG "Window width %d !multiple of txr width %d: check for correct edges" ENDCOLOR, wndw, TXR_WIDTH - 1);
+        if (wndh % univ_len) myprintf(1, YELLOW_MSG "Window height %d !multiple of univ len %d: check for correct edges" ENDCOLOR, wndh, univ_len);
 
 #ifdef MULTI_THREADED
 //create memory buf to hold pixel data:
@@ -1521,15 +1524,15 @@ public:
 //        pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, 8+8+8+8, SDL_PIXELFORMAT_ARGB8888);
 //TODO: is SDL_AllocFormat helpful here?
         pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, SDL_BITSPERPIXEL(fmt), fmt);
-        if (!pxbuf) return_void(exc(RED_LT "Can't alloc pixel buf" ENDCOLOR));
-        if ((pxbuf.cast->w != TXR_WIDTH) || (pxbuf.cast->h != univ_len)) return_void(exc(RED_LT "Pixel buf wrong size: got %d x %d, wanted %d x %d" ENDCOLOR, pxbuf.cast->w, pxbuf.cast->h, TXR_WIDTH, univ_len));
-        if (toint(pxbuf.cast->pixels) & 3) return_void(exc(RED_LT "Pixel buf not quad byte aligned" ENDCOLOR));
-        if (pxbuf.cast->pitch != 4 * pxbuf.cast->w) return_void(exc(RED_LT "Pixel buf pitch: got %d, expected %d" ENDCOLOR, pxbuf.cast->pitch, 4 * pxbuf.cast->w));
+        if (!pxbuf) return_void(exc(RED_MSG "Can't alloc pixel buf" ENDCOLOR));
+        if ((pxbuf.cast->w != TXR_WIDTH) || (pxbuf.cast->h != univ_len)) return_void(exc(RED_MSG "Pixel buf wrong size: got %d x %d, wanted %d x %d" ENDCOLOR, pxbuf.cast->w, pxbuf.cast->h, TXR_WIDTH, univ_len));
+        if (toint(pxbuf.cast->pixels) & 3) return_void(exc(RED_MSG "Pixel buf not quad byte aligned" ENDCOLOR));
+        if (pxbuf.cast->pitch != 4 * pxbuf.cast->w) return_void(exc(RED_MSG "Pixel buf pitch: got %d, expected %d" ENDCOLOR, pxbuf.cast->pitch, 4 * pxbuf.cast->w));
         debug_info(pxbuf);
-        if (!OK(SDL_FillRect(pxbuf, NORECT, MAGENTA | BLACK))) return_void(exc(RED_LT "Can't clear pixel buf" ENDCOLOR));
+        if (!OK(SDL_FillRect(pxbuf, NORECT, MAGENTA | BLACK))) return_void(exc(RED_MSG "Can't clear pixel buf" ENDCOLOR));
 //        myprintf(33, "bkg pxbuf ready" ENDCOLOR);
 
-        if (!(busy = SDL_CreateMutex())) return_void(exc(RED_LT "Can't create signal mutex" ENDCOLOR)); //throw SDL_Exception("SDL_CreateMutex");
+        if (!(busy = SDL_CreateMutex())) return_void(exc(RED_MSG "Can't create signal mutex" ENDCOLOR)); //throw SDL_Exception("SDL_CreateMutex");
 
         done = false;
         dirty = true; //force initial screen update + notification of canvas available (no paint doesn't block)
@@ -1543,7 +1546,7 @@ public:
 
 #ifdef MULTI_THREADED
         fg.user_time = fg.caller_time = fg.encode_time = 0; //fg.update_time = fg.unlock_time = 0;
-        myprintf(22, BLUE_LT "GpuCanvas wake thread" ENDCOLOR);
+        myprintf(22, BLUE_MSG "GpuCanvas wake thread" ENDCOLOR);
 #if 0 //TODO
         TOBKG();
 	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); //NOTE: PRESENTVSYNC syncs with V refresh rate (typically 60 Hz)
@@ -1551,23 +1554,23 @@ public:
         TOFG();
 #else
         this->wake((void*)0x1234); //run main() asynchronously in bkg thread
-        myprintf(22, BLUE_LT "GpuCanvas wait for bkg" ENDCOLOR);
+        myprintf(22, BLUE_MSG "GpuCanvas wait for bkg" ENDCOLOR);
         this->wait(); //wait for bkg thread to init
 #endif
-        myprintf(22, BLUE_LT "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
+        myprintf(22, BLUE_MSG "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
 #else //def MULTI_THREADED
 	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); //NOTE: PRESENTVSYNC syncs with V refresh rate (typically 60 Hz)
-        if (!renderer) return_void(err(RED_LT "Create renderer failed" ENDCOLOR));
+        if (!renderer) return_void(err(RED_MSG "Create renderer failed" ENDCOLOR));
         debug_info(renderer);
 
         canvas = SDL_CreateTexture(renderer, fmt, SDL_TEXTUREACCESS_STREAMING, TXR_WIDTH, univ_len); //SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, wndw, wndh);
-        if (!canvas) return_void(err(RED_LT "Can't create canvas texture" ENDCOLOR));
+        if (!canvas) return_void(err(RED_MSG "Can't create canvas texture" ENDCOLOR));
 
         Hclip = {0, 0, TXR_WIDTH - 1, univ_len}; //CRITICAL: clip last col (1/3 pixel) so it overlaps with H-sync
-        myprintf(22, BLUE_LT "clip rect (%d, %d, %d, %d)" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
+        myprintf(22, BLUE_MSG "clip rect (%d, %d, %d, %d)" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
 
-        myprintf(8, MAGENTA_LT "canvas startup took %2.1f msec" ENDCOLOR, elapsed(started));
-        times.caller = times.encode = times.update = times.render = numfr = numerr = num_dirty = 0;
+        myprintf(8, MAGENTA_MSG "canvas startup took %2.1f msec" ENDCOLOR, elapsed(started));
+        times.caller = times.encode = times.update = times.throttle = times.render = numfr = numerr = num_dirty = 0;
         render_timestamp = started = reported = times.previous = now();
 //        render_timestamp = frame_rate = 0;
 #endif //def MULTI_THREADED
@@ -1575,16 +1578,16 @@ public:
     ~GpuCanvas()
     {
 #ifdef SINGLE_THREADED_BKG
-        myprintf(22, YELLOW_LT "TODO: mv GpuCanvas dtor to bkg thread?" ENDCOLOR);
+        myprintf(22, YELLOW_MSG "TODO: mv GpuCanvas dtor to bkg thread?" ENDCOLOR);
         this->wake(); //eof; tell bkg thread to quit (if it's waiting)
 #endif
-//        myprintf(22, BLUE_LT "GpuCanvas dtor" ENDCOLOR);
+//        myprintf(22, BLUE_MSG "GpuCanvas dtor" ENDCOLOR);
 //        if (reported != times.previous) stats();
 #ifdef MULTI_THREADED
         this->done = true;
         this->wake(); //eof; tell bkg thread to quit (if it's waiting)
 #endif
-        myprintf(22, YELLOW_LT "GpuCanvas dtor" ENDCOLOR);
+        myprintf(22, YELLOW_MSG "GpuCanvas dtor" ENDCOLOR);
     }
 #ifdef MULTI_THREADED
 private:
@@ -1596,10 +1599,10 @@ private:
 //        started = now();
 //        PresentTime = -1; //prior to official start of playback
 //        SDL_Window* window = reinterpret_cast<SDL_Window*>(data); //window was created in main thread where events are handled
-        myprintf(8, MAGENTA_LT "bkg thread started: data 0x%x" ENDCOLOR, toint(data));
+        myprintf(8, MAGENTA_MSG "bkg thread started: data 0x%x" ENDCOLOR, toint(data));
 
 	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); //NOTE: PRESENTVSYNC syncs with V refresh rate (typically 60 Hz)
-        if (!renderer) return err(RED_LT "Create renderer failed" ENDCOLOR);
+        if (!renderer) return err(RED_MSG "Create renderer failed" ENDCOLOR);
         debug_info(renderer);
 
 #if 0
@@ -1610,21 +1613,21 @@ private:
 //use same fmt + depth as window; TODO: is this more efficient?
 //        pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, 8+8+8+8, SDL_PIXELFORMAT_ARGB8888);
         pxbuf = SDL_CreateRGBSurfaceWithFormat(UNUSED, TXR_WIDTH, univ_len, SDL_BITSPERPIXEL(this->fmt), this->fmt);
-        if (!pxbuf) return (void*)err(RED_LT "Can't alloc pixel buf" ENDCOLOR);
-        if ((pxbuf.cast->w != TXR_WIDTH) || (pxbuf.cast->h != univ_len)) return (void*)err(RED_LT "Pixel buf wrong size: got %d x %d, wanted %d x %d" ENDCOLOR, pxbuf.cast->w, pxbuf.cast->h, TXR_WIDTH, univ_len);
-        if (toint(pxbuf.cast->pixels) & 3) return (void*)err(RED_LT "Pixel buf not quad byte aligned" ENDCOLOR);
-        if (pxbuf.cast->pitch != 4 * pxbuf.cast->w) return (void*)err(RED_LT "Pixel buf pitch: got %d, expected %d" ENDCOLOR, pxbuf.cast->pitch, 4 * pxbuf.cast->w);
+        if (!pxbuf) return (void*)err(RED_MSG "Can't alloc pixel buf" ENDCOLOR);
+        if ((pxbuf.cast->w != TXR_WIDTH) || (pxbuf.cast->h != univ_len)) return (void*)err(RED_MSG "Pixel buf wrong size: got %d x %d, wanted %d x %d" ENDCOLOR, pxbuf.cast->w, pxbuf.cast->h, TXR_WIDTH, univ_len);
+        if (toint(pxbuf.cast->pixels) & 3) return (void*)err(RED_MSG "Pixel buf not quad byte aligned" ENDCOLOR);
+        if (pxbuf.cast->pitch != 4 * pxbuf.cast->w) return (void*)err(RED_MSG "Pixel buf pitch: got %d, expected %d" ENDCOLOR, pxbuf.cast->pitch, 4 * pxbuf.cast->w);
         debug_info(pxbuf);
-        if (!OK(SDL_FillRect(pxbuf, NORECT, MAGENTA | BLACK))) return (void*)err(RED_LT "Can't clear pixel buf" ENDCOLOR);
+        if (!OK(SDL_FillRect(pxbuf, NORECT, MAGENTA | BLACK))) return (void*)err(RED_MSG "Can't clear pixel buf" ENDCOLOR);
 //        myprintf(33, "bkg pxbuf ready" ENDCOLOR);
 #endif
 
         canvas = SDL_CreateTexture(renderer, pxbuf.cast->format->format, SDL_TEXTUREACCESS_STREAMING, pxbuf.cast->w, pxbuf.cast->h); //SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, wndw, wndh);
-        if (!canvas) return (void*)err(RED_LT "Can't create canvas texture" ENDCOLOR);
-        myprintf(8, MAGENTA_LT "bkg startup took %2.1f msec" ENDCOLOR, elapsed(started));
+        if (!canvas) return (void*)err(RED_MSG "Can't create canvas texture" ENDCOLOR);
+        myprintf(8, MAGENTA_MSG "bkg startup took %2.1f msec" ENDCOLOR, elapsed(started));
 
         SDL_Rect Hclip = {0, 0, TXR_WIDTH - 1, this->univ_len}; //CRITICAL: clip last col (1/3 pixel) so it overlaps with H-sync
-        myprintf(22, BLUE_LT "render copy (%d, %d, %d, %d) => target" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
+        myprintf(22, BLUE_MSG "render copy (%d, %d, %d, %d) => target" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
 
 //        Paint(NULL); //start with all pixels dark
         bg.caller_time = bg.encode_time = bg.lock_time = bg.update_time = bg.unlock_time = bg.copy_time = bg.present_time = numfr = numerr = num_dirty = 0;
@@ -1672,14 +1675,14 @@ private:
     for (int x = 0; x < lock.data.surf.w; ++x)
         for (int y = 0, yofs = 0; y < lock.data.surf.h; ++y, yofs += lock.data.surf.pitch / 4)
             buf << "," << ("0x" + ((((uint32_t*)lock.data.surf.pixels)[yofs + x] > 9)? 0: 2)) << ((uint32_t*)lock.data.surf.pixels)[yofs + x];
-    myprintf(22, BLUE_LT "paint: %s" ENDCOLOR, buf.str().c_str() + 1);
+    myprintf(22, BLUE_MSG "paint: %s" ENDCOLOR, buf.str().c_str() + 1);
 #endif
             }
             delta = now() - bg.previous; bg.unlock_time += delta; bg.previous += delta;
 
         	if (!OK(SDL_RenderCopy(renderer, canvas, &Hclip, NORECT))) //&renderQuad, angle, center, flip ))
             {
-                err(RED_LT "Unable to render to screen" ENDCOLOR);
+                err(RED_MSG "Unable to render to screen" ENDCOLOR);
                 ++numerr;
             }
             delta = now() - bg.previous; bg.copy_time += delta; bg.previous += delta;
@@ -1693,11 +1696,11 @@ private:
 
 //OpenGL contexts are effectively thread-local. 
 //    if (!OK(SDL_GL_MakeCurrent(gpu.wnd, NULL)))
-//        return err(RED_LT "Can't unbind current context" ENDCOLOR);
+//        return err(RED_MSG "Can't unbind current context" ENDCOLOR);
 //    uint_least32_t time = now_usec();
 //    xfr_time += ELAPSED;
 //    render_times[2] += (time2 = now_usec()) - time1;
-//    myprintf(22, RED_LT "TODO: delay music_time - now" ENDCOLOR);
+//    myprintf(22, RED_MSG "TODO: delay music_time - now" ENDCOLOR);
 //NOTE: RenderPresent() doesn't return until next frame if V-synced; this gives accurate 60 FPS (avoids jitter; O/S wait is +/- 10 msec)
 //TODO: allow caller to resume in parallel
 
@@ -1709,10 +1712,10 @@ private:
 //TODO: is it better to render on-demand (less workload), or unconditionally (for uniform timing)?
 //NOTE: if dirty, canvas not busy; don't need mutex here?
                 auto_ptr<SDL_LockedMutex> lock_HERE(busy.cast); //SDL_LOCK(busy));
-//                if (txr_busy++) err(RED_LT "txr busy, shouldn't be" ENDCOLOR);
+//                if (txr_busy++) err(RED_MSG "txr busy, shouldn't be" ENDCOLOR);
             	if (!OK(SDL_RenderCopy(renderer, canvas, &Hclip, NORECT))) //&renderQuad, angle, center, flip ))
                 {
-                    err(RED_LT "Unable to render to screen" ENDCOLOR);
+                    err(RED_MSG "Unable to render to screen" ENDCOLOR);
                     ++numerr;
                 }
                 ++num_dirty;
@@ -1723,17 +1726,17 @@ private:
             delta = now() - bg.previous; bg.copy_time += delta; bg.previous += delta;
 #endif
 
-//            myprintf(8, MAGENTA_LT "renderer thread: render+wait" ENDCOLOR);
+//            myprintf(8, MAGENTA_MSG "renderer thread: render+wait" ENDCOLOR);
             SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
             delta = now() - bg.previous; bg.present_time += delta; bg.previous += delta; //== now()
             if (render_timestamp) frame_rate += bg.previous - render_timestamp; //now - previous timestamp
             render_timestamp = bg.previous; //now
 //            PresentTime = elapsed(started); //update presentation timestamp (in case main thread wants to know)
-//myprintf(22, BLUE_LT "fr[%d] deltas: %lld, %lld, %lld, %lld, %lld" ENDCOLOR, numfr, delta1, delta2, delta3, delta4, delta5);
+//myprintf(22, BLUE_MSG "fr[%d] deltas: %lld, %lld, %lld, %lld, %lld" ENDCOLOR, numfr, delta1, delta2, delta3, delta4, delta5);
 //            if (!(++numfr % (60 * 10))) stats(); //show stats every 10 sec @60 FPS
         }
 //        myprintf(33, "bkg done" ENDCOLOR);
-        myprintf(8, MAGENTA_LT "bkg renderer thread: exit after %2.1f msec" ENDCOLOR, elapsed(started));
+        myprintf(8, MAGENTA_MSG "bkg renderer thread: exit after %2.1f msec" ENDCOLOR, elapsed(started));
 //        done = true;
         return pxbuf; //SDL_Success
     }
@@ -1759,13 +1762,13 @@ if (pixels)
     for (int x = 0; x < this->num_univ; ++x)
         for (int y = 0; y < this->univ_len; ++y)
             buf << "," << ("0x" + ((pixels[xyofs(x, y)] > 9)? 0: 2)) << pixels[xyofs(x, y)];
-    myprintf(22, BLUE_LT "paint: %s" ENDCOLOR, buf.str().c_str() + 1);
+    myprintf(22, BLUE_MSG "paint: %s" ENDCOLOR, buf.str().c_str() + 1);
 }
 #endif
 //        myprintf(22, "GpuCanvas paint" ENDCOLOR);
         uint64_t delta;
         delta = now() - fg.previous; fg.caller_time += delta; fg.previous += delta;
-//        myprintf(6, BLUE_LT "Paint(pixels 0x%x), %d x %d = %s len (assumed), 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, this->num_univ, this->univ_len, commas(this->num_univ * this->univ_len), pixels? pixels[0]: fill, pixels? pixels[1]: fill, pixels? pixels[2]: fill);
+//        myprintf(6, BLUE_MSG "Paint(pixels 0x%x), %d x %d = %s len (assumed), 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, this->num_univ, this->univ_len, commas(this->num_univ * this->univ_len), pixels? pixels[0]: fill, pixels? pixels[1]: fill, pixels? pixels[2]: fill);
 
 //NOTE: OpenGL is described as not thread safe
 //apparently even texture upload must be in same thread; else get "intel_do_flush_locked_failed: invalid argument" crashes
@@ -1793,7 +1796,7 @@ if (pixels)
 #define lock  lock2 //kludge: avoid duplicate var name
             auto_ptr<SDL_LockedMutex> lock_HERE(busy.cast); //(SDL_LOCK(busy));
 #undef lock
-//            if (txr_busy++) err(RED_LT "txr busy, shouldn't be" ENDCOLOR);
+//            if (txr_busy++) err(RED_MSG "txr busy, shouldn't be" ENDCOLOR);
 //        { //scope for locked texture
             auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
             delta = now() - fg.previous; fg.lock_time += delta; fg.previous += delta;
@@ -1807,7 +1810,7 @@ if (pixels)
 #else //slower; doesn't work with streaming texture?
         delta = now() - fg.previous; fg.lock_time += delta; fg.previous += delta;
         if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
-            return err(RED_LT "Can't update texture" ENDCOLOR);
+            return err(RED_MSG "Can't update texture" ENDCOLOR);
         delta = now() - fg.previous; fg.update_time += delta; fg.previous += delta;
 #endif
         delta = now() - fg.previous; fg.unlock_time += delta; fg.previous += delta;
@@ -1832,16 +1835,16 @@ public:
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
         uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
-//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
-//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+//        myprintf(12, YELLOW_MSG "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
+//        myprintf(22, BLUE_MSG "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
 //NOTE: need to subtract 1 for actual frame rate (RenderPresent); uses time diff which requires 2 frames
-        myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / (numfr_cpy - 1) / SDL_TickFreq() * 1000);
-        myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: fg(user %2.3f + caller %2.3f + pivot %2.3f), bg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f + copy %2.3f + present %2.3f), bg %2.1f%% idle" ENDCOLOR, 
+        myprintf(12, YELLOW_MSG "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / (numfr_cpy - 1) / SDL_TickFreq() * 1000);
+        myprintf(12, YELLOW_MSG "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: fg(user %2.3f + caller %2.3f + pivot %2.3f), bg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f + copy %2.3f + present %2.3f), bg %2.1f%% idle" ENDCOLOR, 
             numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
             avg_ms(fg.user_time), avg_ms(fg.caller_time), avg_ms(fg.encode_time), 
             avg_ms(bg.caller_time), avg_ms(bg.encode_time), avg_ms(bg.lock_time), avg_ms(bg.update_time), avg_ms(bg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), 
             (double)100 * idle_time / (now() - started));
-        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(user %s, caller %s, pivot %s), bg(caller %s, pivot %s, lock %s, update %s, unlock %s, copy %s, present %s)" ENDCOLOR, 
+        myprintf(22, BLUE_MSG "raw: elapsed %s, freq %s, fg(user %s, caller %s, pivot %s), bg(caller %s, pivot %s, lock %s, update %s, unlock %s, copy %s, present %s)" ENDCOLOR, 
             commas(now() - started), commas(SDL_TickFreq()), 
             commas(fg.user_time), commas(fg.caller_time), commas(fg.encode_time), 
             commas(bg.caller_time), commas(bg.encode_time), commas(bg.lock_time), commas(bg.update_time), commas(bg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
@@ -1868,7 +1871,7 @@ public:
 //NOTE: caller owns pixel buf; leave it in caller's memory so it can be updated (need to copy here for pivot anyway)
 //NOTE: pixel array assumed to be the correct size here (already checked by Javascript wrapper before calling)
 //    inline int xyofs(int x, int y) { return x * this->univ_len + y; }
-    bool Paint(uint32_t* pixels = 0, callback cb = 0) //void (*cb)(void) = 0) //, void* cb)
+    bool Paint(uint32_t* pixels = 0, uint64_t render_delay = 0, callback cb = 0, void* cbdata = 0) //void (*cb)(void) = 0) //, void* cb)
     {
         uint64_t delta;
         delta = now() - times.previous; times.previous += delta; times.caller += delta;
@@ -1884,19 +1887,34 @@ public:
                 encode(pixels, (uint32_t*)lock.data.surf.pixels);
                 delta = now() - times.previous; times.previous += delta; times.encode += delta;
             }
-            if (cb) cb();
+            if (cb) cb(cbdata, false);
 //            delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
 //slower; doesn't work with streaming texture?
 //        if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
-//            return err(RED_LT "Can't update texture" ENDCOLOR);
+//            return err(RED_MSG "Can't update texture" ENDCOLOR);
         	if (!OK(SDL_RenderCopy(renderer, canvas, &Hclip, NORECT))) //&renderQuad, angle, center, flip ))
             {
-                err(RED_LT "Unable to render to screen" ENDCOLOR);
+                err(RED_MSG "Unable to render to screen" ENDCOLOR);
                 ++numerr;
             }
-            delta = now() - times.previous; times.previous += delta; times.encode += delta;
+            delta = now() - times.previous; times.previous += delta; times.update += delta;
         }
-        else if (cb) cb();
+        else if (cb) cb(cbdata, false);
+//        while (render_delay > 0) //caller wants to throttle back frame rate
+//        if (render_delay) render_delay = 
+//    double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
+//    void ResetElapsed(double elaps = 0) { started = now() - elaps * SDL_TickFreq(); }
+        for (;;) //throttle back frame rate
+        {
+//            int age = 1000 * (times.previous - render_timestamp) / SDL_TickFreq(); //time since previous RenderPresent (msec)
+//            if (age >= render_delay - 5) break;
+//            usleep()
+            int delay = render_delay - times.previous;
+            if (delay < 2000) break; //2 msec close enough (compensate for O/S timing granularity)
+            myprintf(22, BLUE_MSG "throttle paint: %d = %d usec" ENDCOLOR, delay, delay * 1000000 / SDL_TickFreq());
+            usleep(delay * 1000000 / SDL_TickFreq()); //blocking; NOTE: might wake prematurely (signals, etc)
+            delta = now() - times.previous; times.previous += delta; times.throttle += delta;
+        }
         SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
         delta = now() - times.previous; times.previous += delta; times.render += delta;
 //myprintf(22, "render present: old ts %2.3f sec, new ts %2.3f, rate %2.3f + %2.3f = %2.3f" ENDCOLOR, 
@@ -1915,7 +1933,7 @@ public:
         uint32_t numfr, numerr, num_dirty; //, frrate; //kludge: avoid "deleted function" error on atomic
 //        double avg_fr, avg_fps;
         double frrate[SIZE(frame_rate)], avg_fps;
-        double caller_time, encode_time, update_time, render_time;
+        double caller_time, encode_time, update_time, throttle_time, render_time;
     } stats_report;
 //TODO: okay across threads?
     /*bool*/ void stats(bool display = false)
@@ -1942,31 +1960,32 @@ public:
             stats_report.frrate[i] = (i < stats_report.numfr)? (double)frame_rate[i] * 1000 / SDL_TickFreq(): 0;
         }
         if (stats_report.numfr) stats_report.avg_fps = (double)std::min<int>(SIZE(stats_report.frrate), stats_report.numfr) / stats_report.avg_fps * SDL_TickFreq();
-//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
-//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+//        myprintf(12, YELLOW_MSG "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
+//        myprintf(22, BLUE_MSG "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
 //        double actual_fr = (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000;
 //        double actual_fps = (double)numfr_cpy * SDL_TickFreq() / frrate_cpy);
         stats_report.caller_time = avg_ms(times.caller);
         stats_report.encode_time = avg_ms(times.encode);
         stats_report.update_time = avg_ms(times.update);
+        stats_report.throttle_time = avg_ms(times.throttle);
         stats_report.render_time = avg_ms(times.render);
 //        stats_report.avg_fr = (double)stats_report.frrate / (stats_report.numfr - 1) / SDL_TickFreq() * 1000;
 //        stats_report.avg_fps = (double)(stats_report.numfr - 1) * SDL_TickFreq() / stats_report.frrate;
         if (!display) return;
 
-        myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, avg %2.1f msec = caller %2.3f + encode %2.3f + update %2.3f + render %2.3f" ENDCOLOR, //, %2.1f%% idle" ENDCOLOR, 
+        myprintf(12, YELLOW_MSG "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, avg %2.1f msec = caller %2.3f + encode %2.3f + update %2.3f + throttle %2.3f + render %2.3f" ENDCOLOR, //, %2.1f%% idle" ENDCOLOR, 
 //            numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
 //            avg_ms(times.caller), avg_ms(times.encode), avg_ms(times.update), avg_ms(times.render));
             stats_report.numfr, stats_report.numerr, stats_report.num_dirty, (double)100 * stats_report.num_dirty / stats_report.numfr, stats_report.elapsed, stats_report.fps, 1000 / stats_report.fps, 
-            stats_report.caller_time, stats_report.encode_time, stats_report.update_time, stats_report.render_time);
+            stats_report.caller_time, stats_report.encode_time, stats_report.update_time, stats_report.throttle_time, stats_report.render_time);
 //            (double)100 * idle_time / (now() - started));
         char buf[SIZE(stats_report.frrate) * 10 + 2] = ", 0", *bp = buf;
         for (int i = 0; (i < SIZE(stats_report.frrate)) && (i < numfr); ++i)
             bp += sprintf(bp, ", %2.1f", stats_report.frrate[i]);
-        myprintf(12, YELLOW_LT "frame rate: %s msec (%2.1f fps)" ENDCOLOR, buf + 2, stats_report.avg_fps);
-        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, caller %s, update %s, encode %s, render %s" ENDCOLOR, 
+        myprintf(12, YELLOW_MSG "frame rate: %s msec (%2.1f fps)" ENDCOLOR, buf + 2, stats_report.avg_fps);
+        myprintf(22, BLUE_MSG "raw: elapsed %s, freq %s, caller %s, encode %s, update %s, throttle %s, render %s" ENDCOLOR, 
             commas(now() - started), commas(SDL_TickFreq()), //commas(stats_report.frrate), //frrate_cpy),
-            commas(times.caller), commas(times.update), commas(times.encode), commas(times.render));
+            commas(times.caller), commas(times.encode), commas(times.update), commas(times.throttle), commas(times.render));
 //        myprintf(22, "raw-raw: elapsed %ld, freq %ld" ENDCOLOR, now() - started, SDL_TickFreq());
 //        reported = times.previous;
 //        return true;
@@ -2020,7 +2039,7 @@ private:
 //        uint32_t leading_edges = BLACK;
 //        for (uint32_t x = 0, xmask = 0x800000; (int)x < this->num_univ; ++x, xmask >>= 1)
 //            if (UTYPEOF(this->UnivTypes[(int)x]) == WS281X) leading_edges |= xmask; //turn on leading edge of data bit for GPIO pins for WS281X only
-//myprintf(22, BLUE_LT "start bits = 0x%x (based on univ type)" ENDCOLOR, leading_edges);
+//myprintf(22, BLUE_MSG "start bits = 0x%x (based on univ type)" ENDCOLOR, leading_edges);
 //        bool rbswap = isRPi();
         col_debug();
         for (int y = 0, yofs = 0; y < this->univ_len; ++y, yofs += TXR_WIDTH) //outer
@@ -2067,7 +2086,7 @@ private:
                         case PLAIN_SSR | CHECKSUM:
                         case PLAIN_SSR | POLARITY:
                         case PLAIN_SSR | CHECKSUM | POLARITY:
-                            return_void(err(RED_LT "GpuCanvas.Encode: Plain SSR TODO" ENDCOLOR));
+                            return_void(err(RED_MSG "GpuCanvas.Encode: Plain SSR TODO" ENDCOLOR));
                             break;
                         case CHPLEX_SSR:
                         case CHPLEX_SSR | CHECKSUM:
@@ -2083,16 +2102,16 @@ private:
                             if (!ctlr_ofs) //get another display list
                             {
                                 this->encoders[x].cast->init_list();
-                                no_myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregate rows %d..%d" ENDCOLOR, x, y, ctlr_adrs * CHPLEX_CTLRLEN, (ctlr_adrs + 1) * CHPLEX_CTLRLEN - 1);
+                                no_myprintf(14, BLUE_MSG "GpuCanvas: enc[%d, %d] aggregate rows %d..%d" ENDCOLOR, x, y, ctlr_adrs * CHPLEX_CTLRLEN, (ctlr_adrs + 1) * CHPLEX_CTLRLEN - 1);
                                 for (int yy = ctlr_adrs * CHPLEX_CTLRLEN; (yy < this->univ_len) && (yy < (ctlr_adrs + 1) * CHPLEX_CTLRLEN); ++yy)
                                 {
                                     color_out = src[xofs + yy]; //pixels? pixels[xofs + yy]: fill;
                                     uint8_t brightness = std::max<int>(Rmask(color_out) >> 16, std::max<int>(Gmask(color_out) >> 8, Bmask(color_out))); //use strongest color element
-                                    no_myprintf(14, BLUE_LT "pixel[%d] 0x%x -> br %d" ENDCOLOR, xofs + yy, color_out, brightness);
+                                    no_myprintf(14, BLUE_MSG "pixel[%d] 0x%x -> br %d" ENDCOLOR, xofs + yy, color_out, brightness);
                                     this->encoders[x].cast->insert(brightness);
                                 }
                                 this->encoders[x].cast->resolve_conflicts();
-                                no_myprintf(14, BLUE_LT "GpuCanvas: enc[%d, %d] aggregated into %d disp evts" ENDCOLOR, x, y, this->encoders[x].cast->disp_count);
+                                no_myprintf(14, BLUE_MSG "GpuCanvas: enc[%d, %d] aggregated into %d disp evts" ENDCOLOR, x, y, this->encoders[x].cast->disp_count);
                             }
 //2 bytes serial data = 2 * (1 start + 8 data + 1 stop + 2 pad) = 24 data bits spread across 72 screen pixels = 3 pixels per serial data bit:
 //pkt contents: ssr_cfg, checksum, display list (brightness, row map, col map)
@@ -2101,7 +2120,7 @@ private:
                             uint8_t byte_even = !ctlr_ofs? (uint8_t)univ_types[x]: this->encoders[x].cast->DispList[2 * ctlr_ofs - 2];
                             uint8_t byte_odd = !ctlr_ofs? this->encoders[x].cast->checksum ^ (uint8_t)univ_types[x]: this->encoders[x].cast->DispList[2 * ctlr_ofs - 1]; //CAUTION: incl univ type in checksum
                             color_out = 0x800000 | (byte_even << (12+3)) | 0x800 | (byte_odd << 3); //NOTE: inverted start + stop bits; using 3 stop bits
-//myprintf(14, BLUE_LT "even 0x%x, odd 0x%x -> color_out 0x%x" ENDCOLOR, byte_even, byte_odd, color_out);
+//myprintf(14, BLUE_MSG "even 0x%x, odd 0x%x -> color_out 0x%x" ENDCOLOR, byte_even, byte_odd, color_out);
                             for (int bit3 = 0; bit3 < TXR_WIDTH; bit3 += 3, color_out <<= 1)
                                 if (color_out & 0x800000) //set data bit
                                 {
@@ -2113,7 +2132,7 @@ private:
                             break;
                         }
                         default:
-                            return_void(err(RED_LT "GpuCanvas.Encode: Unknown universe type[%d]: %d flags 0x%x" ENDCOLOR, x, univ_types[x] & TYPEBITS, univ_types[x] & ~TYPEBITS));
+                            return_void(err(RED_MSG "GpuCanvas.Encode: Unknown universe type[%d]: %d flags 0x%x" ENDCOLOR, x, univ_types[x] & TYPEBITS, univ_types[x] & ~TYPEBITS));
                             break;
                     }
             	}
@@ -2139,7 +2158,7 @@ return; //dump to file instead
         for (int x = 0; x < TXR_WIDTH / 3; ++x)
             bp += sprintf(bp, ", %d + 0x%x", this->univ_types[x] & TYPEBITS, this->univ_types[x] & ~TYPEBITS & 0xFF);
         *bp = '\0';
-        myprintf(18, BLUE_LT "Encode: pivot? %d, utypes %s" ENDCOLOR, !this->DEV_MODE, buf + 2);
+        myprintf(18, BLUE_MSG "Encode: pivot? %d, utypes %s" ENDCOLOR, !this->DEV_MODE, buf + 2);
     }
     void row_debug(const char* desc, int yofs, uint32_t xmask = 0, int col = -1)
     {
@@ -2151,7 +2170,7 @@ return; //dump to file instead
             if (!xmask) bp += sprintf(bp, (pxbuf32[yofs + x] < 10)? ", %d": ", 0x%x", pxbuf32[yofs + x]); //show hex value (all bits) for each bit
             else if (!(x % 3)) bp += sprintf(bp, " %d", ((pxbuf32[yofs + x + 0] & xmask)? 4: 0) + ((pxbuf32[yofs + x + 1] & xmask)? 2: 0) + ((pxbuf32[yofs + x + 2] & xmask)? 1: 0)); //show as 1 digit per bit
         *bp = '\0';
-        myprintf(18, BLUE_LT "Encode: %s[%d] row[%d/%d]: %s" ENDCOLOR, desc, col, yofs / TXR_WIDTH, this->univ_len, buf + 2);
+        myprintf(18, BLUE_MSG "Encode: %s[%d] row[%d/%d]: %s" ENDCOLOR, desc, col, yofs / TXR_WIDTH, this->univ_len, buf + 2);
     }
 #if 0
     int dump_count; //= 0;
@@ -2223,20 +2242,20 @@ public:
     static bool Init()
     {
 	    sdl = SDL_INIT(/*SDL_INIT_AUDIO |*/ SDL_INIT_VIDEO); //| SDL_INIT_EVENTS); //events, file, and threads are always inited, so they don't need to be flagged here; //| ??SDL_INIT_TIMER); //SDL_init(SDL_INIT_EVERYTHING);
-        if (!OK(sdl)) exc(RED_LT "SDL init failed" ENDCOLOR);
+        if (!OK(sdl)) exc(RED_MSG "SDL init failed" ENDCOLOR);
         debug_info(sdl);
 
 //NOTE: scaling *must* be set to nearest pixel sampling (0) because texture is stretched horizontally to fill screen
         if (SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0") != SDL_TRUE) //set texture filtering to linear; TODO: is this needed?
-            err(YELLOW_LT "Warning: Linear texture filtering not enabled" ENDCOLOR);
+            err(YELLOW_MSG "Warning: Linear texture filtering not enabled" ENDCOLOR);
 //TODO??    SDL_bool SDL_SetHintWithPriority(const char*      name, const char*      value,SDL_HintPriority priority)
  
 #if 0 //not needed
 //use OpenGL 2.1:
         if (!OK(SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2)) || !OK(SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1)))
-            return err(RED_LT "Can't set GL version to 2.1" ENDCOLOR);
+            return err(RED_MSG "Can't set GL version to 2.1" ENDCOLOR);
         if (!OK(SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8)) || !OK(SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8)) || !OK(SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8))) //|| !OK(SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8)))
-            return err(RED_LT "Can't set GL R/G/B to 8 bits" ENDCOLOR);
+            return err(RED_MSG "Can't set GL R/G/B to 8 bits" ENDCOLOR);
 //??SDL_GL_BUFFER_SIZE //the minimum number of bits for frame buffer size; defaults to 0
 //??SDL_GL_DOUBLEBUFFER //whether the output is single or double buffered; defaults to double buffering on
 //??SDL_GL_DEPTH_SIZE //the minimum number of bits in the depth buffer; defaults to 16
@@ -2245,9 +2264,9 @@ public:
 //??SDL_GL_MULTISAMPLESAMPLES //the number of samples used around the current pixel used for multisample anti-aliasing; defaults to 0; see Remarks for details
 //??SDL_GL_ACCELERATED_VISUAL //set to 1 to require hardware acceleration, set to 0 to force software rendering; defaults to allow either
         if (!OK(SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES))) //type of GL context (Core, Compatibility, ES)
-            return err(RED_LT "Can't set GLES context profile" ENDCOLOR);
+            return err(RED_MSG "Can't set GLES context profile" ENDCOLOR);
 //NO    if (!OK(SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1)))
-//        return err(RED_LT "Can't set shared context attr" ENDCOLOR);
+//        return err(RED_MSG "Can't set shared context attr" ENDCOLOR);
 //??SDL_GL_SHARE_WITH_CURRENT_CONTEXT
 //??SDL_GL_FRAMEBUFFER_SRGB_CAPABLE not needed
 //??SDL_GL_CONTEXT_RELEASE_BEHAVIOR
@@ -2258,7 +2277,7 @@ public:
 //nothing to do; auto_ptr does it all :)
     static bool Quit()
     {
-        myprintf(3, BLUE_LT "Quit()" ENDCOLOR);
+        myprintf(3, BLUE_MSG "Quit()" ENDCOLOR);
         return true;
     }
 #endif
@@ -2273,7 +2292,7 @@ inline int Release(/*const*/ GpuCanvas* that) { delete that; return SDL_Success;
 
 	if (!OK(SDL_RenderCopy(renderer, canvas, &Hclip, NORECT))) //&renderQuad, angle, center, flip ))
     {
-        err(RED_LT "Unable to render to screen" ENDCOLOR);
+        err(RED_MSG "Unable to render to screen" ENDCOLOR);
         ++numerr;
     }
     delta = now() - bg.previous; bg.copy_time += delta; bg.previous += delta;
@@ -2320,7 +2339,7 @@ public:
         UniverseTypes oldtype = this->univ_types[inx];
         if ((newtype != INVALID) && (UTYPEOF(newtype) != UTYPEOF(oldtype)))
         {
-//            myprintf(14, (UTYPEOF(newtype) != UTYPEOF(INVALID))? BLUE_LT "GpuCanvas: UnivType[%d] was %d + flags 0x%d -> is now %d + flags 0x%x" ENDCOLOR: BLUE_LT "GpuCanvas: UnivType[%d] is %d + flags 0x%d" ENDCOLOR, inx, oldtype & TYPEBITS, oldtype & ~TYPEBITS & 0xFF, newtype & TYPEBITS, newtype & ~TYPEBITS & 0xFF);
+//            myprintf(14, (UTYPEOF(newtype) != UTYPEOF(INVALID))? BLUE_MSG "GpuCanvas: UnivType[%d] was %d + flags 0x%d -> is now %d + flags 0x%x" ENDCOLOR: BLUE_MSG "GpuCanvas: UnivType[%d] is %d + flags 0x%d" ENDCOLOR, inx, oldtype & TYPEBITS, oldtype & ~TYPEBITS & 0xFF, newtype & TYPEBITS, newtype & ~TYPEBITS & 0xFF);
             if (UTYPEOF(newtype) == UTYPEOF(CHPLEX_SSR)) encoders[inx] = new ChplexEncoder<NUM_SSR>; //alloc memory while caller is still in prep, prior to playback
             this->univ_types[inx] = newtype;
         }
@@ -2335,13 +2354,13 @@ public:
     SimplerCanvas(const char* title, int num_univ, int univ_len): started(now()), StatsAdjust(0)
     {
         if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
-        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
+        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_MSG "ERROR: Tried to get canvas before SDL_Init" ENDCOLOR);
         if (!title) title = "GpuCanvas";
-        myprintf(3, BLUE_LT "Init: title '%s', #univ %d, univ len %d" ENDCOLOR, title, num_univ, univ_len);
+        myprintf(3, BLUE_MSG "Init: title '%s', #univ %d, univ len %d" ENDCOLOR, title, num_univ, univ_len);
 
 //NOTE: scaling *must* be set to nearest pixel sampling (0) because texture is stretched horizontally to fill screen
         if (SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0") != SDL_TRUE) //set texture filtering to linear; TODO: is this needed?
-            err(YELLOW_LT "Warning: Linear texture filtering not enabled" ENDCOLOR);
+            err(YELLOW_MSG "Warning: Linear texture filtering not enabled" ENDCOLOR);
 //TODO??    SDL_bool SDL_SetHintWithPriority(const char*      name, const char*      value,SDL_HintPriority priority)
 
 #define IGNORED_X_Y_W_H  0, 0, 200, 100 //not used for full screen mode
@@ -2350,54 +2369,54 @@ public:
         window = isRPi()?
             SDL_CreateWindow(title, IGNORED_X_Y_W_H, SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_SHOWN): //| SDL_WINDOW_OPENGL): //don't use OpenGL; too slow
             SDL_CreateWindow(title, 10, 10, MaxFit().w, MaxFit().h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN); //| SDL_WINDOW_OPENGL);
-        if (!window) return_void(exc(RED_LT "Create window failed" ENDCOLOR));
+        if (!window) return_void(exc(RED_MSG "Create window failed" ENDCOLOR));
         uint32_t fmt = SDL_GetWindowPixelFormat(window); //desktop OpenGL: 24 RGB8888, RPi: 32 ARGB8888
-        if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(exc(RED_LT "Can't get window format" ENDCOLOR));
+        if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(exc(RED_MSG "Can't get window format" ENDCOLOR));
         int wndw, wndh;
         SDL_GL_GetDrawableSize(window, &wndw, &wndh);
-        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+        myprintf(22, BLUE_MSG "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
 //        SDL_GetWindowSize(window, &wndw, &wndh);
-//        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+//        myprintf(22, BLUE_MSG "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
 //        SDL_GetWindowMaximumSize(window, &wndw, &wndh);
-//        myprintf(22, BLUE_LT "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
+//        myprintf(22, BLUE_MSG "cre wnd: max fit %d x %d => wnd %d x %d, vtx size %2.1f x %2.1f" ENDCOLOR, MaxFit().w, MaxFit().h, wndw, wndh, (double)wndw / (TXR_WIDTH - 1), (double)wndh / univ_len);
 //        int top, left, bottom, right;
-//        if (!OK(SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right))) return_void(exc(RED_LT "Can't get window border size" ENDCOLOR));
-//        myprintf(22, BLUE_LT "wnd border size: t %d, l %d, b %d, r %d" ENDCOLOR, top, left, bottom, right);
+//        if (!OK(SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right))) return_void(exc(RED_MSG "Can't get window border size" ENDCOLOR));
+//        myprintf(22, BLUE_MSG "wnd border size: t %d, l %d, b %d, r %d" ENDCOLOR, top, left, bottom, right);
         debug_info(window);
 #undef IGNORED_X_Y_W_H
 
-        if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_LT "Bad number of universes: %d (should be 1..%d)" ENDCOLOR, num_univ, WS281X_BITS));
-        if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_LT "Bad universe size: %d (should be 1..%d)" ENDCOLOR, univ_len, wndh));
+        if ((num_univ < 1) || (num_univ > WS281X_BITS)) return_void(exc(RED_MSG "Bad number of universes: %d (should be 1..%d)" ENDCOLOR, num_univ, WS281X_BITS));
+        if ((univ_len < 1) || (univ_len > wndh)) return_void(exc(RED_MSG "Bad universe size: %d (should be 1..%d)" ENDCOLOR, univ_len, wndh));
 //NOTE: to avoid fractional pixels, screen/window width should be a multiple of 71, height should be a multiple of univ_len
-        if (wndw % (TXR_WIDTH - 1)) myprintf(1, YELLOW_LT "Window width %d is not a multiple of %d" ENDCOLOR, wndw, TXR_WIDTH - 1);
-        if (wndh % univ_len) myprintf(1, YELLOW_LT "Window height %d is not a multiple of %d" ENDCOLOR, wndh, univ_len);
+        if (wndw % (TXR_WIDTH - 1)) myprintf(1, YELLOW_MSG "Window width %d is not a multiple of %d" ENDCOLOR, wndw, TXR_WIDTH - 1);
+        if (wndh % univ_len) myprintf(1, YELLOW_MSG "Window height %d is not a multiple of %d" ENDCOLOR, wndh, univ_len);
         this->num_univ = num_univ;
         this->univ_len = univ_len;
         this->univ_types.resize(num_univ, NONE); //NOTE: caller needs to call paint() after changing this
         this->encoders.resize(num_univ, NULL);
 
 	    renderer = SDL_CreateRenderer(window, FIRST_MATCH, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC); //NOTE: PRESENTVSYNC syncs with V refresh rate (typically 60 Hz)
-        if (!renderer) return_void(err(RED_LT "Create renderer failed" ENDCOLOR));
+        if (!renderer) return_void(err(RED_MSG "Create renderer failed" ENDCOLOR));
         debug_info(renderer);
 
         canvas = SDL_CreateTexture(renderer, fmt, SDL_TEXTUREACCESS_STREAMING, TXR_WIDTH, univ_len); //SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, wndw, wndh);
-        if (!canvas) return_void(err(RED_LT "Can't create canvas texture" ENDCOLOR));
+        if (!canvas) return_void(err(RED_MSG "Can't create canvas texture" ENDCOLOR));
 
         Hclip = {0, 0, TXR_WIDTH - 1, univ_len}; //CRITICAL: clip last col (1/3 pixel) so it overlaps with H-sync
-        myprintf(22, BLUE_LT "clip rect (%d, %d, %d, %d)" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
+        myprintf(22, BLUE_MSG "clip rect (%d, %d, %d, %d)" ENDCOLOR, Hclip.x, Hclip.y, Hclip.w, Hclip.h);
 
-        myprintf(8, MAGENTA_LT "canvas startup took %2.1f msec" ENDCOLOR, elapsed(started));
+        myprintf(8, MAGENTA_MSG "canvas startup took %2.1f msec" ENDCOLOR, elapsed(started));
         times.caller = times.encode = times.update = times.render = numfr = numerr = num_dirty = 0;
         started = times.previous = now();
         render_timestamp = frame_rate = 0;
     }
     ~SimplerCanvas()
     {
-//        myprintf(22, BLUE_LT "GpuCanvas dtor" ENDCOLOR);
+//        myprintf(22, BLUE_MSG "GpuCanvas dtor" ENDCOLOR);
         stats();
 //        this->done = true;
 //        this->wake(); //eof; tell bkg thread to quit (if it's waiting)
-        myprintf(22, YELLOW_LT "GpuCanvas dtor" ENDCOLOR);
+        myprintf(22, YELLOW_MSG "GpuCanvas dtor" ENDCOLOR);
     }
 public:
 //repaint screen (fg thread):
@@ -2425,10 +2444,10 @@ public:
 //            delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
 //slower; doesn't work with streaming texture?
 //        if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
-//            return err(RED_LT "Can't update texture" ENDCOLOR);
+//            return err(RED_MSG "Can't update texture" ENDCOLOR);
         	if (!OK(SDL_RenderCopy(renderer, canvas, &Hclip, NORECT))) //&renderQuad, angle, center, flip ))
             {
-                err(RED_LT "Unable to render to screen" ENDCOLOR);
+                err(RED_MSG "Unable to render to screen" ENDCOLOR);
                 ++numerr;
             }
             delta = now() - times.previous; times.update += delta; times.previous += delta;
@@ -2448,14 +2467,14 @@ public:
 //#define avg_ms(val)  (elapsed(now() - (val)) / numfr)  //ticks / freq / #fr
 #define avg_ms(val)  (double)(1000 * (val) / SDL_TickFreq()) / numfr //(10.0 * (val) / freq) / 10.0) //(double)caller_time / freq / numfr
         uint32_t numfr_cpy = numfr, numerr_cpy = numerr, numdirty_cpy = num_dirty, frrate_cpy = frame_rate; //kludge: avoid "deleted function" error on atomic
-//        myprintf(12, YELLOW_LT "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
-//        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
-        myprintf(12, YELLOW_LT "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000);
-        myprintf(12, YELLOW_LT "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: caller %2.3f + encode %2.3f + update %2.3f + render %2.3f, %2.1f%% idle" ENDCOLOR, 
+//        myprintf(12, YELLOW_MSG "#fr %d, #err %d, elapsed %2.1f sec, %2.1f fps: %2.1f msec: fg(caller %2.3f + pivot %2.3f + lock %2.3f + update %2.3f + unlock %2.3f), bg(copy %2.3f + present %2.3f), %2.1f%% idle" ENDCOLOR, numfr_cpy, numerr_cpy, elaps, fps, 1000 / fps, avg_ms(fg.caller_time), avg_ms(fg.encode_time), avg_ms(fg.lock_time), avg_ms(fg.update_time), avg_ms(fg.unlock_time), avg_ms(bg.copy_time), avg_ms(bg.present_time), (double)100 * idle_time / elaps);
+//        myprintf(22, BLUE_MSG "raw: elapsed %s, freq %s, fg(caller %s, pivot %s, lock %s, update %s, unlock %s), bg(copy %s, present %s)" ENDCOLOR, commas(now() - started), commas(SDL_TickFreq()), commas(fg.caller_time), commas(fg.encode_time), commas(fg.lock_time), commas(fg.update_time), commas(fg.unlock_time), commas(bg.copy_time), commas(bg.present_time));
+        myprintf(12, YELLOW_MSG "actual frame rate: %2.1f msec" ENDCOLOR, (double)frrate_cpy / numfr_cpy / SDL_TickFreq() * 1000);
+        myprintf(12, YELLOW_MSG "#fr %d, #err %d, #dirty %d (%2.1f%%), elapsed %2.1f sec, %2.1f fps, %2.1f msec avg: caller %2.3f + encode %2.3f + update %2.3f + render %2.3f, %2.1f%% idle" ENDCOLOR, 
             numfr_cpy, numerr_cpy, numdirty_cpy, (double)100 * numdirty_cpy / numfr_cpy, elaps, fps, 1000 / fps, 
             avg_ms(times.caller), avg_ms(times.encode), avg_ms(times.update), avg_ms(times.render), 
             (double)100 * idle_time / (now() - started));
-        myprintf(22, BLUE_LT "raw: elapsed %s, freq %s, caller %s, update %s, encode %s, render %s" ENDCOLOR, 
+        myprintf(22, BLUE_MSG "raw: elapsed %s, freq %s, caller %s, update %s, encode %s, render %s" ENDCOLOR, 
             commas(now() - started), commas(SDL_TickFreq()), 
             commas(times.caller), commas(times.update), commas(times.encode), commas(times.render));
 //        myprintf(22, "raw-raw: elapsed %ld, freq %ld" ENDCOLOR, now() - started, SDL_TickFreq());
@@ -2585,7 +2604,7 @@ private:
 //"1366x768"     69.30   1366 1414 1446 1480        768  770  775  780         -hsync -vsync
 //             pxclk MHz                h_field_len                v_field_len    
         if (!XF86VidModeGetModeLine(display/*.cast*/, i, &scfg.dot_clock, &scfg.mode_line)) continue; //&mode_line)); //continue; //return FALSE;
-//        myprintf(28, BLUE_LT "X-screen[%d/%d]: %d x %d, clock %d" ENDCOLOR, i, num_screens, WidthOfScreen(screen), HeightOfScreen(screen), dot_clock); //->width, ->height, screen->);
+//        myprintf(28, BLUE_MSG "X-screen[%d/%d]: %d x %d, clock %d" ENDCOLOR, i, num_screens, WidthOfScreen(screen), HeightOfScreen(screen), dot_clock); //->width, ->height, screen->);
 
 //    AppRes.field[HDisplay].val = mode_line.hdisplay;
 //    AppRes.field[HSyncStart].val = mode_line.hsyncstart;
@@ -2615,7 +2634,7 @@ private:
         double rowtime = (double)scfg.mode_line.htotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
         double frametime = (double)scfg.mode_line.htotal * scfg.mode_line.vtotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
 
-        myprintf(28, BLUE_LT "Screen[%d/%d] timing: %d x %d, pxclk %2.1f MHz, hblank %d+%d+%d = %d (%2.1f%%), vblank = %d+%d+%d = %d (%2.1f%%), row %2.1f usec, frame %2.1f msec (fps %2.1f)" ENDCOLOR, i, num_screens,
+        myprintf(28, BLUE_MSG "Screen[%d/%d] timing: %d x %d, pxclk %2.1f MHz, hblank %d+%d+%d = %d (%2.1f%%), vblank = %d+%d+%d = %d (%2.1f%%), row %2.1f usec, frame %2.1f msec (fps %2.1f)" ENDCOLOR, i, num_screens,
             scfg.mode_line.hdisplay, scfg.mode_line.vdisplay, (double)scfg.dot_clock / 1000, //vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, vinfo.pixclock,
             scfg.mode_line.hsyncstart - scfg.mode_line.hdisplay, scfg.mode_line.hsyncend - scfg.mode_line.hsyncstart, scfg.mode_line.htotal - scfg.mode_line.hsyncend, scfg.mode_line.htotal - scfg.mode_line.hdisplay, (double)100 * (scfg.mode_line.htotal - scfg.mode_line.hdisplay) / scfg.mode_line.htotal, //vinfo.left_margin, vinfo.right_margin, vinfo.hsync_len, 
             scfg.mode_line.vsyncstart - scfg.mode_line.vdisplay, scfg.mode_line.vsyncend - scfg.mode_line.vsyncstart, scfg.mode_line.vtotal - scfg.mode_line.vsyncend, scfg.mode_line.vtotal - scfg.mode_line.vdisplay, (double)100 * (scfg.mode_line.vtotal - scfg.mode_line.vdisplay) / scfg.mode_line.vtotal, //vinfo.upper_margin, vinfo.lower_margin, vinfo.vsync_len,
@@ -2648,22 +2667,22 @@ WH ScreenInfo()
     {
         const ScreenConfig* scfg = getScreenConfig();
 //        if (!scfg) //return_void(errjs(iso, "Screen: can't get screen info"));
-        if (!scfg) /*throw std::runtime_error*/ exc(RED_LT "Can't get screen size" ENDCOLOR);
+        if (!scfg) /*throw std::runtime_error*/ exc(RED_MSG "Can't get screen size" ENDCOLOR);
         wh.w = scfg->mode_line.hdisplay;
         wh.h = scfg->mode_line.vdisplay;
 #if 0
 //        auto_ptr<SDL_lib> sdl(SDL_INIT(SDL_INIT_VIDEO)); //for access to video info; do this in case not already done
         if (!SDL) SDL = SDL_INIT(SDL_INIT_VIDEO);
 
-        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_LT "ERROR: Tried to get screen info before SDL_Init" ENDCOLOR);
-//        if (!sdl && !(sdl = SDL_INIT(SDL_INIT_VIDEO))) err(RED_LT "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
-        myprintf(22, BLUE_LT "%d display(s):" ENDCOLOR, SDL_GetNumVideoDisplays());
+        if (!SDL_WasInit(SDL_INIT_VIDEO)) err(RED_MSG "ERROR: Tried to get screen info before SDL_Init" ENDCOLOR);
+//        if (!sdl && !(sdl = SDL_INIT(SDL_INIT_VIDEO))) err(RED_MSG "ERROR: Tried to get screen before SDL_Init" ENDCOLOR);
+        myprintf(22, BLUE_MSG "%d display(s):" ENDCOLOR, SDL_GetNumVideoDisplays());
         for (int i = 0; i < SDL_GetNumVideoDisplays(); ++i)
         {
             SDL_DisplayMode mode = {0};
             if (!OK(SDL_GetCurrentDisplayMode(i, &mode))) //NOTE: SDL_GetDesktopDisplayMode returns previous mode if full screen mode
-                err(RED_LT "Can't get display[%d/%d]" ENDCOLOR, i, SDL_GetNumVideoDisplays());
-            else myprintf(22, BLUE_LT "Display[%d/%d]: %d x %d px @%dHz, %i bbp %s" ENDCOLOR, i, SDL_GetNumVideoDisplays(), mode.w, mode.h, mode.refresh_rate, SDL_BITSPERPIXEL(mode.format), SDL_PixelFormatShortName(mode.format));
+                err(RED_MSG "Can't get display[%d/%d]" ENDCOLOR, i, SDL_GetNumVideoDisplays());
+            else myprintf(22, BLUE_MSG "Display[%d/%d]: %d x %d px @%dHz, %i bbp %s" ENDCOLOR, i, SDL_GetNumVideoDisplays(), mode.w, mode.h, mode.refresh_rate, SDL_BITSPERPIXEL(mode.format), SDL_PixelFormatShortName(mode.format));
             if (!wh.w || !wh.h) { wh.w = mode.w; wh.h = mode.h; } //take first one, continue (for debug)
 //            break; //TODO: take first one or last one?
         }
@@ -2674,10 +2693,10 @@ WH ScreenInfo()
 //set reasonable values if can't get info:
     if (!wh.w || !wh.h)
     {
-        /*throw std::runtime_error*/ exc(RED_LT "Can't get screen size" ENDCOLOR);
+        /*throw std::runtime_error*/ exc(RED_MSG "Can't get screen size" ENDCOLOR);
         wh.w = 1536;
         wh.h = wh.w * 3 / 4; //4:3 aspect ratio
-        myprintf(22, YELLOW_LT "Using dummy display mode %dx%d" ENDCOLOR, wh.w, wh.h);
+        myprintf(22, YELLOW_MSG "Using dummy display mode %dx%d" ENDCOLOR, wh.w, wh.h);
     }
 #endif
     return wh;
@@ -2786,7 +2805,7 @@ NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
     double rowtime = (vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
     double frametime = (vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
 
-    myprintf(28, BLUE_LT "Screen ioctl: %d x %d, %d bpp, linelen %d, pxclk %d, margins lrtb %d %d %d %d, sync len h %d v %d, row time %2.1f usec, frame time %2.1f msec, fps %2.1f" ENDCOLOR,
+    myprintf(28, BLUE_MSG "Screen ioctl: %d x %d, %d bpp, linelen %d, pxclk %d, margins lrtb %d %d %d %d, sync len h %d v %d, row time %2.1f usec, frame time %2.1f msec, fps %2.1f" ENDCOLOR,
        vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, finfo.line_length, vinfo.pixclock,
        vinfo.left_margin, vinfo.right_margin, vinfo.upper_margin, vinfo.lower_margin, vinfo.hsync_len, vinfo.vsync_len,
        1000000 * rowtime, 1000 * frametime, 1 / frametime);
@@ -2834,14 +2853,14 @@ NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
     if ((shmid < 0) && (size > 0) && (errno == EINVAL))
         if (!info[2]->IsUndefined() && info[2]->BooleanValue()) //retry
         {
-            myprintf(22, YELLOW_LT "retry shmget, want size %d for key 0x%x" ENDCOLOR, size, key);
+            myprintf(22, YELLOW_MSG "retry shmget, want size %d for key 0x%x" ENDCOLOR, size, key);
             if ((shmid = shmget(key, 1, 0666)) >= 0)
                 if (!shmctl(shmid, IPC_RMID, NULL /*ignored*/)) //try deleting shm seg first
                     shmid = shmget(key, size, IPC_CREAT | 0666);
         }
-        else myprintf(22, RED_LT "no retry shmget: #args %d, undef? %d, bool val %d" ENDCOLOR, info.Length(), info[2]->IsUndefined(), !info[2]->IsUndefined()? info[2]->BooleanValue(): -1);
+        else myprintf(22, RED_MSG "no retry shmget: #args %d, undef? %d, bool val %d" ENDCOLOR, info.Length(), info[2]->IsUndefined(), !info[2]->IsUndefined()? info[2]->BooleanValue(): -1);
     if (shmid < 0) return_void(errjs(iso, "shmbuf: can't alloc(%d) shmem: %d (errno %d %s)", size, shmid, errno, strerror(errno)))
-    else myprintf(22, BLUE_LT "shmget key 0x%x, size %d okay: 0x%x" ENDCOLOR, key, size, shmid);
+    else myprintf(22, BLUE_MSG "shmget key 0x%x, size %d okay: 0x%x" ENDCOLOR, key, size, shmid);
 //if (!data) //don't attach again
 //TODO: need Detach and delete: if (shmdt(data) == -1) fprintf(stderr, "shmdt failed\n");
     uint8_t* data = (size > 0)? (uint8_t*)shmat(shmid, NULL, 0): (uint8_t*)shmctl(shmid, IPC_RMID, NULL);
@@ -2972,7 +2991,7 @@ NAN_METHOD(rwlock_js)
         default:
             return_void(errjs(iso, "rwlock: unknown op %d", op));
     }
-    myprintf(33, BLUE_LT "rwlock: %s (op %d), result %d (%s)" ENDCOLOR, opname, op, retval, strerror(retval));
+    myprintf(33, BLUE_MSG "rwlock: %s (op %d), result %d (%s)" ENDCOLOR, opname, op, retval, strerror(retval));
     if (retval) info.GetReturnValue().Set(JS_STR(iso, strerror(retval)));
     else info.GetReturnValue().Set(JS_BOOL(iso, false)); //0 == success, !0 == errno
 //    info.GetReturnValue().SetUndefined();
@@ -2996,7 +3015,7 @@ NAN_METHOD(usleep_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
             info.GetReturnValue().Set(JS_INT(iso, usec)); //return actual delay time (usec)
             return;
         }
-//        myprintf(24, BLUE_LT "usleep(%d -> %d)" ENDCOLOR, delay, delay - usec);
+//        myprintf(24, BLUE_MSG "usleep(%d -> %d)" ENDCOLOR, delay, delay - usec);
         usleep(delay - usec); //NOTE: might wake up early due to signal
     }
 }
@@ -3042,6 +3061,9 @@ class GpuCanvas_js: public Nan::ObjectWrap
 //private:
 public:
     auto_ptr<GpuCanvas> inner; //need ptr to allow dtor to be called separately (Node.js GC will not call dtor)
+    uint32_t* pixels; //pixel buf
+    uint64_t render_delay; //throttle frame rate
+    v8::Persistent<v8::Function> cb; //async paint callback
 public:
 //    static void Init(v8::Handle<v8::Object> exports);
     static void Init(v8::Local<v8::Object> exports);
@@ -3364,13 +3386,42 @@ NAN_METHOD(GpuCanvas_js::UnivType_tofix) //defines "info"; implicit HandleScope 
 //#endif
 
 
+//async callback wrapper:
+void* js_cbwrapper(GpuCanvas_js* canvas, bool done)
+{
+    v8::Isolate* iso = v8::Isolate::GetCurrent(); //TODO: store in GpuCanvas_js?
+    v8::HandleScope scope(iso); // Required for Node 4.x
+    v8::Handle<v8::Value> argv[] = { JS_BOOL(iso, done) };
+    v8::Local<v8::Function>::New(iso, canvas->cb)->Call(iso->GetCurrentContext()->Global(), 1, argv);
+    if (done) canvas->cb.Reset(); //free up persistent function callback
+}
+
+
+enum class ParseStates: int { NONE = 0, HAS_PX = 1, HAS_DELAY = 2, HAS_CB = 4};
+//    ParseStates& operator|(ParseStates& lhs, ParseStates& rhs) { return (int)lhs | (int)rhs; }
+//    ParseStates& operator&(ParseStates& lhs, ParseStates& rhs) { return (int)lhs & (int)rhs; }
+#define TOTYPE(thing)  static_cast<std::underlying_type<thing>::type>
+/*const ParseStates&*/ ParseStates operator |=(ParseStates lhs, ParseStates rhs)  
+{
+    return static_cast<ParseStates>(TOTYPE(ParseStates)(lhs) | TOTYPE(ParseStates)(rhs));
+}
+// /*const ParseStates&*/ ParseStates operator &(ParseStates lhs, ParseStates rhs)  
+/*const ParseStates&*/ /*ParseStates*/ bool operator &(ParseStates lhs, ParseStates rhs)  
+{
+    return (static_cast<ParseStates>(TOTYPE(ParseStates)(lhs) & TOTYPE(ParseStates)(rhs)) != ParseStates::NONE);
+}
+//bool operator!(ParseStates val) { return (val == ParseStates::NONE); }
+//operator bool(const ParseStates& val) { return (val != ParseStates::NONE); }
+//operator int(ParseStates& val) { return (int)val; }
+
+
 //xfr/xfm Javascript array to GPU:
 //void GpuCanvas_js::paint(const Nan::FunctionCallbackInfo<v8::Value>& info)
 NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 stack frame)
 {
     v8::Isolate* iso = info.GetIsolate(); //~vm heap
 //    if (info.Length() != 1) return_void(errjs(iso, "GpuCanvas.paint: expected 1 param, got %d", info.Length()));
-	if ((info.Length() < 1) || !info[0]->IsUint32Array()) return_void(errjs(iso, "GpuCanvas.paint: missing uint32 array param"));
+//	if (info.Length() && !info[0]->IsUint32Array()) return_void(errjs(iso, "GpuCanvas.paint: missing uint32 array param"));
     GpuCanvas_js* canvas = Nan::ObjectWrap::Unwrap<GpuCanvas_js>(info.Holder()); //info.This());
 //void* p = handle->GetAlignedPointerFromInternalField(0); 
 
@@ -3395,23 +3446,79 @@ NAN_METHOD(GpuCanvas_js::paint) //defines "info"; implicit HandleScope (~ v8 sta
 //https://github.com/casualjavascript/blog/issues/12
 //http://brendanashworth.github.io/v8-docs/classv8_1_1_typed_array.html
 
-TODO:
-https://nodeaddons.com/c-processing-from-node-js-part-4-asynchronous-addons/
-https://gist.github.com/dmh2000/9519489
-    uint32_t* pixels = 0;
-    if (info.Length())
+//check for optional args:
+//    uint32_t* pixels; //pixel buf
+//    v8::Persistent<v8::Function> cb; //async paint callback
+//https://nodeaddons.com/c-processing-from-node-js-part-4-asynchronous-addons/
+//https://gist.github.com/dmh2000/9519489
+    canvas->pixels = 0;
+    canvas->cb.Reset();
+    canvas->render_delay = 0;
+//    int px_arg = 0, cb_arg = 0; //index of arg found ; 1-based for terse checking
+    ParseStates state = ParseStates::NONE;
+    const char* REASONS[] =
     {
-        v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
-        if (aryp->ByteLength() < 4 * canvas->inner.cast->width() * canvas->inner.cast->height()) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->ByteLength(), 4 * canvas->inner.cast->width() * canvas->inner.cast->height()));
-        void* data = aryp->Buffer()->GetContents().Data() + aryp->ByteOffset(); //CAUTION: buf might be a slice; need to add ofs here
-        pixels = static_cast<uint32_t*>(data);
-    }
-myprintf(33, "js paint(0x%x) %d arg(s): pixels 0x%x 0x%x 0x%x ..." ENDCOLOR, pixels, info.Length(), pixels[0], pixels[1], pixels[2]);
+        "uint32 array, int delay, or callback function expected", //NONE
+        "int delay, or callback function expected", //HAS_PX
+        "uint32 array or callback function expected", //HAS_DELAY
+        "callback function expected", //PX + DELAY
+        "uint32 array or int delay expected", //HAS_CB
+        "int delay expected", //PX + CB
+        "uint32 array expected", //PX + DELAY
+        "unrecognized arg" //all
+    };
+//    bool has_px = false, has_delay = false, has_cb = false;
+    for (int i = 0; i < info.Length(); ++i)
+    	if (info[i]->IsUint32Array() && !(state & ParseStates::HAS_PX)) //has_px) //update pixels
+        {
+            v8::Local<v8::Uint32Array> aryp = info[i].As<v8::Uint32Array>();
+            if (aryp->ByteLength() < 4 * canvas->inner.cast->width() * canvas->inner.cast->height()) return_void(errjs(iso, "GpuCanvas.paint: array param bad length: is %d, should be %d", aryp->ByteLength(), 4 * canvas->inner.cast->width() * canvas->inner.cast->height()));
+            void* data = aryp->Buffer()->GetContents().Data() + aryp->ByteOffset(); //CAUTION: buf might be a slice; need to add ofs here
+            canvas->pixels = static_cast<uint32_t*>(data);
+myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: pixels %d:0x%x 0x%x 0x%x ..." ENDCOLOR, i, info.Length(), aryp->ByteLength() / 4, canvas->pixels[0], canvas->pixels[1], canvas->pixels[2]);
+//            has_px = true;
+            state |= ParseStates::HAS_PX;
+        }
 #ifdef SINGLE_THREADED_BKG
-    if (!canvas->inner.cast->Paint_bkg(pixels)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
-#else
-    if (!canvas->inner.cast->Paint(pixels)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
+        else if (info[i]->IsNumber() && !(state & ParseStates::HAS_DELAY)) //has_delay) //throttle frame rate
+        {
+//    double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
+//    void ResetElapsed(double elaps = 0) { started = now() - elaps * SDL_TickFreq(); }
+//    if (!value->IsUndefined()) canvas->inner.cast->ResetElapsed(value->NumberValue());
+        	canvas->render_delay = now() - info[i]->NumberValue() * SDL_TickFreq(); //elapsed time (sec) => tick count
+//            has_delay = true;
+myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: render delay %2.1f usec = %" PRIu64 " ticks = %f2.1 usec" ENDCOLOR, i, info.Length(), (double)1000000 * info[i]->NumberValue(), canvas->render_delay, elapsed(canvas->render_delay) * 1000000);
+            state |= ParseStates::HAS_DELAY;
+        }
+        else if (info[i]->IsFunction() && !(state & ParseStates::HAS_CB)) //has_cb) //async callback
+        {
+            v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[i]);
+//callback->GetName()
+//callback->GetInferredName()
+//callback->GetDisplayName()
+            v8::ScriptOrigin script = callback->GetScriptOrigin();
+            v8::String::Utf8Value funcname(script.ResourceName().ToString()); //scallback->GetName()->ToString());
+            int line = script.ResourceLineOffset(); //callback->GetScriptLineNumber();
+            int col = script.ResourceColumnOffset(); //callback->GetScriptColumnNumber();
+            canvas->cb.Reset(iso, callback);
+myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: callback %s from %d:%d" ENDCOLOR, i, info.Length(), *funcname? *funcname: "??");
+//            has_cb = true;
+            state |= ParseStates::HAS_CB;
+        }
 #endif
+//        else return_void(errjs(iso, "GpuCanvas.paint: invalid arg[%d]: %s", i, (!has_px && !has_cb)? "uint32 array or callback function expected": !has_px? "uint32 array expected": !has_cb? "callback function expected": "unrecognized arg"));
+        else return_void(errjs(iso, "GpuCanvas.paint: invalid arg[%d]: %s", i, REASONS[(int)state]));
+
+#ifdef SINGLE_THREADED_BKG
+    if (state & ParseStates::HAS_CB) //has_cb) //async return
+    {
+        myprintf(28, BLUE_MSG "js paint async callback" ENDCOLOR);
+        if (!canvas->inner.cast->Paint_bkg(canvas->pixels, canvas->render_delay, (GpuCanvas::callback)js_cbwrapper, (void*)canvas)) return_void(errjs(iso, "GpuCanvas.paint_bkg: failed"));
+        info.GetReturnValue().SetUndefined();
+        return;
+    }
+#endif
+    if (!canvas->inner.cast->Paint_bkg(canvas->pixels, canvas->render_delay)) return_void(errjs(iso, "GpuCanvas.paint: failed"));
     info.GetReturnValue().Set(0); //TODO: what value to return?
 }
 
@@ -3465,7 +3572,7 @@ void GpuCanvas_js::release(const Nan::FunctionCallbackInfo<v8::Value>& info)
 void GpuCanvas_js::Quit(void* ignored)
 {
 //    GpuCanvas::Quit();
-    myprintf(22, BLUE_LT "js cleanup: %d instance(s) to destroy" ENDCOLOR, all.size());
+    myprintf(22, BLUE_MSG "js cleanup: %d instance(s) to destroy" ENDCOLOR, all.size());
 //    while (all.size())
     for (int i = 0; i < all.size(); ++i)
     {
@@ -3476,7 +3583,7 @@ void GpuCanvas_js::Quit(void* ignored)
 //New() above did a Wrap() which did a MakeWeak(), which does a MarkIndependent()
         all[i]->inner = NULL; //call GpuCanvas dtor to free up SDL resources
     }
-//    myprintf(22, BLUE_LT "js cleanup: %d instance(s) remaining" ENDCOLOR, all.size());
+//    myprintf(22, BLUE_MSG "js cleanup: %d instance(s) remaining" ENDCOLOR, all.size());
 }
 
 
@@ -3568,7 +3675,7 @@ uint32_t PALETTE[] = {RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE};
 
 int main(int argc, const char* argv[])
 {
-    myprintf(1, CYAN_LT "test/standalone routine" ENDCOLOR);
+    myprintf(1, CYAN_MSG "test/standalone routine" ENDCOLOR);
 //??    SDL_SetMainReady();
 //    myprintf(33, "hello" ENDCOLOR);
 {
@@ -3583,17 +3690,17 @@ int main(int argc, const char* argv[])
 #endif
 #if 1 //one-by-one, palette colors
     int duration = 30; //sec
-    myprintf(1, GREEN_LT "loop for %d sec (%d frames) ..." ENDCOLOR, duration, duration * 60);
+    myprintf(1, GREEN_MSG "loop for %d sec (%d frames) ..." ENDCOLOR, duration, duration * 60);
     for (int xy = 0; xy < duration * 60; ++xy) //xy < 10 * 10; ++xy)
     {
         int x = (xy / UNIV_LEN) % NUM_UNIV, y = xy % UNIV_LEN; //cycle thru [0..9,0..9]
 //        myprintf(33, "evth" ENDCOLOR);
         if (eventh(1)) break; //user quit
         uint32_t color = PALETTE[(x + y + xy / pixels.size()) % SIZE(PALETTE)]; //vary each cycle
-//        myprintf(1, BLUE_LT "px[%d, %d] = 0x%x" ENDCOLOR, x, y, color);
+//        myprintf(1, BLUE_MSG "px[%d, %d] = 0x%x" ENDCOLOR, x, y, color);
         pixels[xy % pixels.size()] = color;
         double PresentTime_cpy = canvas.PresentTime; //kludge: avoid "deleted function" error on atomic
-        myprintf(33, BLUE_LT "paint[%d, %d] @%2.1f msec" ENDCOLOR, x, y, PresentTime_cpy); //canvas.PresentTime);
+        myprintf(33, BLUE_MSG "paint[%d, %d] @%2.1f msec" ENDCOLOR, x, y, PresentTime_cpy); //canvas.PresentTime);
 //not needed: use lamba function as call-back (try to monitor paint latency):
 //        canvas.Paint(pixels, [](void* started) { canvas.fg.usertime += SDL_GetTicks() - (uint64_t)started; }, (void*)now()); //blocks until canvas released by bkg thread
 //        uint64_t latency = SDL_GetTicks();
@@ -3606,7 +3713,7 @@ int main(int argc, const char* argv[])
     myprintf(33, "done" ENDCOLOR);
 } //force GpuCanvas out of scope before delay
 //    canvas.Paint(pixels);
-    myprintf(1, GREEN_LT "done, wait 5 sec" ENDCOLOR);
+    myprintf(1, GREEN_MSG "done, wait 5 sec" ENDCOLOR);
     SDL_Delay(5000);
     return 0;
 }
@@ -3617,7 +3724,7 @@ int main(int argc, const char* argv[])
 //(mainly for debug)
 bool eventh(int max /*= INT_MAX*/)
 {
-//    myprintf(14, BLUE_LT "evth max %d" ENDCOLOR, max);
+//    myprintf(14, BLUE_MSG "evth max %d" ENDCOLOR, max);
     while (max)
     {
     	SDL_Event evt;
@@ -3625,16 +3732,16 @@ bool eventh(int max /*= INT_MAX*/)
 //       if (SDL_WaitEvent(&evt)) //execution suspends here while waiting on an event
 		if (SDL_PollEvent(&evt))
 		{
-//            myprintf(14, BLUE_LT "evt type 0x%x" ENDCOLOR, evt.type);
+//            myprintf(14, BLUE_MSG "evt type 0x%x" ENDCOLOR, evt.type);
 			if (evt.type == SDL_QUIT) return true; //quit = true; //return;
 			if (evt.type == SDL_KEYDOWN)
             {
-				myprintf(14, CYAN_LT "got key down 0x%x" ENDCOLOR, evt.key.keysym.sym);
+				myprintf(14, CYAN_MSG "got key down 0x%x" ENDCOLOR, evt.key.keysym.sym);
 				if (evt.key.keysym.sym == SDLK_ESCAPE) return true; //quit = true; //return; //key codes defined in /usr/include/SDL2/SDL_keycode.h
 			}
 			if (evt.type == SDL_PRESSED)
             {
-				myprintf(14, CYAN_LT "got key press 0x%x" ENDCOLOR, evt.key.keysym.sym);
+				myprintf(14, CYAN_MSG "got key press 0x%x" ENDCOLOR, evt.key.keysym.sym);
 				if (evt.key.keysym.sym == SDLK_ESCAPE) return true; //quit = true; //return; //key codes defined in /usr/include/SDL2/SDL_keycode.h
 			}
 #if 0 //no worky (evt queue not polled by libuv)
@@ -3654,10 +3761,10 @@ bool eventh(int max /*= INT_MAX*/)
 */
 		}
 //        const Uint8* keyst = SDL_GetKeyboardState(NULL);
-//        if (keyst[SDLK_RETURN]) { myprintf(8, CYAN_LT "Return key pressed." ENDCOLOR); return true; }
-//        if (keyst[SDLK_ESCAPE]) { myprintf(8, CYAN_LT "Escape key pressed." ENDCOLOR); return true; }
+//        if (keyst[SDLK_RETURN]) { myprintf(8, CYAN_MSG "Return key pressed." ENDCOLOR); return true; }
+//        if (keyst[SDLK_ESCAPE]) { myprintf(8, CYAN_MSG "Escape key pressed." ENDCOLOR); return true; }
         if (max != INT_MAX) --max;
-//        myprintf(14, BLUE_LT "no evts" ENDCOLOR);
+//        myprintf(14, BLUE_MSG "no evts" ENDCOLOR);
     }
     return false; //no evt
 }
@@ -3674,15 +3781,15 @@ bool eventh(int max /*= INT_MAX*/)
 //SDL lib info:
 void debug_info(SDL_lib* ignored, int where)
 {
-    myprintf(1, CYAN_LT "Debug detail level = %d (from %d)" ENDCOLOR, WANT_LEVEL, where);
+    myprintf(1, CYAN_MSG "Debug detail level = %d (from %d)" ENDCOLOR, WANT_LEVEL, where);
 
     SDL_version ver;
     SDL_GetVersion(&ver);
-    myprintf(12, BLUE_LT "SDL version %d.%d.%d, platform: '%s', #cores %d, ram %s MB, isRPi? %d" ENDCOLOR, ver.major, ver.minor, ver.patch, SDL_GetPlatform(), SDL_GetCPUCount() /*std::thread::hardware_concurrency()*/, commas(SDL_GetSystemRAM()), isRPi());
+    myprintf(12, BLUE_MSG "SDL version %d.%d.%d, platform: '%s', #cores %d, ram %s MB, isRPi? %d" ENDCOLOR, ver.major, ver.minor, ver.patch, SDL_GetPlatform(), SDL_GetCPUCount() /*std::thread::hardware_concurrency()*/, commas(SDL_GetSystemRAM()), isRPi());
 
-    myprintf(12, BLUE_LT "%d video driver(s):" ENDCOLOR, SDL_GetNumVideoDrivers());
+    myprintf(12, BLUE_MSG "%d video driver(s):" ENDCOLOR, SDL_GetNumVideoDrivers());
     for (int i = 0; i < SDL_GetNumVideoDrivers(); ++i)
-        myprintf(12, BLUE_LT "Video driver[%d/%d]: name '%s'" ENDCOLOR, i, SDL_GetNumVideoDrivers(), SDL_GetVideoDriver(i));
+        myprintf(12, BLUE_MSG "Video driver[%d/%d]: name '%s'" ENDCOLOR, i, SDL_GetNumVideoDrivers(), SDL_GetVideoDriver(i));
 }
 
 
@@ -3691,18 +3798,18 @@ void debug_info(SDL_Window* window, int where)
 {
 #if 0
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
-    myprintf(20, BLUE_LT "GL_VERSION: %s" ENDCOLOR, glGetString(GL_VERSION));
-    myprintf(20, BLUE_LT "GL_RENDERER: %s" ENDCOLOR, glGetString(GL_RENDERER));
-    myprintf(20, BLUE_LT "GL_SHADING_LANGUAGE_VERSION: %s" ENDCOLOR, glGetString(GL_SHADING_LANGUAGE_VERSION));
+    myprintf(20, BLUE_MSG "GL_VERSION: %s" ENDCOLOR, glGetString(GL_VERSION));
+    myprintf(20, BLUE_MSG "GL_RENDERER: %s" ENDCOLOR, glGetString(GL_RENDERER));
+    myprintf(20, BLUE_MSG "GL_SHADING_LANGUAGE_VERSION: %s" ENDCOLOR, glGetString(GL_SHADING_LANGUAGE_VERSION));
     myprintf(20, "GL_EXTENSIONS: %s" ENDCOLOR, glGetString(GL_EXTENSIONS));
     SDL_GL_DeleteContext(gl_context);
 #endif
 
     int wndw, wndh;
     SDL_GL_GetDrawableSize(window, &wndw, &wndh);
-//        return err(RED_LT "Can't get drawable window size" ENDCOLOR);
+//        return err(RED_MSG "Can't get drawable window size" ENDCOLOR);
     uint32_t fmt = SDL_GetWindowPixelFormat(window);
-//    if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(err(RED_LT "Can't get window format" ENDCOLOR));
+//    if (fmt == SDL_PIXELFORMAT_UNKNOWN) return_void(err(RED_MSG "Can't get window format" ENDCOLOR));
     uint32_t flags = SDL_GetWindowFlags(window);
     std::ostringstream desc;
     if (flags & SDL_WINDOW_FULLSCREEN) desc << ";FULLSCR";
@@ -3718,26 +3825,26 @@ void debug_info(SDL_Window* window, int where)
     if (flags & SDL_WINDOW_MOUSE_FOCUS) desc << ";MOUSE";
     if (flags & SDL_WINDOW_FOREIGN) desc << ";FOREIGN";
     if (!desc.tellp()) desc << ";";
-    myprintf(12, BLUE_LT "window %d x %d, fmt %i bpp %s, flags %s (from %d)" ENDCOLOR, wndw, wndh, SDL_BITSPERPIXEL(fmt), SDL_PixelFormatShortName(fmt), desc.str().c_str() + 1, where);
+    myprintf(12, BLUE_MSG "window %d x %d, fmt %i bpp %s, flags %s (from %d)" ENDCOLOR, wndw, wndh, SDL_BITSPERPIXEL(fmt), SDL_PixelFormatShortName(fmt), desc.str().c_str() + 1, where);
 
 #if 0
-    myprintf(22, BLUE_LT "SDL_WINDOW_FULLSCREEN    [%c]" ENDCOLOR, (flags & SDL_WINDOW_FULLSCREEN) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_OPENGL        [%c]" ENDCOLOR, (flags & SDL_WINDOW_OPENGL) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_SHOWN         [%c]" ENDCOLOR, (flags & SDL_WINDOW_SHOWN) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_HIDDEN        [%c]" ENDCOLOR, (flags & SDL_WINDOW_HIDDEN) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_BORDERLESS    [%c]" ENDCOLOR, (flags & SDL_WINDOW_BORDERLESS) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_RESIZABLE     [%c]" ENDCOLOR, (flags & SDL_WINDOW_RESIZABLE) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_MINIMIZED     [%c]" ENDCOLOR, (flags & SDL_WINDOW_MINIMIZED) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_MAXIMIZED     [%c]" ENDCOLOR, (flags & SDL_WINDOW_MAXIMIZED) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_INPUT_GRABBED [%c]" ENDCOLOR, (flags & SDL_WINDOW_INPUT_GRABBED) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_INPUT_FOCUS   [%c]" ENDCOLOR, (flags & SDL_WINDOW_INPUT_FOCUS) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_MOUSE_FOCUS   [%c]" ENDCOLOR, (flags & SDL_WINDOW_MOUSE_FOCUS) ? 'X' : ' ');
-    myprintf(22, BLUE_LT "SDL_WINDOW_FOREIGN       [%c]" ENDCOLOR, (flags & SDL_WINDOW_FOREIGN) ? 'X' : ' '); 
+    myprintf(22, BLUE_MSG "SDL_WINDOW_FULLSCREEN    [%c]" ENDCOLOR, (flags & SDL_WINDOW_FULLSCREEN) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_OPENGL        [%c]" ENDCOLOR, (flags & SDL_WINDOW_OPENGL) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_SHOWN         [%c]" ENDCOLOR, (flags & SDL_WINDOW_SHOWN) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_HIDDEN        [%c]" ENDCOLOR, (flags & SDL_WINDOW_HIDDEN) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_BORDERLESS    [%c]" ENDCOLOR, (flags & SDL_WINDOW_BORDERLESS) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_RESIZABLE     [%c]" ENDCOLOR, (flags & SDL_WINDOW_RESIZABLE) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_MINIMIZED     [%c]" ENDCOLOR, (flags & SDL_WINDOW_MINIMIZED) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_MAXIMIZED     [%c]" ENDCOLOR, (flags & SDL_WINDOW_MAXIMIZED) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_INPUT_GRABBED [%c]" ENDCOLOR, (flags & SDL_WINDOW_INPUT_GRABBED) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_INPUT_FOCUS   [%c]" ENDCOLOR, (flags & SDL_WINDOW_INPUT_FOCUS) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_MOUSE_FOCUS   [%c]" ENDCOLOR, (flags & SDL_WINDOW_MOUSE_FOCUS) ? 'X' : ' ');
+    myprintf(22, BLUE_MSG "SDL_WINDOW_FOREIGN       [%c]" ENDCOLOR, (flags & SDL_WINDOW_FOREIGN) ? 'X' : ' '); 
 #endif
 
 //NO
 //    SDL_Surface* wnd_surf = SDL_GetWindowSurface(window); //NOTE: wnd will dealloc, so don't need auto_ptr here
-//    if (!wnd_surf) return_void(err(RED_LT "Can't get window surface" ENDCOLOR));
+//    if (!wnd_surf) return_void(err(RED_MSG "Can't get window surface" ENDCOLOR));
 //NOTE: wnd_surf info is gone after SDL_CreateRenderer! (benign if info was saved already)
 //    debug_info(wnd_surf);
 }
@@ -3746,14 +3853,14 @@ void debug_info(SDL_Window* window, int where)
 //SDL_Renderer info:
 void debug_info(SDL_Renderer* renderer, int where)
 {
-    myprintf(12, BLUE_LT "%d render driver(s): (from %d)" ENDCOLOR, SDL_GetNumRenderDrivers(), where);
+    myprintf(12, BLUE_MSG "%d render driver(s): (from %d)" ENDCOLOR, SDL_GetNumRenderDrivers(), where);
     for (int i = 0; i <= SDL_GetNumRenderDrivers(); ++i)
     {
         SDL_RendererInfo info;
         std::ostringstream which, fmts, count, flags;
         if (!i) which << "active";
         else which << i << "/" << SDL_GetNumRenderDrivers();
-        if (!OK(i? SDL_GetRenderDriverInfo(i - 1, &info): SDL_GetRendererInfo(renderer, &info))) { err(RED_LT "Can't get renderer[%s] info" ENDCOLOR, which.str().c_str()); continue; }
+        if (!OK(i? SDL_GetRenderDriverInfo(i - 1, &info): SDL_GetRendererInfo(renderer, &info))) { err(RED_MSG "Can't get renderer[%s] info" ENDCOLOR, which.str().c_str()); continue; }
         if (info.flags & SDL_RENDERER_SOFTWARE) flags << ";SW";
         if (info.flags & SDL_RENDERER_ACCELERATED) flags << ";ACCEL";
         if (info.flags & SDL_RENDERER_PRESENTVSYNC) flags << ";VSYNC";
@@ -3763,7 +3870,7 @@ void debug_info(SDL_Renderer* renderer, int where)
         for (unsigned int i = 0; i < info.num_texture_formats; ++i) fmts << ", " << SDL_BITSPERPIXEL(info.texture_formats[i]) << " bpp " << skip(SDL_GetPixelFormatName(info.texture_formats[i]), "SDL_PIXELFORMAT_");
         if (!info.num_texture_formats) { count << "no fmts"; fmts << "  "; }
         else if (info.num_texture_formats != 1) count << info.num_texture_formats << " fmts: ";
-        myprintf(12, BLUE_LT "Renderer[%s]: '%s', flags 0x%x %s, max %d x %d, %s%s" ENDCOLOR, which.str().c_str(), info.name, info.flags, flags.str().c_str() + 1, info.max_texture_width, info.max_texture_height, count.str().c_str(), fmts.str().c_str() + 2);
+        myprintf(12, BLUE_MSG "Renderer[%s]: '%s', flags 0x%x %s, max %d x %d, %s%s" ENDCOLOR, which.str().c_str(), info.name, info.flags, flags.str().c_str() + 1, info.max_texture_width, info.max_texture_height, count.str().c_str(), fmts.str().c_str() + 2);
     }
 }
 
@@ -3777,10 +3884,10 @@ void debug_info(SDL_Surface* surf, int where)
         fmts << ";" << SDL_BITSPERPIXEL(fmtptr->format) << " bpp " << SDL_PixelFormatShortName(fmtptr->format);
     if (!numfmt) { count << "no fmts"; fmts << ";"; }
     else if (numfmt != 1) count << numfmt << " fmts: ";
-//    if (want_fmts && (numfmt != want_fmts)) err(RED_LT "Unexpected #formats: %d (wanted %d)" ENDCOLOR, numfmt, want_fmts);
-    if (!surf->pixels || (toint(surf->pixels) & 7)) err(RED_LT "Surface pixels not aligned on 8-byte boundary: 0x%x" ENDCOLOR, toint(surf->pixels));
-    if ((size_t)surf->pitch != sizeof(uint32_t) * surf->w) err(RED_LT "Unexpected pitch: %d should be %zu * %d = %zu" ENDCOLOR, surf->pitch, sizeof(uint32_t), surf->w, sizeof(uint32_t) * surf->w);
-    myprintf(18, BLUE_LT "Surface 0x%x: %d x %d, pitch %s, size %s, %s%s (from %d)" ENDCOLOR, toint(surf), surf->w, surf->h, commas(surf->pitch), commas(surf->h * surf->pitch), count.str().c_str(), fmts.str().c_str() + 1, where);
+//    if (want_fmts && (numfmt != want_fmts)) err(RED_MSG "Unexpected #formats: %d (wanted %d)" ENDCOLOR, numfmt, want_fmts);
+    if (!surf->pixels || (toint(surf->pixels) & 7)) err(RED_MSG "Surface pixels not aligned on 8-byte boundary: 0x%x" ENDCOLOR, toint(surf->pixels));
+    if ((size_t)surf->pitch != sizeof(uint32_t) * surf->w) err(RED_MSG "Unexpected pitch: %d should be %zu * %d = %zu" ENDCOLOR, surf->pitch, sizeof(uint32_t), surf->w, sizeof(uint32_t) * surf->w);
+    myprintf(18, BLUE_MSG "Surface 0x%x: %d x %d, pitch %s, size %s, %s%s (from %d)" ENDCOLOR, toint(surf), surf->w, surf->h, commas(surf->pitch), commas(surf->h * surf->pitch), count.str().c_str(), fmts.str().c_str() + 1, where);
 }
 
 
@@ -3833,7 +3940,7 @@ uint32_t hsv2rgb(float h, float s, float v)
     float p[3] = {_abs(_fract(h + 1.) * 6 - 3), _abs(_fract(h + 2/3.) * 6 - 3), _abs(_fract(h + 1/3.) * 6 - 3)};
     float rgb[3] = {v * _mix(h, _clamp(p[0] - 1, 0., 1.), s), v * _mix(h, _clamp(p[1] - 1, 0., 1.), s), v * _mix(1, _clamp(p[2] - 1, 0., 1.), s)};
     uint32_t color = toARGB(255, 255 * rgb[0], 255 * rgb[1], 255 * rgb[2]);
-//    myprintf(33, BLUE_LT "hsv(%f, %f, %f) => argb 0x%x" ENDCOLOR, h, s, v, color);
+//    myprintf(33, BLUE_MSG "hsv(%f, %f, %f) => argb 0x%x" ENDCOLOR, h, s, v, color);
     return color;
 }
 
@@ -3945,7 +4052,7 @@ void* errprintf(FILE* dest, const char* reason /*= 0*/, const char* fmt, ...)
         }
         nocolor += str;
         if (!OK(SDL_ShowSimpleMessageBox(0, nocolor.c_str(), details.c_str() + 2, auto_ptr<SDL_Window>::latest)))
-            printf(RED_LT "Show msg failed: %s" ENDCOLOR, SDL_GetError()); //CAUTION: recursion
+            printf(RED_MSG "Show msg failed: %s" ENDCOLOR, SDL_GetError()); //CAUTION: recursion
     }
 //    if (locked) locked = !OK(SDL_UnlockMutex(console.busy/*.cast*/)); //CAUTION: stays locked across ShowMessage(); okay if system-modal?
     return NULL; //probable failed ret val for caller
