@@ -169,7 +169,8 @@
 
 #define CONST  //should be const but function signatures aren't defined that way
 
-typedef enum {No = false, Yes = true, Maybe} tristate;
+//typedef enum {No = false, Yes = true, Maybe} tristate;
+enum class tristate: int {No = false, Yes = true, Maybe, Error = Maybe};
 
 #define uint24_t  uint32_t //kludge: use pre-defined type and just ignore first byte
 
@@ -956,11 +957,11 @@ private:
     {
         Thread* that = static_cast<Thread*>(data);
         myprintf(33, "kick child thread data 0x%x" ENDCOLOR, toint(that));
-        that->out.wake(that->main(that->in.wait()));
+        that->out.wake(that->main_bkg(that->in.wait()));
         myprintf(33, "child done async 0x%x" ENDCOLOR, toint(that));
         return SDL_Success; //TODO?
     }
-    virtual void* main(void* data) = 0; //must override in derived class
+    virtual void* main_bkg(void* data) = 0; //must override in derived class
 public:
 //    void* run(void* data = NULL, bool async = false)
 //    {
@@ -1272,15 +1273,15 @@ bool isRPi()
 {
 //NOTE: mutex not needed here
 //main thread will call first, so race conditions won't occur (benign anyway)
-    static std::atomic<tristate> isrpi(Maybe);
+    static std::atomic<tristate> isrpi(tristate::Maybe);
 //    static std::mutex protect;
 //    std::lock_guard<std::mutex> lock(protect); //not really needed (low freq api), but just in case
 
 //    myprintf(3, BLUE_MSG "isRPi()" ENDCOLOR);
 //    serialize.lock(); //not really needed (low freq api), but just in case
-    if (isrpi == Maybe) isrpi = exists("/boot/config.txt")? Yes: No;
+    if (isrpi == tristate::Maybe) isrpi = exists("/boot/config.txt")? tristate::Yes: tristate::No;
 //    serialize.unlock();
-    return (isrpi == Yes);
+    return (isrpi == tristate::Yes);
 }
 
 
@@ -1423,45 +1424,56 @@ private:
 public:
 //ctor/dtor:
 #ifdef SINGLE_THREADED_BKG
-    struct { const char* title; int num_univ; int univ_len; } CtorParams;
+    /*typedef*/ struct { const char* title; int num_univ; int univ_len; } CtorParams;
+//    enum class Tristate: int { False = 0, True = 1, Error = -1};
+    typedef void (*callback)(void* data, tristate done);
+    /*typedef*/ struct { uint32_t* pixels; uint64_t delay; callback cb; void* cbdata; } PaintParams;
+//    CtorParams cp;
+//    PaintParams pp;
     GpuCanvas(const char* title, int num_univ, int univ_len): Thread("GpuCanvas-bkg", true), started(now()) //, StatsAdjust(0)
     {
+//        CtorParams.title = title;
+//        CtorParams.num_univ = num_univ;
+//        CtorParams.univ_len = univ_len;
+        CtorParams = {title, num_univ, univ_len}; //CAUTION: needs to be on heap, *not* stack (going across threads)
         myprintf(22, BLUE_MSG "GpuCanvas init via bkg thread" ENDCOLOR);
-        CtorParams.title = title;
-        CtorParams.num_univ = num_univ;
-        CtorParams.univ_len = univ_len;
-        this->wake((void*)0x1234); //run main() asynchronously in bkg thread
+        this->wake(&CtorParams); //(void*)0x1234); //run main_bkg() asynchronously in bkg thread
 //        myprintf(22, BLUE_MSG "GpuCanvas wait for bkg" ENDCOLOR);
-        this->wait(); //wait for bkg thread to init
-        myprintf(22, BLUE_MSG "GpuCanvas bkg thread ready, ret to caller" ENDCOLOR);
+        bool ok = (bool)this->wait(); //wait for bkg thread to init
+        myprintf(22, BLUE_MSG "GpuCanvas bkg thread ready? %d, ret to caller" ENDCOLOR, ok);
     }
-    void* main(void* ignored)
+//bkg thread main logic:
+    void* main_bkg(void* ignored)
     {
+//        CtorParams* cp = reinterpret_cast<CtorParams*>(ptr);
+//        myprintf(22, BLUE_MSG "main_bkg: title '%s', #univ %d, univ len %d" ENDCOLOR, cp->title, cp->num_univ, cp->univ_len);
         ctor_bkg(CtorParams.title, CtorParams.num_univ, CtorParams.univ_len);
         out.wake((void*)true); //tell main thread i'm ready
         for (;;) //req loop
         {
+            myprintf(22, BLUE_MSG "canvas bkg loop waiting for work" ENDCOLOR);
+//            PaintParams* pp = reinterpret_cast<PaintParams*>(in.wait());
             void* req = in.wait();
+            myprintf(28, BLUE_MSG "main_bkg: woke, req 0x%lx, now paint? %d" ENDCOLOR, (long)req, !!req);
             if (!req) break; //eof
-            myprintf(28, BLUE_MSG "main_bkg: woke, now paint" ENDCOLOR);
-            bool ok = Paint(PaintParams.pixels, PaintParams.delay, PaintParams.cb);
+            bool ok = Paint(PaintParams.pixels, PaintParams.delay, PaintParams.cb, PaintParams.cbdata);
 //no; async completion            out.wake((void*)ok);
-            if (PaintParams.cb) PaintParams.cb(PaintParams.cbdata, true);
+
+            if (PaintParams.cb) PaintParams.cb(PaintParams.cbdata, ok? tristate::Yes: tristate::Error);
         }
         myprintf(8, MAGENTA_MSG "bkg renderer thread: exit after %2.1f msec" ENDCOLOR, elapsed(started));
 //        done = true;
         return (void*)true; //SDL_Success (async completion)
     }
-    typedef void (*callback)(void* data, bool done);
-    struct { uint32_t* pixels; callback cb; uint64_t delay; void* cbdata; } PaintParams;
     bool Paint_bkg(uint32_t* pixels = 0, uint64_t render_delay = 0, callback cb = 0, void* cbdata = 0)
     {
-        myprintf(22, BLUE_MSG "GpuCanvas paint via bkg thread" ENDCOLOR);
-        PaintParams.pixels = pixels;
-        PaintParams.delay = render_delay;
-        PaintParams.cb = cb;
-        PaintParams.cbdata = cbdata;
-        this->wake((void*)0x5678); //run Paint() asynchronously in bkg thread
+        PaintParams = {pixels, render_delay, cb, cbdata}; //CAUTION: needs to be on heap, *not* stack (going across threads)
+        myprintf(22, BLUE_MSG "GpuCanvas paint via bkg thread, &pp 0x%lx, pixels 0x%lx, cb 0x%lx, cbdata 0x%lx" ENDCOLOR, (long)&PaintParams, (long)PaintParams.pixels, (long)PaintParams.cb, (long)PaintParams.cbdata);
+//        PaintParams.pixels = pixels;
+//        PaintParams.delay = render_delay;
+//        PaintParams.cb = cb;
+//        PaintParams.cbdata = cbdata;
+        this->wake(&PaintParams); //(void*)0x5678); //run Paint() asynchronously in bkg thread
 //        myprintf(22, BLUE_MSG "GpuCanvas wait for bkg" ENDCOLOR);
 //no; async completion        bool ok = (bool)this->wait(); //wait for bkg thread to paint
 //        myprintf(22, BLUE_MSG "GpuCanvas paint bkg thread done, ret to caller" ENDCOLOR);
@@ -1553,7 +1565,7 @@ public:
         canvas = SDL_CreateTexture(renderer, pxbuf.cast->format->format, SDL_TEXTUREACCESS_STREAMING, pxbuf.cast->w, pxbuf.cast->h); //SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, wndw, wndh);
         TOFG();
 #else
-        this->wake((void*)0x1234); //run main() asynchronously in bkg thread
+        this->wake((void*)0x1234); //run main_bkg() asynchronously in bkg thread
         myprintf(22, BLUE_MSG "GpuCanvas wait for bkg" ENDCOLOR);
         this->wait(); //wait for bkg thread to init
 #endif
@@ -1592,7 +1604,7 @@ public:
 #ifdef MULTI_THREADED
 private:
 //bkg thread:
-    void* main(void* data)
+    void* main_bkg(void* data)
     {
 //        myprintf(33, "bkg thr main start" ENDCOLOR);
         uint64_t delta;
@@ -1874,20 +1886,27 @@ public:
     bool Paint(uint32_t* pixels = 0, uint64_t render_delay = 0, callback cb = 0, void* cbdata = 0) //void (*cb)(void) = 0) //, void* cb)
     {
         uint64_t delta;
+myprintf(22, BLUE_MSG "paint here1, pixels 0x%lx, cb 0x%lx, cbdata 0x%lx" ENDCOLOR, (long)pixels, (long)cb, (long)cbdata);
         delta = now() - times.previous; times.previous += delta; times.caller += delta;
+myprintf(22, BLUE_MSG "paint here1b" ENDCOLOR, pixels);
         if (pixels) //updated data from caller (optional)
         {
+myprintf(22, BLUE_MSG "paint here1c" ENDCOLOR);
             ++num_dirty;
             { //scope for locked texture
+myprintf(22, BLUE_MSG "paint here2" ENDCOLOR);
                 auto_ptr<SDL_LockedTexture> lock_HERE(canvas.cast); //SDL_LOCK(canvas));
 //                delta = now() - fg.previous; fg.lock_time += delta; fg.previous += delta;
 //NOTE: pixel data must be in correct (texture) format
 //NOTE: SDL_UpdateTexture is reportedly slow; use Lock/Unlock and copy pixel data directly for better performance
 //            memcpy(lock.data.surf.pixels, pxbuf.cast->pixels, pxbuf.cast->pitch * pxbuf.cast->h);
+myprintf(22, BLUE_MSG "paint here3" ENDCOLOR);
                 encode(pixels, (uint32_t*)lock.data.surf.pixels);
+myprintf(22, BLUE_MSG "paint here4" ENDCOLOR);
                 delta = now() - times.previous; times.previous += delta; times.encode += delta;
             }
-            if (cb) cb(cbdata, false);
+            if (cb) cb(cbdata, tristate::No);
+myprintf(22, BLUE_MSG "paint here5" ENDCOLOR);
 //            delta = now() - fg.previous; fg.encode_time += delta; fg.previous += delta;
 //slower; doesn't work with streaming texture?
 //        if (!OK(SDL_UpdateTexture(canvas, NORECT, pxbuf.cast->pixels, pxbuf.cast->pitch)))
@@ -1899,11 +1918,12 @@ public:
             }
             delta = now() - times.previous; times.previous += delta; times.update += delta;
         }
-        else if (cb) cb(cbdata, false);
+        else if (cb) cb(cbdata, tristate::No);
 //        while (render_delay > 0) //caller wants to throttle back frame rate
 //        if (render_delay) render_delay = 
 //    double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
 //    void ResetElapsed(double elaps = 0) { started = now() - elaps * SDL_TickFreq(); }
+myprintf(22, BLUE_MSG "paint here6" ENDCOLOR);
         for (;;) //throttle back frame rate
         {
 //            int age = 1000 * (times.previous - render_timestamp) / SDL_TickFreq(); //time since previous RenderPresent (msec)
@@ -3388,13 +3408,20 @@ NAN_METHOD(GpuCanvas_js::UnivType_tofix) //defines "info"; implicit HandleScope 
 
 
 //async callback wrapper:
-void* js_cbwrapper(GpuCanvas_js* canvas, bool done)
+void js_cbwrapper(void* ptr, tristate done) //GpuCanvas_js* canvas, void* cbdata)
 {
+//    GpuCanvas::Tristate done = reinterpret_cast<GpuCanvas::Tristate&>(cbdata); //https://stackoverflow.com/questions/19387647/c-invalid-cast-from-type-void-to-type-double
+    GpuCanvas_js* canvas = reinterpret_cast<GpuCanvas_js*>(ptr);
+    myprintf(22, BLUE_MSG "cb wrapper: canv ptr 0x%lx, done? %d" ENDCOLOR, (long)canvas, done);
     v8::Isolate* iso = v8::Isolate::GetCurrent(); //TODO: store in GpuCanvas_js?
     v8::HandleScope scope(iso); // Required for Node 4.x
-    v8::Handle<v8::Value> argv[] = { JS_BOOL(iso, done) };
-    v8::Local<v8::Function>::New(iso, canvas->cb)->Call(iso->GetCurrentContext()->Global(), 1, argv);
-    if (done) canvas->cb.Reset(); //free up persistent function callback
+//    v8::Handle<v8::Value> argv[] = (done != tristate::Error)? { JS_BOOL(iso, done == tristate::Yes) }: { JS_STR(iso, "error") };
+    std::vector<v8::Handle<v8::Value>> argv;
+    if (done != tristate::Error) argv.push_back(JS_BOOL(iso, done == tristate::Yes));
+    else argv.push_back(JS_STR(iso, "error"));
+myprintf(22, BLUE_MSG "cb wrapper here2" ENDCOLOR);
+    v8::Local<v8::Function>::New(iso, canvas->cb)->Call(iso->GetCurrentContext()->Global(), 1, argv.data());
+    if (done != tristate::No) canvas->cb.Reset(); //free up persistent function callback
 }
 
 
@@ -3514,7 +3541,7 @@ myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: wake up at elapsed %2.1f msec = %"
 myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: callback %s from %s:%d:%d" ENDCOLOR, i, info.Length(), (fnname && *fnname)? fnname: "??", (shortname && *shortname)? shortname + 1: "??", line, col);
 //            has_cb = true;
             state |= ParseStates::HAS_CB;
-myprintf(22, BLUE_MSG "%d" ENDCOLOR, state);
+//myprintf(22, BLUE_MSG "%d" ENDCOLOR, state);
         }
 #endif
 //        else return_void(errjs(iso, "GpuCanvas.paint: invalid arg[%d]: %s", i, (!has_px && !has_cb)? "uint32 array or callback function expected": !has_px? "uint32 array expected": !has_cb? "callback function expected": "unrecognized arg"));
@@ -3524,8 +3551,8 @@ myprintf(22, BLUE_MSG "%d" ENDCOLOR, state);
 //myprintf(22, BLUE_MSG "%d" ENDCOLOR, state & ParseStates::HAS_CB);
     if (state & ParseStates::HAS_CB) //has_cb) //async return
     {
-        myprintf(28, BLUE_MSG "js paint async callback" ENDCOLOR);
-        if (!canvas->inner.cast->Paint_bkg(canvas->pixels, canvas->render_delay, (GpuCanvas::callback)js_cbwrapper, (void*)canvas)) return_void(errjs(iso, "GpuCanvas.paint_bkg: failed"));
+        myprintf(33-5, BLUE_MSG "js paint async callback: canvas 0x%lx, pixels 0x%lx, cb 0x%lx, cbdata 0x%lx" ENDCOLOR, (long)canvas, (long)canvas->pixels, (long)&js_cbwrapper, (long)canvas);
+        if (!canvas->inner.cast->Paint_bkg(canvas->pixels, canvas->render_delay, js_cbwrapper, canvas)) return_void(errjs(iso, "GpuCanvas.paint_bkg: failed"));
         info.GetReturnValue().SetUndefined();
         return;
     }
