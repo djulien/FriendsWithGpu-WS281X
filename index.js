@@ -296,7 +296,7 @@ new Proxy(function(){},
         const auto_play = firstOf((opts || {}).AUTO_PLAY, OPTS.AUTO_PLAY[1], true);
 //        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
 debug("TODO: setImmediate or nextTick here?".red_lt)
-debug(optznStatus(THIS.));
+//debug(optimatizationStatus(THIS.));
         /*process.nextTick*/ step(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
         return THIS;
 
@@ -832,17 +832,22 @@ function firstOf(args) //prevval, curval) //, curinx, all)
 
 
 //show optimization status:
-function optznStatus(fn)
+//see https://glebbahmutov.com/blog/detecting-function-optimizations-in-v8/
+const optimizationStatus =
+module.exports.optimizationStatus =
+function optimizationStatus(fn)
 {
-    var name = fn.name;
-    switch (%GetOptimizationStatus(fn))
-    {
-        case 1: console.log(fn.name, "function is optimized"); break;
-        case 2: console.log(fn.name, "function is not optimized"); break;
-        case 3: console.log(fn.name, "function is always optimized"); break;
-        case 4: console.log(fn.name, "function is never optimized"); break;
-        case 6: console.log(fn.name, "function is maybe deoptimized"); break;
-    }
+    const STATES = {1: "", 2: "not ", 3: "always ", 4: "never ", 6: "maybe de"}
+//    var name = fn.name;
+    return `${fn.name} is ${STATES[GetOptimizationStatus(fn)] || "unknown "}optimizated`;
+//    switch (%GetOptimizationStatus(fn))
+//    {
+//        case 1: console.log(fn.name, "function is optimized"); break;
+//        case 2: console.log(fn.name, "function is not optimized"); break;
+//        case 3: console.log(fn.name, "function is always optimized"); break;
+//        case 4: console.log(fn.name, "function is never optimized"); break;
+//        case 6: console.log(fn.name, "function is maybe deoptimized"); break;
+//    }
 }
 
 function uint32toint(val)

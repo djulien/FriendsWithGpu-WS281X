@@ -1910,11 +1910,12 @@ public:
 //            if (age >= render_delay - 5) break;
 //            usleep()
             int delay = render_delay - times.previous;
+            myprintf(22, BLUE_MSG "throttle paint: delay %d ticks = %d usec" ENDCOLOR, delay, delay * 1000000 / SDL_TickFreq());
             if (delay < 2000) break; //2 msec close enough (compensate for O/S timing granularity)
-            myprintf(22, BLUE_MSG "throttle paint: %d = %d usec" ENDCOLOR, delay, delay * 1000000 / SDL_TickFreq());
             usleep(delay * 1000000 / SDL_TickFreq()); //blocking; NOTE: might wake prematurely (signals, etc)
             delta = now() - times.previous; times.previous += delta; times.throttle += delta;
         }
+        myprintf(22, BLUE_MSG "paint: RenderPresent" ENDCOLOR);
         SDL_RenderPresent(renderer); //update screen; NOTE: blocks until next V-sync (on RPi)
         delta = now() - times.previous; times.previous += delta; times.render += delta;
 //myprintf(22, "render present: old ts %2.3f sec, new ts %2.3f, rate %2.3f + %2.3f = %2.3f" ENDCOLOR, 
@@ -3401,12 +3402,12 @@ enum class ParseStates: int { NONE = 0, HAS_PX = 1, HAS_DELAY = 2, HAS_CB = 4};
 //    ParseStates& operator|(ParseStates& lhs, ParseStates& rhs) { return (int)lhs | (int)rhs; }
 //    ParseStates& operator&(ParseStates& lhs, ParseStates& rhs) { return (int)lhs & (int)rhs; }
 #define TOTYPE(thing)  static_cast<std::underlying_type<thing>::type>
-/*const ParseStates&*/ ParseStates operator |=(ParseStates lhs, ParseStates rhs)  
+/*const ParseStates&*/ ParseStates operator |=(ParseStates& lhs, const ParseStates& rhs)
 {
-    return static_cast<ParseStates>(TOTYPE(ParseStates)(lhs) | TOTYPE(ParseStates)(rhs));
+    return lhs = static_cast<ParseStates>(TOTYPE(ParseStates)(lhs) | TOTYPE(ParseStates)(rhs));
 }
 // /*const ParseStates&*/ ParseStates operator &(ParseStates lhs, ParseStates rhs)  
-/*const ParseStates&*/ /*ParseStates*/ bool operator &(ParseStates lhs, ParseStates rhs)  
+/*const ParseStates&*/ /*ParseStates*/ bool operator &(const ParseStates& lhs, const ParseStates& rhs)
 {
     return (static_cast<ParseStates>(TOTYPE(ParseStates)(lhs) & TOTYPE(ParseStates)(rhs)) != ParseStates::NONE);
 }
@@ -3485,31 +3486,42 @@ myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: pixels %d:0x%x 0x%x 0x%x ..." ENDC
 //    double PresentTime() { return started? elapsed(started): -1; } //presentation timestamp (according to bkg rendering thread)
 //    void ResetElapsed(double elaps = 0) { started = now() - elaps * SDL_TickFreq(); }
 //    if (!value->IsUndefined()) canvas->inner.cast->ResetElapsed(value->NumberValue());
-        	canvas->render_delay = now() - info[i]->NumberValue() * SDL_TickFreq(); //elapsed time (sec) => tick count
+//        	canvas->render_delay = info[i]->NumberValue() * SDL_TickFreq() + started; //- now(); //elapsed time (sec) => tick count
+        	canvas->render_delay = now() + (info[i]->NumberValue() - canvas->inner.cast->PresentTime()) * SDL_TickFreq(); //- now(); //elapsed time (sec) => tick count
+//            uint64_t started = now() - elapsed()
+//elapsed = (now - started) / freq
+//elapsed * freq + started = now
+//PresentTime = elapsed(started)
+//now = ticks()
 //            has_delay = true;
-myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: render delay %2.1f usec = %" PRIu64 " ticks = %f2.1 usec" ENDCOLOR, i, info.Length(), (double)1000000 * info[i]->NumberValue(), canvas->render_delay, elapsed(canvas->render_delay) * 1000000);
+myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: wake up at elapsed %2.1f msec = %" PRIu64 " ticks = %2.1f msec" ENDCOLOR, i, info.Length(), (double)1000 * info[i]->NumberValue(), canvas->render_delay, elapsed(canvas->render_delay) * 1000);
             state |= ParseStates::HAS_DELAY;
         }
         else if (info[i]->IsFunction() && !(state & ParseStates::HAS_CB)) //has_cb) //async callback
         {
             v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[i]);
+            v8::String::Utf8Value funcname(callback->GetName()); //.ToString()); //scallback->GetName()->ToString());
+            const char* fnname = *funcname? *funcname: 0;
 //callback->GetName()
 //callback->GetInferredName()
 //callback->GetDisplayName()
             v8::ScriptOrigin script = callback->GetScriptOrigin();
-            v8::String::Utf8Value funcname(script.ResourceName().ToString()); //scallback->GetName()->ToString());
-            int line = script.ResourceLineOffset(); //callback->GetScriptLineNumber();
-            int col = script.ResourceColumnOffset(); //callback->GetScriptColumnNumber();
+            v8::String::Utf8Value srcname(script.ResourceName()); //.ToString()); //scallback->GetName()->ToString());
+            const char* shortname = *srcname? strrchr(*srcname, '/'): 0;
+            uint32_t line = script.ResourceLineOffset()->Uint32Value(); //IntegerValue(); //callback->GetScriptLineNumber();
+            uint32_t col = script.ResourceColumnOffset()->Uint32Value(); //IntegerValue(); //callback->GetScriptColumnNumber();
             canvas->cb.Reset(iso, callback);
-myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: callback %s from %d:%d" ENDCOLOR, i, info.Length(), *funcname? *funcname: "??");
+myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: callback %s from %s:%d:%d" ENDCOLOR, i, info.Length(), (fnname && *fnname)? fnname: "??", (shortname && *shortname)? shortname + 1: "??", line, col);
 //            has_cb = true;
             state |= ParseStates::HAS_CB;
+myprintf(22, BLUE_MSG "%d" ENDCOLOR, state);
         }
 #endif
 //        else return_void(errjs(iso, "GpuCanvas.paint: invalid arg[%d]: %s", i, (!has_px && !has_cb)? "uint32 array or callback function expected": !has_px? "uint32 array expected": !has_cb? "callback function expected": "unrecognized arg"));
         else return_void(errjs(iso, "GpuCanvas.paint: invalid arg[%d]: %s", i, REASONS[(int)state]));
 
 #ifdef SINGLE_THREADED_BKG
+//myprintf(22, BLUE_MSG "%d" ENDCOLOR, state & ParseStates::HAS_CB);
     if (state & ParseStates::HAS_CB) //has_cb) //async return
     {
         myprintf(28, BLUE_MSG "js paint async callback" ENDCOLOR);

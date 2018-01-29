@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// d8 --trace_opt --trace-deopt --prof
+// --allow-natives-syntax
 //Pin finder RGB patterns: tests GPU config, GPIO pins, and WS281X connections
 //Sends out a different pattern on each GPIO pin to make them easier to identify.
 //Copyright (c) 2016-2018 Don Julien
@@ -23,7 +25,7 @@ const os = require('os');
 const {debug/*, elapsed*/} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
-const {Screen, GpuCanvas/*, wait, elapsed, cluster, AtomicAdd*/} = require('gpu-friends-ws281x');
+const {Screen, GpuCanvas/*, wait, elapsed, cluster, AtomicAdd, optimizationStatus*/} = require('gpu-friends-ws281x');
 //const EPOCH = cluster.isWorker? elapsed(+process.env.EPOCH): elapsed(); //use consistent time base for logging
 //debug(`epoch ${EPOCH}, master? ${cluster.isMaster}`.blue_lt); //TODO: fix shared time base
 //console.log(JSON.stringify(Screen));
@@ -252,6 +254,7 @@ throw new Error("todo".red_lt);
     perf.time = this.elapsed = 0; //elapsed(0);
 //    if (OPTS.gpufx) canvas.fill(GPUFX); //generate fx on GPU
 //    var hd = new memwatch.HeapDiff();
+//debug(optimatizationStatus(this.render).blue_lt);
     for (var frnum = 1; this.elapsed <= DURATION; ++frnum)
     {
 //        var now = this.elapsed;
@@ -339,6 +342,7 @@ function render(frnum, timestamp)
 
 //    models.forEach(model => { model.render(frnum, timestamp); });
     var mymodels = models.reduce((count, model) => { if (!OPTS.NUM_WKERS || (model.affinity == canvas.WKER_ID)) ++count; return count; }, 0);
+//debug(optimizationStatus(this.render).blue_lt);
     debug(`TODO: ${this.prtype} '${process.pid}' render fr# ${frnum}, ${mymodels} models, timestamp ${timestamp}`.yellow_lt);
 //    if (OPTS.NUM_WKERS && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; bypass remaining init
     usleep(5000); //simulate processing (5 msec)
@@ -454,5 +458,5 @@ function trunc(val, digits)
 //    return Date.now() / 1000;
 //}
 
-debug("eof".blue_lt);
+debug(`eof ${canvas.prtype} '${process.pid}'`.blue_lt);
 //eof
