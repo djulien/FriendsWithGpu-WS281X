@@ -20,6 +20,7 @@
 //mlock/munlock: http://man7.org/linux/man-pages/man2/mlock.2.html
 //lock-free (wait-free) fifo: http://moodycamel.com/blog/2013/a-fast-lock-free-queue-for-c++
 // https://github.com/cameron314/concurrentqueue
+//or maybe http://docs.libuv.org/en/v1.x/threading.html
 
 //master: on end of encode: ++frnum; wake up all wkers
 //wker: on end of last wker render: wake up main; encode_start();
@@ -3085,6 +3086,8 @@ public:
     uint32_t* pixels; //pixel buf
     uint64_t render_delay; //throttle frame rate
     v8::Persistent<v8::Function> cb; //async paint callback
+//    uv_work_t uv_bkg_shim;
+    uv_async_t async_uv;
 public:
 //    static void Init(v8::Handle<v8::Object> exports);
     static void Init(v8::Local<v8::Object> exports);
@@ -3093,9 +3096,17 @@ public:
 //protected:
 private:
 //    explicit GpuCanvas_js(const char* title, int w, int h, bool pivot): inner(title, w, h, pivot) { all.push_back(this); };
-    explicit GpuCanvas_js(const char* title, int w, int h/*, bool pivot*/): inner(new GpuCanvas(title, w, h/*, pivot*/)) { all.push_back(this); };
+    explicit GpuCanvas_js(const char* title, int w, int h/*, bool pivot*/): inner(new GpuCanvas(title, w, h/*, pivot*/))
+    {
+        all.push_back(this);
+        if (uv_async_init(uv_default_loop(), &async_uv, ) < 0) //NOTE: must be called on main thread (with libuv loop)
+    };
 //    virtual ~GpuCanvas_js();
-    ~GpuCanvas_js() { all.erase(std::find(all.begin(), all.end(), this)); };
+    ~GpuCanvas_js()
+    {
+        uv_close(); //NOTE: must also be called on main (libuv loop) thread
+        all.erase(std::find(all.begin(), all.end(), this));
+    };
 
 //    static NAN_METHOD(New);
     static void New(const v8::FunctionCallbackInfo<v8::Value>& info); //TODO: convert to Nan?
@@ -3408,11 +3419,18 @@ NAN_METHOD(GpuCanvas_js::UnivType_tofix) //defines "info"; implicit HandleScope 
 
 
 //async callback wrapper:
+//see http://nikhilm.github.io/uvbook/threads.html
+//and https://stackoverflow.com/questions/36987273/callback-nodejs-javascript-function-from-multithreaded-c-addon
+//and https://stackoverflow.com/questions/15685793/callback-from-different-thread-in-nodejs-native-extension
 void js_cbwrapper(void* ptr, tristate done) //GpuCanvas_js* canvas, void* cbdata)
 {
+//    uv_queue_work(uv_default_loop(), ptr, WorkAsync, WorkAsyncComplete);
 //    GpuCanvas::Tristate done = reinterpret_cast<GpuCanvas::Tristate&>(cbdata); //https://stackoverflow.com/questions/19387647/c-invalid-cast-from-type-void-to-type-double
     GpuCanvas_js* canvas = reinterpret_cast<GpuCanvas_js*>(ptr);
     myprintf(22, BLUE_MSG "cb wrapper: canv ptr 0x%lx, done? %d" ENDCOLOR, (long)canvas, done);
+
+    uv_async_send(); //NOTE: safe to call this from any thread
+
     v8::Isolate* iso = v8::Isolate::GetCurrent(); //TODO: store in GpuCanvas_js?
     v8::HandleScope scope(iso); // Required for Node 4.x
 //    v8::Handle<v8::Value> argv[] = (done != tristate::Error)? { JS_BOOL(iso, done == tristate::Yes) }: { JS_STR(iso, "error") };
@@ -3553,7 +3571,9 @@ myprintf(33-5, BLUE_MSG "js paint arg[%d/%d]: callback %s from %s:%d:%d" ENDCOLO
     {
         myprintf(33-5, BLUE_MSG "js paint async callback: canvas 0x%lx, pixels 0x%lx, cb 0x%lx, cbdata 0x%lx" ENDCOLOR, (long)canvas, (long)canvas->pixels, (long)&js_cbwrapper, (long)canvas);
         if (!canvas->inner.cast->Paint_bkg(canvas->pixels, canvas->render_delay, js_cbwrapper, canvas)) return_void(errjs(iso, "GpuCanvas.paint_bkg: failed"));
-        info.GetReturnValue().SetUndefined();
+//        canvas->uv_bkg_shim.data = canvas;
+//        uv_queue_work(uv_default_loop(), &canvas->uv_bkg_shim, WorkAsync_shim, WorkAsyncComplete_shim);
+        info.GetReturnValue().SetUndefined(iso);
         return;
     }
 #endif
