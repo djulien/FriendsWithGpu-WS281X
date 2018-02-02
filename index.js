@@ -402,12 +402,21 @@ function* master_async(num_wkers, auto_play)
     var pending = num_wkers; //#remaining replies
     for (var w = 0; w < num_wkers; ++w)
     {
-        var wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
+        let wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
 //        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
+//        var wker2 = cluster.workers[Object.keys(cluster.workers)[0]]; //same thing
+console.log(wker.process._channel);
+console.log(wker.process.channel);
+console.log(wker.process.channel.onread);
+console.log(wker.process.channel.sockets.got);
+console.log(wker.process.channel.sockets.send);
+//NODE_CHANNEL_FD doesn't work here; https://stackoverflow.com/questions/41033716/send-ipc-message-with-sh-bash-to-parent-process-node-js
         wker.on('message', (msg) =>
         {
+            wker.ipc1 = msg.ipc1;
+            wker.ipc2 = msg.ipc2;
 //            debug(`got msg ${JSON.stringify(msg)} from bkg wker`.blue_lt);
-            debug(`master '${process.pid}' got msg ${JSON.stringify(msg)}, pending ${pending}`.blue_lt);
+            debug(`master '${process.pid}' got msg ${JSON.stringify(msg)}, expecting fr# ${frnum}, pending ${pending}`.blue_lt);
 //            if (msg.ack) { if (!--pending) step(); return; } //all wkers replied; wake up master
 //            throw new Error(`Unhandled msg: ${JSON.stringify(msg)}`.red_lt);
             if (msg.rendered != frnum) throw new Error(`reply mismatch: got fr#${msg.rendered}, expected ${frnum}`.red_lt);
@@ -439,16 +448,18 @@ function* master_async(num_wkers, auto_play)
 //    yield* this.playback();
     this.elapsed = 0;
     const DURATION = 5; //TODO
-    for (/*var frnum = 0*/; frnum < DURATION * this.FPS; ++frnum)
+//    for (/*var frnum = 0*/; frnum < DURATION * this.FPS; ++frnum) //++ is too late here
+    while (frnum < DURATION * this.FPS)
     {
 //        yield this.render(frnum);
         yield; //wait for all wkers to render+reply
 //        encode_bkg(); //blocking
 //        yield this.paint();
-        yield this.paint(this.pixels, (frnum + 1) / this.FPS, (done) => //async, double-blocking (cb called 2x)
+        ++frnum; //do this before broadcast; replies will (hopefully) come back before end of loop
+        yield this.paint(this.pixels, frnum / this.FPS, (done) => //async, double-blocking (cb called 2x)
         {
-            debug(`async paint cb(done ${done}`.blue_lt);
-            if (!done) return broadcast({frnum: frnum + 1}); //wake up children after encode
+            debug(`async paint cb: done ${done}`.blue_lt);
+            if (!done) return broadcast({frnum}); //: frnum + 1}); //wake up children after encode
 //            yield this.wait((frnum + 1) / this.FPS); //throttle
 //            RenderPresent_bkg(); //blocking
             step(); //wake up master after RenderPresent

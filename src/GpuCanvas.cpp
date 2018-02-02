@@ -125,7 +125,7 @@
 #include <stdarg.h> //varargs
 #include <sys/shm.h> //shmatt, shmget, shmctl
 //?? #define _MULTI_THREADED
-#include <pthread.h> //rwlock
+//#include <pthread.h> //rwlock
 //#include <linux/fb.h> //fb_var_screeninfo, fb_fix_screeninfo
 //#include <sys/ioctl.h> //ioctl
 //#include <byteswap.h> //bswap_32(x)
@@ -842,11 +842,11 @@ private:
 public:
     Signal() //: cond(NULL)
     {
-        myprintf(22, BLUE_MSG "sig ctor: count %d, m 0x%x, c 0x%x" ENDCOLOR, count, toint(mutex.cast), toint(cond.cast));
+        myprintf(22+10, BLUE_MSG "sig ctor: count %d, m 0x%x, c 0x%x" ENDCOLOR, count, toint(mutex.cast), toint(cond.cast));
         if (!count++)
             if (!(mutex = SDL_CreateMutex())) exc(RED_MSG "Can't create signal mutex" ENDCOLOR); //throw SDL_Exception("SDL_CreateMutex");
         if (!(cond = SDL_CreateCond())) exc(RED_MSG "Can't create signal cond" ENDCOLOR); //throw SDL_Exception("SDL_CreateCond");
-        myprintf(22, YELLOW_MSG "signal 0x%x has m 0x%x, c 0x%x" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast));
+        myprintf(22+10, YELLOW_MSG "signal 0x%x has m 0x%x, c 0x%x" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast));
     }
     ~Signal() { if (!--count) mutex = NULL; }
 public:
@@ -2656,11 +2656,11 @@ private:
         double rowtime = (double)scfg.mode_line.htotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) / vinfo.pixclock; //must be ~ 30 usec for WS281X
         double frametime = (double)scfg.mode_line.htotal * scfg.mode_line.vtotal / scfg.dot_clock / 1000; //(vinfo.xres + hblank) * (vinfo.yres + vblank) / vinfo.pixclock;
 
-        myprintf(28, BLUE_MSG "Screen[%d/%d] timing: %d x %d, pxclk %2.1f MHz, hblank %d+%d+%d = %d (%2.1f%%), vblank = %d+%d+%d = %d (%2.1f%%), row %2.1f usec, frame %2.1f msec (fps %2.1f)" ENDCOLOR, i, num_screens,
+        myprintf(28, BLUE_MSG "Screen[%d/%d] timing: %d x %d, pxclk %2.1f MHz, hblank %d+%d+%d = %d (%2.1f%%), vblank = %d+%d+%d = %d (%2.1f%%), row %2.1f usec (%2.1f%% target), frame %2.1f msec (fps %2.1f)" ENDCOLOR, i, num_screens,
             scfg.mode_line.hdisplay, scfg.mode_line.vdisplay, (double)scfg.dot_clock / 1000, //vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, vinfo.pixclock,
             scfg.mode_line.hsyncstart - scfg.mode_line.hdisplay, scfg.mode_line.hsyncend - scfg.mode_line.hsyncstart, scfg.mode_line.htotal - scfg.mode_line.hsyncend, scfg.mode_line.htotal - scfg.mode_line.hdisplay, (double)100 * (scfg.mode_line.htotal - scfg.mode_line.hdisplay) / scfg.mode_line.htotal, //vinfo.left_margin, vinfo.right_margin, vinfo.hsync_len, 
             scfg.mode_line.vsyncstart - scfg.mode_line.vdisplay, scfg.mode_line.vsyncend - scfg.mode_line.vsyncstart, scfg.mode_line.vtotal - scfg.mode_line.vsyncend, scfg.mode_line.vtotal - scfg.mode_line.vdisplay, (double)100 * (scfg.mode_line.vtotal - scfg.mode_line.vdisplay) / scfg.mode_line.vtotal, //vinfo.upper_margin, vinfo.lower_margin, vinfo.vsync_len,
-            1000000 * rowtime, 1000 * frametime, 1 / frametime);
+            1000000 * rowtime, rowtime / 300000, 1000 * frametime, 1 / frametime);
 //    close(fbfd);
 //        ok = true;
         Release(display); //XCloseDisplay(display);
@@ -2857,6 +2857,7 @@ NAN_GETTER(Screen_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
 // memcpy.100k > cc Buffer -> ArrayBuffer: 23.861ms
 //from ws281x-gpu.cpp 2016
 //based on https://github.com/vpj/node_shm/blob/master/shm_addon.cpp
+//bkg info: https://stackoverflow.com/questions/5656530/how-to-use-shared-memory-with-linux-in-c
 //to see shm segs:  ipcs -a
 //to delete:  ipcrm -M key
 NAN_METHOD(shmbuf_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
@@ -2932,6 +2933,12 @@ NAN_METHOD(AtomicAdd_js) //defines "info"; implicit HandleScope (~ v8 stack fram
 }
 #endif //0
 
+
+//#define WANT_RWLOCK //turned out not to help
+#define WANT_SIGNAL //try this one instead
+
+#ifdef WANT_RWLOCK
+#include <pthread.h> //rwlock
 
 //rwlock consts:
 enum RwlockOps { Init = 1, RdLock = 2, RdLockTry = 3, WrLock = 4, WrLockTry = 5, Unlock = 6, Destroy = 7};
@@ -3018,6 +3025,128 @@ NAN_METHOD(rwlock_js)
     else info.GetReturnValue().Set(JS_BOOL(iso, false)); //0 == success, !0 == errno
 //    info.GetReturnValue().SetUndefined();
 }
+#endif
+
+
+#ifdef WANT_SIGNAL
+//#include <unistd.h> //getpid
+//#include <sys/types.h>
+//send or wait for a signal (cond + mutex):
+//signals are an array of process pids in shared memory, used as mailboxes
+//only one msg is allowed per pid, indicated by pid != 0
+
+#define U32SIZE(thing)  divup(sizeof(thing), sizeof(uint32_t))
+
+//signal consts:
+enum SignalOps { Init = 1, Set = 2, Reset = 3, Destroy = 4};
+NAN_GETTER(SignalOps_js) //defines "info"; implicit HandleScope (~ v8 stack frame)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+
+    v8::Local<v8::Object> retval = v8::Object::New(iso);
+    retval->Set(JS_STR(iso, "INIT"), JS_INT(iso, SignalOps::Init));
+    retval->Set(JS_STR(iso, "SET"), JS_INT(iso, SignalOps::Set));
+    retval->Set(JS_STR(iso, "RESET"), JS_INT(iso, SignalOps::Reset));
+    retval->Set(JS_STR(iso, "DESTROY"), JS_INT(iso, SignalOps::Destroy));
+
+//    CONST_thing("RWLOCK_SIZE32", divup(__SIZEOF_PTHREAD_RWLOCK_T, sizeof(uint32_t)));
+    retval->Set(JS_STR(iso, "SIZE32"), JS_INT(iso, U32SIZE(SDL_mutex) + U32SIZE(SDL_cond));
+//    Nan::Export(target, "UnivTypes", UnivTypes);
+//    CONST_thing("UnivTypes", UnivTypes);
+    info.GetReturnValue().Set(retval);
+}
+
+
+//set/reset signal:
+//NOTE: this works across processes if uint32array is in shared memeory
+//usage: signal(uint32array, key, op); //op == 1 for init, 2 for set, 3 for reset, 4 for destroy
+NAN_METHOD(signal_js)
+{
+    v8::Isolate* iso = info.GetIsolate(); //~vm heap
+    if (info.Length() != 3) return_void(errjs(iso, "signal: expected 3 params, got %d", info.Length()));
+    int key = info[1]->IntegerValue(), op = info[2]->IntegerValue();
+    if (!key) return_void(errjs(iso, "signal: expected second param of non-0 int"));
+	if (!info[0]->IsUint32Array()) return_void(errjs(iso, "signal: expected first param of uint32 array"));
+    int numsig = aryp->Length() / sizeof(uint32_t) - U32SIZE(std::mutex) - U32SIZE(std::cond);
+    if (numsig < 2) return_void(errjs(iso, "signal: array length bad: is %d, should be at least %d", aryp->Length(), (U32SIZE(std::mutex) + U32SIZE(std::cond) + 2) * sizeof(uint32_t)));
+    v8::Local<v8::Uint32Array> aryp = info[0].As<v8::Uint32Array>();
+    uint32_t* data = (uint32_t*)aryp->Buffer()->GetContents().Data() + aryp->ByteOffset(); //CAUTION: might be slice
+//NOTE: need to use std::* here due to "incomplete type" errors on SDL_* types
+//    SDL_mutex& mutex = *(SDL_mutex*)&data[0];
+//    SDL_cond& cond = *(SDL_cond*)&data[U32SIZE(SDL_mutex)];
+//http://en.cppreference.com/w/cpp/thread/condition_variable
+    std::mutex& mutex = *(std::mutex*)&data[0];
+    std::condition_variable& cond = *(std::condition_variable*)&data[U32SIZE(std::mutex)];
+    uint32_t* pids = &data[U32SIZE(std::mutex) + U32SIZE(std::condition_variable)];
+//    pid_t mypid = getpid();
+//    const char* opname;
+    int retval = 0;
+
+    info.GetReturnValue().SetUndefined();
+    switch (op)
+    {
+        case SignalOps::Init: //init (unlocked state)
+//            if (!(mutex = SDL_CreateMutex())) return_void(errjs(iso, RED_MSG "Can't create signal mutex" ENDCOLOR)); //throw SDL_Exception("SDL_CreateMutex");
+//            if (!(cond = SDL_CreateCond())) return_void(errjs(iso, RED_MSG "Can't create signal cond" ENDCOLOR)); //throw SDL_Exception("SDL_CreateCond");
+            mutex.std::mutex::std::mutex(); //call ctor
+            cond.std::condition_variable::std::condition_variable();
+            for (int i = 0; i < numsig; ++i) pids[i] = 0; //start all cleared
+//            opname = "Init";
+            return;
+//            break;
+        case SignalOps::Set: //wake
+            { //scope for locked mutex
+//                auto_ptr<SDL_LockedMutex> lock_HERE(mutex); //SDL_LOCK(mutex));
+                std::lock_guard<std::mutex> lock(mutex); //to modify the cond var; ctor locks mutex
+//                for (;;) //NOTE: need loop in order to handle "spurious wakeups"
+                for (int i = 0; i < numsig; ++i)
+                    if (pids[i] == key) return_void(errjs(iso, "signal: key '%d' is already set", key)); //protect against backlogged signals; also ensures uniqueness
+                for (int i = 0; i < numsig; ++i)
+                    if (!pids[i])
+                    {
+                        pids[i] = key;
+                        if (!OK(SDL_CondSignal(cond))) return_void(errjs(RED_MSG "Send signal for key %d failed" ENDCOLOR, key)); //throw SDL_Exception("SDL_CondSignal");
+                        myprintf(30-5, BLUE_MSG "signal: set key[%d/%d] to 0x%x, sent signal" ENDCOLOR, i, numsig, key);
+                        return;
+                    }
+                return_void(errjs(iso, "signal: no empty slots (%d already set)", numsig));
+            }
+//            opname = "Set (wake)";
+            break;
+        case SignalOps::Reset: //wait
+            { //scope for locked mutex
+//                auto_ptr<SDL_LockedMutex> lock_HERE(mutex); //SDL_LOCK(mutex));
+                std::unique_lock<std::mutex> lock(mutex); //to wait on the cond var; allows manual un/lock
+                for (bool first = true;; first = false) //NOTE: need loop in order to handle "spurious wakeups"
+                {
+                    for (int i = 0; i < numsig; ++i)
+                        if (pids[i] == key)
+                        {
+                            if (first) return_void(errjs(iso, "signal: key '%d' is already set", key)); //protect against premature signals
+                            myprintf(30-5, BLUE_MSG "signal: reset key[%d/%d] 0x%x, wake up now" ENDCOLOR, i, numsig, key);
+                            pids[i] = 0;
+                            return;
+                        }
+//                    if (!OK(SDL_CondWait(cond, mutex))) return_void(errjs(iso, RED_MSG "Wait for signal 0x%x:(0x%x,0x%x) failed" ENDCOLOR, toint(data), toint(mutex), toint(cond))); //throw SDL_Exception("SDL_CondWait");
+                    cond.wait(mutex);
+//                    if (!this->pending.size()) err(YELLOW_MSG "Ignoring spurious wakeup" ENDCOLOR); //paranoid
+                }
+            }
+//            opname = "Reset (wait)";
+            break;
+        case SignalOps::Destroy: //destroy
+//            mutex = cond = NULL;
+            cond.~std::condition_variable(); //call dtor
+            mutex.~std::mutex();
+            break;
+        default:
+            return_void(errjs(iso, "signal: unknown op %d", op));
+    }
+//    myprintf(33-5, BLUE_MSG "signal: %s (op %d), result %d (%s)" ENDCOLOR, opname, op, retval, strerror(retval));
+//    if (retval) info.GetReturnValue().Set(JS_STR(iso, strerror(retval)));
+//    else info.GetReturnValue().Set(JS_BOOL(iso, false)); //0 == success, !0 == errno
+}
+#endif
 
 
 //short sleep (usec):
@@ -3088,9 +3217,11 @@ public:
     struct
     {
         v8::Persistent<v8::Function> cb; //async paint callback
+//        Nan::Callback* callback;
         uv_async_t req;
         int seqnum, err;
         tristate done;
+        uint64_t ticks; //timestamp for performance tracking
     } async;
 //    uv_work_t uv_bkg_shim;
     static void async_msg(uv_async_t* req);
@@ -3105,7 +3236,7 @@ private:
     explicit GpuCanvas_js(const char* title, int w, int h/*, bool pivot*/): inner(new GpuCanvas(title, w, h/*, pivot*/))
     {
         all.push_back(this);
-        async.req.data = this;
+        async.req.data = this; //find myself later
         async.seqnum = -1;
         async.err = uv_async_init(uv_default_loop(), &async.req, async_msg); //NOTE: must be called on main thread (with libuv loop)
     };
@@ -3444,12 +3575,13 @@ void js_cbwrapper(void* ptr, tristate done) //GpuCanvas_js* canvas, void* cbdata
     GpuCanvas_js* canvas = reinterpret_cast<GpuCanvas_js*>(ptr);
     ++canvas->async.seqnum; //check for coallesced events
     canvas->async.done = done;
-    myprintf(22, BLUE_MSG "cb wrapper: canv ptr 0x%lx, send msg#%d, done? %d @%2.1f msec" ENDCOLOR, (long)canvas, canvas->async.seqnum, done, canvas->inner.cast->PresentTime() * 1000);
+    canvas->async.ticks = now(); //uv_hrtime(); //only for debug
+    myprintf(22, BLUE_MSG "cb wrapper: canv ptr 0x%lx, send msg[%d], done? %d @%2.1f msec, timebase %ld" ENDCOLOR, (long)canvas, canvas->async.seqnum, done, canvas->inner.cast->PresentTime() * 1000, now() - uv_hrtime());
 //    v8::Isolate* iso = v8::Isolate::GetCurrent();
     myprintf(22, YELLOW_MSG "TODO: post ipc msg to child procs here to bypass 2nd async delay" ENDCOLOR);
     int ok = canvas->async.err = uv_async_send(&canvas->async.req); //NOTE: safe to call this from any thread
 //    if (ok < 0) return_void(jserr(iso, "cbwrapper: uv_async_send failed: %d", ok));
-    myprintf(22, "%scb wrapper: msg sent ok? %d, retcode %d" ENDCOLOR, (ok < 0)? RED_MSG: BLUE_MSG, (ok >= 0), ok);
+    myprintf(22, "%scb wrapper: msg[%d] sent ok? %d, retcode %d" ENDCOLOR, (ok < 0)? RED_MSG: BLUE_MSG, canvas->async.seqnum, (ok >= 0), ok);
 }
 
 
@@ -3460,7 +3592,7 @@ void GpuCanvas_js::async_msg(uv_async_t* req)
 {
     GpuCanvas_js* canvas = reinterpret_cast<GpuCanvas_js*>(req->data);
     tristate done = canvas->async.done;
-    myprintf(22, BLUE_MSG "async responder: canv ptr 0x%lx, seqnum %d, err %d, done? %d @%2.1f msec" ENDCOLOR, (long)canvas, canvas->async.seqnum, canvas->async.err, canvas->async.done, canvas->inner.cast->PresentTime() * 1000);
+    myprintf(22, BLUE_MSG "async responder: canv ptr 0x%lx, seqnum %d, err %d, done? %d @%2.1f msec, latency %ld" ENDCOLOR, (long)canvas, canvas->async.seqnum, canvas->async.err, canvas->async.done, canvas->inner.cast->PresentTime() * 1000, now() - canvas->async.ticks);
     v8::Isolate* iso = v8::Isolate::GetCurrent(); //TODO: store in GpuCanvas_js?
     v8::HandleScope scope(iso); //for Node 4.x; TODO: is this needed?
 //    v8::Handle<v8::Value> argv[] = (done != tristate::Error)? { JS_BOOL(iso, done == tristate::Yes) }: { JS_STR(iso, "error") };
@@ -3702,8 +3834,14 @@ NAN_MODULE_INIT(exports_js) //defines target
 //                 Nan::New<v8::FunctionTemplate>(shmatt_entpt)->GetFunction());
 //    Nan::Export(target, "AtomicAdd", AtomicAdd_js);
     Nan::Export(target, "shmbuf", shmbuf_js);
+#ifdef WANT_RWLOCK
     Nan::Export(target, "rwlock", rwlock_js);
     Nan::SetAccessor(target, JS_STR(iso, "RwlockOps"), RwlockOps_js);
+#endif
+#ifdef WANT_SIGNAL
+    Nan::Export(target, "signal", signal_js);
+    Nan::SetAccessor(target, JS_STR(iso, "SignalOps"), SignalOps_js);
+#endif
     Nan::Export(target, "usleep", usleep_js);
     Nan::SetAccessor(target, JS_STR(iso, "UnivTypes"), UnivTypes_js);
 //    target->SetAccessor(JS_STR(iso, "Screen"), Screen_js);
@@ -3945,6 +4083,7 @@ void debug_info(SDL_Window* window, int where)
 //SDL_Renderer info:
 void debug_info(SDL_Renderer* renderer, int where)
 {
+return; //TMI
     myprintf(12, BLUE_MSG "%d render driver(s): (from %d)" ENDCOLOR, SDL_GetNumRenderDrivers(), where);
     for (int i = 0; i <= SDL_GetNumRenderDrivers(); ++i)
     {
