@@ -6,6 +6,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string.h> //strlen
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -29,7 +30,21 @@ public:
             if (*it == that) return it - this->begin();
         return -1;
     }
+    std::string join(const char* sep = ",", const char* if_empty = "")
+    {
+        std::stringstream buf;
+        for (auto it = this->begin(); it != this->end(); ++it)
+            buf << sep << *it;
+//        return this->size()? buf.str().substr(strlen(sep)): buf.str();
+        if (!this->size()) buf << sep << if_empty; //"(empty)";
+        return buf.str().substr(strlen(sep));
+    }
 };
+
+
+std::mutex atomic_mut;
+//use macro so stmt can be nested within scoped lock:
+#define ATOMIC(stmt)  { std::unique_lock<std::mutex> lock(atomic_mut); stmt; }
 
 
 #define TOSTR(str)  TOSTR_NESTED(str)
@@ -165,36 +180,43 @@ int thrid(bool locked = false)
 }
 
 
-int pending = 0;
+//int pending = 0;
+//std::vector<int> pending;
+vector_ex<int> pending;
 int frnum = 0;
+int waker = -1;
 
+
+#define WKER_MSG(color, msg)  ATOMIC(std::cout << color << timestamp() << "wker " << myid << " " << msg << ENDCOLOR << std::flush)
 void wker_main()
 {
     int myid = thrid();
 //    std::thread::id thid = std::this_thread::get_id();
 //    std::string thid = std::to_string((long)std::this_thread::get_id());
-    std::cout << CYAN_MSG << timestamp() << "wker " << myid << " started" << ENDCOLOR << std::flush;
+    WKER_MSG(CYAN_MSG, "started");
     for (;;)
     {
         int seen = frnum;
         sleep_msec(20); //simulate render()
-        std::cout << BLUE_MSG << timestamp() << "wker " << myid << " rendered " << frnum << ", now notify main" << ENDCOLOR << std::flush;
+        WKER_MSG(BLUE_MSG, "rendered " << frnum << ", now notify main");
         { //scope for lock
             std::unique_lock<std::mutex> lock(mut);
 //            std::lock_guard<std::mutex> lock(mut);
-            ++pending;
+//            ++pending;
+            pending.push_back(myid);
 //        }
+        waker = myid;
         cv.notify_one();
 
-        std::cout << BLUE_MSG << timestamp() << "wker " << myid << " now wait for next req" << ENDCOLOR << std::flush;
+        WKER_MSG(BLUE_MSG, "now wait for next req");
 //        { //scope for lock
 //            std::unique_lock<std::mutex> lock(mut);
-            cv.wait(lock, [&seen]{ return frnum != seen; });
+            cv.wait(lock, [&myid, &seen]{ WKER_MSG(YELLOW_MSG, "waker " << waker << ", seen " << frnum << "? " << (frnum == seen)); return frnum != seen; });
         }
-        std::cout << BLUE_MSG << timestamp() << "wker " << myid << " woke with req for " << frnum << ENDCOLOR << std::flush;
+        WKER_MSG(BLUE_MSG, "woke with req for " << frnum);
         if (frnum < 0) break;
     }
-    std::cout << CYAN_MSG << timestamp() << "wker " << myid << " quit" << ENDCOLOR << std::flush;
+    WKER_MSG(CYAN_MSG, "quit");
 #if 0
     // Wait until main() sends data
     std::unique_lock<std::mutex> lock(mut);
@@ -217,8 +239,15 @@ void wker_main()
 }
  
 
+//class ThreadSafe: public std::basic_ostream<char>
+//{
+//public:
+//    ThreadSafe(std::ostream& strm): std::basic_ostream<char>(strm) {};
+//};
+#define MAIN_MSG(color, msg)  ATOMIC(std::cout << color << timestamp() << FMT("main[%d]") << frnum << " " << msg << ENDCOLOR << std::flush)
 int main()
 {
+    int myid = thrid();
 //    int val = 42;
 //    std::cout << val << " in hex is " << FMT(" 0x%x") << val << "\n";
 //    std::cout << timestamp() << "main started\n";
@@ -227,22 +256,23 @@ int main()
 //    sleep_msec(1000); //simulate encode()
 //    std::cout << timestamp() << "after 1 sec\n";
 //    return 0;
-    std::stringstream stream; // #include <sstream> for this
-    stream << 1 << 2 << 3 << "\n";
-    std::cout << stream.str();
-
-    std::cout << ((std::stringstream() << 1 << 2 << 3 << "\n").str());
+//    std::stringstream stream; // #include <sstream> for this
+//    stream << FMT(" <%3d> ") << 1 << 2 << FMT(" (%2.1f) ") << 3. << "\n" << std::flush;
+//    std::cout << stream.str();
+//    std::cout << (std::stringstream() << 1 << 2 << 3 << "\n");
+//    std::cout << FMT(" <%3d> ") << 1 << 2 << FMT(" (%2.1f) ") << 3.1 << "\n" << std::flush;
 
 //    std::cout << sizeof(std::thread::id) << "\n";
 //    std::string thid = std::to_string((long)std::this_thread::get_id());
 
 //    std::thread worker1(worker_thread);
 //    std::thread worker2(worker_thread);
+    const int NUM_WKERs = 10;
     std::vector<std::thread> wkers;
-    std::cout << CYAN_MSG << timestamp() << "main " << thrid() << " launch wkers" << ENDCOLOR << std::flush;
+    MAIN_MSG(CYAN_MSG, myid << " launch " << NUM_WKERs << " wkers");
 //    pending = 10;
-    for (int n = 0; n < 10; ++n) wkers.emplace_back(wker_main);
-    std::cout << PINK_MSG << timestamp() << "main launched " << wkers.size() << " wkers" << ENDCOLOR << std::flush;
+    for (int n = 0; n < NUM_WKERs; ++n) wkers.emplace_back(wker_main);
+    MAIN_MSG(PINK_MSG, "main launched " << wkers.size() << " wkers");
 #if 0
     data = "data";
     // send data to the worker thread
@@ -266,27 +296,29 @@ int main()
 //    for (int fr = 0; fr < 10; ++fr) //duration
     for (;;)
     {
-        std::cout << PINK_MSG << timestamp() << FMT("main[%d]") << frnum << " now wait for replies" << ENDCOLOR << std::flush;
+        MAIN_MSG(PINK_MSG, "now wait for replies");
         { //scope for lock
             std::unique_lock<std::mutex> lock(mut);
-            cv.wait(lock, [&wkers]{ return pending == wkers.size(); }); //wait for all wkers
+            cv.wait(lock, [&wkers]{ MAIN_MSG(PINK_MSG, "waker " << waker << ", got " << pending.size() << " replies from: " << pending.join(",", "(empty)")); return pending.size() == wkers.size(); }); //wait for all wkers
         }
-        std::cout << PINK_MSG << timestamp() << FMT("main[%d]") << frnum << " all wkers ready, now encode()" << ENDCOLOR << std::flush;
+        MAIN_MSG(PINK_MSG, "all wkers ready, now encode()");
         sleep_msec(10); //simulate encode()
 
-        pending = 0;
+//        pending = 0;
+        pending.clear();
         if (++frnum >= 10) break;
-        std::cout << PINK_MSG << timestamp() << FMT("main[%d]") << frnum << " encoded, now notify wkers" << ENDCOLOR << std::flush;
+        MAIN_MSG(PINK_MSG, "encoded, now notify wkers");
+        waker = myid;
         cv.notify_one(); //wake wkers
-        std::cout << PINK_MSG << timestamp() << FMT("main[%d]") << frnum << " notified, now finish render()" << ENDCOLOR << std::flush;
+        MAIN_MSG(PINK_MSG, "notified wkers, now finish render()");
         sleep_msec(100); //simulate present()
 
-        std::cout << PINK_MSG << timestamp() << FMT("main[%d]") << frnum << " presented" << ENDCOLOR << std::flush;
+        MAIN_MSG(PINK_MSG, "presented");
     }
 #endif
     frnum = -1;
     cv.notify_one(); //wake wkers
-    std::cout << CYAN_MSG << timestamp() << "main now quit" << ENDCOLOR << std::flush;
+    MAIN_MSG(CYAN_MSG, "main now quit");
 
 //    worker1.join();
 //    worker2.join();
