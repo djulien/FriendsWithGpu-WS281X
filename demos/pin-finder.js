@@ -63,7 +63,7 @@ process.exit();
 //
 
 const DURATION = 60-55+25; //30; //10; //60; //how long to run (sec)
-const PAUSE = 5; //how long to pause at end
+//const PAUSE = 5; //how long to pause at end
 const FPS = 30-28; //2; //animation speed (max depends on screen settings)
 
 
@@ -81,13 +81,14 @@ const OPTS =
 //    WS281X_DEBUG: true, //show timing debug info
 //    UNIV_TYPE: UnivTypes.CHPLEX_SSR,
 //    gpufx: "./pin-finder.glsl", //generate fx on GPU instead of CPU
+    FPS, //target fps; throttle back if running faster than this
     TITLE: "PinFinder",
 //    EXTRA_LEN: 1 + this.NUM_WKERS,
 //    SHM_KEY: process.env.SHM_KEY,
 //choose one of options below for performance tuning:
 //    NUM_WKERS: 0, //whole-house fg render
     NUM_WKERS: 1, //whole-house bg render
-//    NUM_WKERS: os.cpus().length, //1 bkg wker for each core
+//    NUM_WKERS: os.cpus().length, //1 bkg wker for each core (optimal)
 //    NUM_WKERS: 6, //hard-coded #bkg wkers
 };
 if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (dev/test only)
@@ -242,7 +243,7 @@ function* playback() //onexit)
 {
 throw new Error("todo".red_lt);
     debug(`begin: startup took %d sec, now run fx for %d sec`.green_lt, trunc(process.uptime(), 10), DURATION);
-    var perf = {render: 0, idle: 0, paint: 0, cpu: process.cpuUsage()};
+    var perf = {render: 0, /*idle: 0,*/ paint: 0, cpu: process.cpuUsage()};
 //    this.on('stats', stats_cb, perf);
 //    canvas.wait_stats = true; //request wait() stats
 //    onexit(BkgWker.closeAll);
@@ -262,7 +263,7 @@ throw new Error("todo".red_lt);
 //        models.renderAll(canvas, frnum); //forEach((model) => { model.render(frnum); });
 //render all models (synchronous):
 //        models.forEach(model => { model.render(frnum, canvas.elapsed); }); //bkg wker: sync render; main thread: sync render or async ipc
-        this.render(frnum, perf.time); //use frame timestamp for render time of all models
+        yield this.render(frnum, perf.time); //use frame timestamp for render time of all models
         perf.time = this.elapsed;
 //        render(frnum);
 //        yield canvas.render(frnum);
@@ -296,17 +297,17 @@ throw new Error("todo".red_lt);
 //72 w * 1024 h ~= 74K loop iter/frame (33 msec)
 //need ~ 0.45 usec / iter
                 }
-*/
 //        yield wait(started + (t + 1) / FPS - now_sec()); //avoid cumulative timing errors
         perf.idle -= perf.time; //this.elapsed; //exclude non-waiting time
 //bkg wker: set reply status for main (atomic dec); main thread: sync wait and check all ipc reply rcvd
         yield this.wait(frnum / FPS - perf.time); //throttle to target frame rate; avoid cumulative timing errors
         perf.time = this.elapsed;
         perf.idle += perf.time; //this.elapsed;
+*/
 
 //bkg wker: noop - already waited for ipc req (rdlock?); main thread: gpu update
         perf.paint -= perf.time; //this.elapsed;
-        this.paint();
+        yield this.paint();
         perf.time = this.elapsed;
         perf.paint += perf.time; //this.elapsed;
 //        yield wait(1);
@@ -327,25 +328,27 @@ throw new Error("todo".red_lt);
     cpu = process.cpuUsage(cpu);
     debug(`cpu usage: ${JSON.stringify(cpu)} usec = ${trunc((cpu.user + cpu.system) / 1e4 / canvas.elapsed, 10)}% of elapsed`.blue_lt);
 */
-    debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec, now pause for ${PAUSE} sec`.green_lt);
-    yield this.wait(PAUSE); //pause to show screen stats longer
+    debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec`.green_lt); //, now pause for ${PAUSE} sec`.green_lt);
+//    yield this.wait(PAUSE); //pause to show screen stats longer
 //    canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
 //    canvas.close();
 };
 
 
 //render all models for this thread:
+//if run on main thread, should be non-blocking
 canvas.render =
-function render(frnum, timestamp)
+function* render(frnum, timestamp)
 {
-    const {usleep} = require('gpu-friends-ws281x');
+//    const {usleep} = require('gpu-friends-ws281x');
 
 //    models.forEach(model => { model.render(frnum, timestamp); });
-    var mymodels = models.reduce((count, model) => { if (!OPTS.NUM_WKERS || (model.affinity == canvas.WKER_ID)) ++count; return count; }, 0);
+    var count = models.reduce((count, model) => { if (!OPTS.NUM_WKERS || (model.affinity == canvas.WKER_ID)) ++count; return count; }, 0);
 //debug(optimizationStatus(this.render).blue_lt);
-    debug(`TODO: ${this.prtype} '${process.pid}' render fr# ${frnum}, ${mymodels} models, timestamp ${timestamp}`.yellow_lt);
+    debug(`TODO: ${this.prtype} '${process.pid}' render fr# ${frnum}, ${count} models, timestamp ${timestamp}`.yellow_lt);
 //    if (OPTS.NUM_WKERS && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; bypass remaining init
-    usleep(5000); //simulate processing (5 msec)
+//    usleep(5000); //simulate processing (5 msec)
+    return this.wait(5e-3 * count); //msec; simulate 5 msec per model
 }
 
 

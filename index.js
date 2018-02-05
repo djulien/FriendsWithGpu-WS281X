@@ -191,6 +191,7 @@ const OPTS =
     EXTRA_LEN: [LIVEOK, 0], //caller-requrested extra space for frame#, #wkers, timestamp, etc
     TITLE: [DEVONLY, "GpuCanvas"], //only displayed in dev mode
     NUM_WKERS: [LIVEOK, os.cpus().length], //create 1 bkg wker for each core
+    FPS: [LIVEOK, Screen.fps], //allow caller to throttle back frame render speed
 };
 
 
@@ -236,7 +237,7 @@ new Proxy(function(){},
         const [width, height, opts] = args;
 //console.log("proxy ctor", width, height, opts);
         opts_check(opts);
-        const title = (opts || {}).TITLE || OPTS.TITLE[1] || "(title)";
+        const title = firstOf((opts || {}).TITLE || OPTS.TITLE[1], "(title)");
         const num_wkers = firstOf((opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0);
         if (num_wkers > os.cpus().length) debug(`#wkers ${num_wkers} exceeds #cores ${os.cpus().length}`.yellow_lt);
 //        GpuCanvas.call(this, title, width, height, !!opts.WS281X_FMT); //initialize base class
@@ -292,16 +293,41 @@ new Proxy(function(){},
         if (firstOf((opts || {}).WANT_STATS, OPTS.WANT_STATS[1], false)) THIS.wait_stats = {};
         THIS.wait = wait_method; //cluster.isMaster? wait_method: nop;
 
-        THIS.FPS = 10;
+//        THIS.FPS = 10;
+        THIS.FPS = firstOf((opts || {}).FPS, OPTS.FPS[1], 1);
         const auto_play = firstOf((opts || {}).AUTO_PLAY, OPTS.AUTO_PLAY[1], true);
 //        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
-debug("TODO: setImmediate or nextTick here?".red_lt)
 //debug(optimatizationStatus(THIS.));
-        /*process.nextTick*/ step(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
+//        /*process.nextTick*/ step(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
+//for setImmediate vs. process.nextTick, see https://stackoverflow.com/questions/15349733/setimmediate-vs-nexttick
+        THIS.playback = cluster.isMaster? master_async: worker_async; //allow caller to override these
+        if (cluster.isMaster && auto_play) setImmediate(function() { step(THIS.playback); }); //defer execution so caller can override playback()
         return THIS;
 
         function nop() {} //dummy method for special methods on non-master copy
-    }
+    },
+//for intercepting method calls, see http://2ality.com/2017/11/proxy-method-calls.html
+    get: function(target, propname, receiver)
+    {
+        const targetValue = Reflect.get(target, propname, receiver);
+        if (typeof targetValue == 'function')
+        {
+            return function (...args)
+            {
+                debug(`canvas: call '${propname}' with ${args.length} args`);
+                return targetValue.apply(this, args);
+            }
+        }
+        debug(`canvas: get '${propname}'`);
+//        return Reflect.get(target, propname, receiver);
+        return targetValue;
+    },
+//    apply: function(target, THIS, args)
+//    {
+//        debug("canvas: call ")
+//        console.log(`Calculate sum: ${argumentsList}`);
+//        return argumentsList[0] + argumentsList[1];
+//    },
 });
 
 
@@ -386,6 +412,8 @@ function memory(opts, num_wkers)
 //starts bkg wkers
 function* master_async(num_wkers, auto_play)
 {
+    console.log("master playback".red_lt);
+    return;
 //    var clkRes = clock.getres(clock.MONOTONIC);
 //    debug(`Resolution of CLOCK_MONOTONIC: ${clkRes.sec} sec + ${clkRes.nsec} nsec`, clkRes);
 //    var clkTime = clock.gettime(clock.MONOTONIC);
@@ -405,12 +433,8 @@ function* master_async(num_wkers, auto_play)
         let wker = cluster.fork({WKER_ID: w, SHM_KEY: this.SHM_KEY, /*EPOCH,*/ NODE_ENV: process.env.NODE_ENV || ""}); //BkgWker.all.length});
 //        debug(cluster.isMaster? `GpuCanvas: forked ${Object.keys(cluster.workers).length}/${num_wkers} bkg wker(s)`.pink_lt: `GpuCanvas: this is bkg wker# ${THIS.WKER_ID}/${num_wkers}`.pink_lt);
 //        var wker2 = cluster.workers[Object.keys(cluster.workers)[0]]; //same thing
-console.log(wker.process._channel);
-console.log(wker.process.channel);
-console.log(wker.process.channel.onread);
-console.log(wker.process.channel.sockets.got);
-console.log(wker.process.channel.sockets.send);
 //NODE_CHANNEL_FD doesn't work here; https://stackoverflow.com/questions/41033716/send-ipc-message-with-sh-bash-to-parent-process-node-js
+/*instead use mutex/condition vars for ipc
         wker.on('message', (msg) =>
         {
             wker.ipc1 = msg.ipc1;
@@ -423,6 +447,7 @@ console.log(wker.process.channel.sockets.send);
             if (--pending < 0) throw new Error(`too many replies for fr#${frnum}`.red_lt);
             if (!pending) step();
         });
+*/
 //    cluster.on('exit', (wker, code, signal) =>
         wker.on('exit', (code, signal) =>
         {
@@ -444,7 +469,22 @@ console.log(wker.process.channel.sockets.send);
     }
 */
     debug(`GpuCanvas: ${num_wkers} wkers launched, ready for playback`.blue_lt);
-    if (!auto_play) return; //TODO: emit event or caller cb
+//    if (!auto_play) return; //TODO: emit event or caller cb
+//wedge async paint, render in front of caller-supplied functions:
+//handles ipc with bkg wkers and async call-backs
+    const render_sync = this.render;
+    const paint_sync = this.paint;
+    this.render = function*(args)
+    {
+        
+    }
+    this.paint = function*(args)
+    {
+
+    }
+    if (auto_play) this.playback();
+    return;
+
 //    yield* this.playback();
     this.elapsed = 0;
     const DURATION = 5; //TODO
@@ -498,6 +538,9 @@ console.log(wker.process.channel.sockets.send);
 //acks parent then starts render loop
 function* worker_async()
 {
+    console.log("wker playback".red_lt);
+    return;
+
     if (!this.render) throw new Error(`GpuCanvas: need to define a render() method`.red_lt);
 //    if (!this.playback) throw new Error(`GpuCanvas: need to define a playback() method`.red_lt);
 //handle msgs from main thread:
@@ -805,6 +848,7 @@ try{
 //console.log("step");
 //    if (step.done) throw "Generator function is already done.";
 //	if (typeof gen == "function") gen = gen(); //invoke generator if not already
+//for setImmediate vs. process.nextTick, see https://stackoverflow.com/questions/15349733/setimmediate-vs-nexttick
 	if (typeof gen == "function") { setImmediate(function() { step(gen(/*function(cb) { step.onexit = cb; }*/)); }); return; } //invoke generator if not already
 //        return setImmediate(function() { step(gen()); }); //avoid hoist errors
     if (typeof gen != "undefined")
