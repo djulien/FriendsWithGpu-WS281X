@@ -96,11 +96,12 @@ std::mutex atomic_mut;
 #include <errno.h>
 #include <cstdlib>
 #include <string.h>
+#define rdup(num, den)  (((num) + (den) - 1) / (den) * (den))
 class ShmHeap
 {
 public:
-    ShmHeap(int key): ShmHeap(key, 0, false) {} //children
-    ShmHeap(int key, size_t size, bool cre): m_key(cre? key: 0), m_ptr(0), m_size(0)
+    ShmHeap(int key): ShmHeap(key, 0, false) {} //child processes
+    ShmHeap(int key, size_t size, bool cre): m_key(cre? key: 0), m_ptr(0), m_size(0) //parent process
     {
 //        if ((key = ftok("hello.txt", 'R')) == -1) /*Here the file must exist */ 
 //        int fd = shm_open(filepath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
@@ -119,17 +120,17 @@ public:
         void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
         if (ptr == (void*)-1) throw strerror(errno);
         m_key = cre? key: 0;
-        m_ptr = ptr;
         m_size = size;
-        ATOMIC(std::cout << "ShmHeap: attached " << size << " bytes at " << FMT("0x%x") << m_ptr << ", used = " << used() << ", avail " << available() << "\n" << std::flush);
+        m_ptr = (hdr*)ptr;
+//        if (cre) m_ptr->used += sizeof(m_ptr->used);
+        ATOMIC(std::cout << "ShmHeap: attached " << size << " bytes for key " << FMT("0x%x") << m_key << " at " << FMT("0x%x") << m_ptr << ", used = " << used() << ", avail " << available() << "\n" << std::flush);
     }
     ~ShmHeap() { detach(); destroy(); }
 public:
     inline int key() { return m_key; }
     inline size_t size() { return m_size; }
-    inline size_t used() { return *(size_t*)m_ptr + sizeof(size_t); } //account for used space at first location
     inline size_t available() { return size() - used(); }
-    inline const char* symtab() { return m_ptr + sizeof(size_t); }
+    inline size_t used() { return m_ptr->used + sizeof(m_ptr->used); } //account for used space at first location
 public:
 //generate a unique key from a src location:
 //same src location will generate same key, even across processes
@@ -139,19 +140,34 @@ public:
         if (!bp) bp = filename;
         key = bp;
         key += ':';
-        key += line;
+        char buf[10];
+        sprintf(buf, "%d", line);
+        key += buf; //line;
     }
+//NOTE: assumes infrequent allocation (traverses linked list of entries)
     void* alloc(const char* key, int size, int alignment = 4) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
     {
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
 //first check if symbol already exists:
->>>>>>>>>>>>
-        const char* bp = m_ptr + 
+        entry* symptr = &m_ptr->symtab[0];
+        for (;;) //check if symbol is already defined
+        {
+            size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
+            ATOMIC(std::cout << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << ofs << "\n" << std::flush);
+            if (!strcmp(symptr->name, key)) return &symptr->name[0] + rdup(strlen(symptr->name) + 1, alignment);
+            if (!symptr->nextofs) break;
+            symptr = &m_ptr->symtab[0] + symptr->nextofs;
+        }
         int keylen = rdup(strlen(key) + 1, alignment);
-        size = rdup(size, alignment);
-        if (available() < keylen + size) return 0; //not enough space
-        void* nextptr = m_ptr + used();
-        strcp
+        size = sizeof(symptr->nextofs) + keylen + rdup(size, alignment);
+        m_ptr->used = rdup(m_ptr->used, sizeof(symptr->nextofs));
+        if (available() < size) return 0; //not enough space
+        void* newptr = (void*)m_ptr + used(); //+ sizeof(symptr->nextofs) + keylen;
+        symptr->nextofs = (entry*)newptr - &m_ptr->symtab[0];
+        newptr += sizeof(symptr->nextofs) + keylen;
+        size_t ofs = (long)newptr - (long)m_ptr; //newptr - (void*)m_ptr;
+        ATOMIC(std::cout << "alloc key '" << key << "', size " << size << " at ofs " << ofs << ", remaining " << available() << "\n" << std::flush);
+        return newptr;
     }
     void destroy() //int key)
     {
@@ -171,20 +187,27 @@ public:
     }
 private:
     int m_key; //only used for owner
-    void* m_ptr; //ptr to start of shm
+//    void* m_ptr; //ptr to start of shm
     size_t m_size; //total size (bytes)
->>>>>>>>>>>
-    struct { size_t used, nextptr; char* name; } hdr;
+    typedef struct { size_t nextofs; char name[1]; } entry;
+    typedef struct { size_t used; entry symtab[1]; } hdr;
+//    inline entry* symtab() { return &m_ptr->symtab[0]; }
+    hdr* m_ptr; //ptr to start of shm
 };
 ShmHeap shmheap(0, 0x1000, true);
 
-
+void operator delete(void* ptr) noexcept
+{
+    ATOMIC(std::cout << "dealloc adrs " << FMT("0x%x") << ptr << " (ignored)\n" << std::flush);
+}
 void* operator new(size_t size, const char* filename, int line)
 {
-    void* ptr = new char[size];
+    std::string key;
+    shmheap.crekey(key, filename, line);
+    void* ptr = shmheap.alloc(key.c_str(), size);
 //    ++Complex::nalloc;
 //    if (Complex::nalloc == 1)
-        std::cout << "size = " << size << " filename = " << filename << " line = " << line << "\n" << std::flush;
+    ATOMIC(std::cout << "alloc size " << size << ", key '" << key << "' at adrs " << FMT("0x%x") << ptr << "\n" << std::flush);
     return ptr;
 }
 //tag alloc with src location:
@@ -268,10 +291,10 @@ public:
         return ptr;
     }
 #endif
-    static int nalloc, nfree;
+//    static int nalloc, nfree;
 };
-int Complex::nalloc = 0;
-int Complex::nfree = 0;
+//int Complex::nalloc = 0;
+//int Complex::nfree = 0;
 
 
 #if 0
@@ -291,20 +314,19 @@ void* operator new(size_t size, const char* filename, int line)
 #endif
 
 
-
+#define NUM_LOOP  5 //5000
+#define NUM_ENTS  5 //1000
 int main(int argc, char* argv[]) 
 {
-    Complex* array[1000];
+    Complex* array[NUM_ENTS];
     std::cout << timestamp() << "start\n" << std::flush;
-    for (int i = 0; i <  5000; i++)
+    for (int i = 0; i < NUM_LOOP; i++)
     {
-        for (int j = 0; j < 1000; j++)
-            array[j] = new Complex (i, j);
-        for (int j = 0; j < 1000; j++)
-            delete array[j];
+        for (int j = 0; j < NUM_ENTS; j++) array[j] = new Complex (i, j);
+        for (int j = 0; j < NUM_ENTS; j++) delete array[j];
     }
     std::cout << timestamp() << "finish\n" << std::flush;
-    std::cout << "#alloc: " << Complex::nalloc << ", #free: " << Complex::nfree << "\n" << std::flush;
+//    std::cout << "#alloc: " << Complex::nalloc << ", #free: " << Complex::nfree << "\n" << std::flush;
     return 0;
 }
 
