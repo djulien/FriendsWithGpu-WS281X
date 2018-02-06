@@ -80,6 +80,8 @@ std::mutex atomic_mut;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//to look at shm:
+// ipcs -m 
 
 // https://stackoverflow.com/questions/5656530/how-to-use-shared-memory-with-linux-in-c
 // https://stackoverflow.com/questions/4836863/shared-memory-or-mmap-linux-c-c-ipc
@@ -99,9 +101,10 @@ std::mutex atomic_mut;
 #define rdup(num, den)  (((num) + (den) - 1) / (den) * (den))
 class ShmHeap
 {
-public:
-    ShmHeap(int key): ShmHeap(key, 0, false) {} //child processes
-    ShmHeap(int key, size_t size, bool cre): m_key(cre? key: 0), m_ptr(0), m_size(0) //parent process
+public: //ctor/dtor
+    enum class persist: int {PreExist = 0, NewTemp = +1, NewPerm = -1};
+    explicit ShmHeap(int key): ShmHeap(key, 0, PreExist) {} //child processes
+    explicit ShmHeap(int key, size_t size, persist cre): m_key(0), m_size(0), m_ptr(0), m_persist(false) //parent process
     {
 //        if ((key = ftok("hello.txt", 'R')) == -1) /*Here the file must exist */ 
 //        int fd = shm_open(filepath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
@@ -111,28 +114,46 @@ public:
 //        if (rptr == MAP_FAILED) /* Handle error */;
 //create shm seg:
 //        if (!key) throw "ShmHeap: bad key";
+        if (cre != PreExist) destroy(key); //delete first (parent wants clean start)
         if (!key) key = (rand() << 16) | 0xfeed;
-        if (cre) destroy(); //delete first (parent wants clean start)
     	if ((size < 1) || (size >= 10000000)) throw "ShmHeap: bad size"; //set reasonable limits
 //NOTE: size will be rounded up to a multiple of PAGE_SIZE
-        int shmid = shmget(key, size, (cre? IPC_CREAT | IPC_EXCL: 0) | 0666); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
+        int shmid = shmget(key, size, 0666 | ((cre != PreExist)? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
         if (shmid == -1) throw strerror(errno); //failed to create or attach
         void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
         if (ptr == (void*)-1) throw strerror(errno);
-        m_key = cre? key: 0;
+        m_key = key;
         m_size = size;
         m_ptr = (hdr*)ptr;
+        m_persist = (cre != NewTemp);
 //        if (cre) m_ptr->used += sizeof(m_ptr->used);
-        ATOMIC(std::cout << "ShmHeap: attached " << size << " bytes for key " << FMT("0x%x") << m_key << " at " << FMT("0x%x") << m_ptr << ", used = " << used() << ", avail " << available() << "\n" << std::flush);
+        ATOMIC(std::cout << "ShmHeap: attached " << desc(std::cout) << "\n" << std::flush);
     }
-    ~ShmHeap() { detach(); destroy(); }
-public:
+    ~ShmHeap() { detach(); if (!m_persist) destroy(m_key); }
+public: //getters
     inline int key() { return m_key; }
     inline size_t size() { return m_size; }
     inline size_t available() { return size() - used(); }
-    inline size_t used() { return m_ptr->used + sizeof(m_ptr->used); } //account for used space at first location
-public:
-//generate a unique key from a src location:
+    inline size_t used() { return m_ptr->used + sizeof(m_ptr->used); } //account for used space at front
+public: //cleanup
+    void detach()
+    {
+        if (!m_ptr) return; //not attached
+        if (shmdt(m_ptr) == -1) throw strerror(errno);
+        ATOMIC(std::cout << "ShmHeap: dettached " << desc(std::cout) << "\n" << std::flush);
+        m_ptr = 0;
+    }
+    static void destroy(int key)
+    {
+        if (!key) return; //!owner or !exist
+        ATOMIC(std::cout << "ShmHeap: destroy " << FMT("0x%x") << key << "\n" << std::flush);
+        int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
+        if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
+        if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
+        throw strerror(errno);
+    }
+public: //allocator
+//generates a unique key from a src location:
 //same src location will generate same key, even across processes
     static void crekey(std::string& key, const char* filename, int line)
     {
@@ -144,8 +165,9 @@ public:
         sprintf(buf, "%d", line);
         key += buf; //line;
     }
+//allocate named storage:
 //NOTE: assumes infrequent allocation (traverses linked list of entries)
-    void* alloc(const char* key, int size, int alignment = 4) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
+    void* alloc(const char* key, int size, int alignment = sizeof(uint32_t)) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
     {
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
 //first check if symbol already exists:
@@ -169,23 +191,7 @@ public:
         ATOMIC(std::cout << "alloc key '" << key << "', size " << size << " at ofs " << ofs << ", remaining " << available() << "\n" << std::flush);
         return newptr;
     }
-    void destroy() //int key)
-    {
-        if (!m_key) return; //not owner
-        int shmid = shmget(m_key, 1, 0666); //use minimum size in case it changed
-        m_key = 0;
-        if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
-        if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
-        throw strerror(errno);
-    }
-    void detach()
-    {
-        if (!m_ptr) return;
-        if (shmdt(m_ptr) == -1) throw strerror(errno);
-        ATOMIC(std::cout << "ShmHeap: dettached " << m_size << " bytes from " << FMT("0x%x") << m_ptr << "\n" << std::flush);
-        m_ptr = 0;
-    }
-private:
+private: //data
     int m_key; //only used for owner
 //    void* m_ptr; //ptr to start of shm
     size_t m_size; //total size (bytes)
@@ -193,6 +199,15 @@ private:
     typedef struct { size_t used; entry symtab[1]; } hdr;
 //    inline entry* symtab() { return &m_ptr->symtab[0]; }
     hdr* m_ptr; //ptr to start of shm
+    bool m_persist;
+private: //helpers
+    const char* desc(sd::ostream& ostrm)
+    {
+        ostrm << size << " bytes for key " << FMT("0x%x") << m_key;
+        ostrm << " at " << FMT("0x%x") << m_ptr;
+        ostrm << ", used = " << used() << ", avail " << available();
+        return "";
+    }
 };
 ShmHeap shmheap(0, 0x1000, true);
 
