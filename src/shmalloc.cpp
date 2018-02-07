@@ -119,15 +119,38 @@ std::mutex atomic_mut;
 #include <errno.h>
 #include <cstdlib>
 #include <string.h>
+#include <stdexcept>
 #define rdup(num, den)  (((num) + (den) - 1) / (den) * (den))
-class ShmHeap
+//mixin class for custom allocator:
+class ShmHeapAlloc
 {
-public: //ctor/dtor
-    enum class persist: int {PreExist = 0, NewTemp = +1, NewPerm = -1};
-    explicit ShmHeap(int key): ShmHeap(key, 0, persist::PreExist) {} //child processes
-    explicit ShmHeap(int key, size_t size, persist cre): m_key(0), m_size(0), m_ptr(0), m_persist(false) //parent process
+public:
+    void* operator new(size_t size, const char* filename, int line)
     {
-        ATOMIC(std::cout << CYAN_MSG << "hello" << ENDCOLOR << std::flush);
+        std::string key;
+        shmheap.crekey(key, filename, line);
+        void* ptr = shmheap.alloc(key.c_str(), size);
+//    ++Complex::nalloc;
+//    if (Complex::nalloc == 1)
+        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key '" << key << "' at adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
+        return ptr;
+    }
+    void operator delete(void* ptr) noexcept
+    {
+        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << " deleted but space not reclaimed" << ENDCOLOR << std::flush);
+    }
+//tag allocated var with src location:
+//NOTE: cpp avoids recursion so macro names can match actual function names here
+#define new  new(__FILE__, __LINE__)
+//private: //configurable shm seg
+    class ShmHeap
+    {
+    public: //ctor/dtor
+        enum class persist: int {PreExist = 0, NewTemp = +1, NewPerm = -1};
+        explicit ShmHeap(int key): ShmHeap(key, 0, persist::PreExist) {} //child processes
+        explicit ShmHeap(int key, size_t size, persist cre): m_key(0), m_size(0), m_ptr(0), m_persist(false) //parent process
+        {
+//        ATOMIC(std::cout << CYAN_MSG << "hello" << ENDCOLOR << std::flush);
 //        if ((key = ftok("hello.txt", 'R')) == -1) /*Here the file must exist */ 
 //        int fd = shm_open(filepath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
 //        if (fd == -1) throw "shm_open failed";
@@ -136,120 +159,111 @@ public: //ctor/dtor
 //        if (rptr == MAP_FAILED) /* Handle error */;
 //create shm seg:
 //        if (!key) throw "ShmHeap: bad key";
-        if (cre != persist::PreExist) destroy(key); //delete first (parent wants clean start)
-        if (!key) key = (rand() << 16) | 0xfeed;
-    	if ((size < 1) || (size >= 10000000)) throw "ShmHeap: bad size"; //set reasonable limits
+            if (cre != persist::PreExist) destroy(key); //delete first (parent wants clean start)
+            if (!key) key = (rand() << 16) | 0xfeed;
+            if ((size < 1) || (size >= 10000000)) throw std::runtime_error("ShmHeap: bad size"); //set reasonable limits
 //NOTE: size will be rounded up to a multiple of PAGE_SIZE
-        int shmid = shmget(key, size, 0666 | ((cre != persist::PreExist)? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
-        if (shmid == -1) throw strerror(errno); //failed to create or attach
-        void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
-        if (ptr == (void*)-1) throw strerror(errno);
-        m_key = key;
-        m_size = size;
-        m_ptr = (hdr*)ptr;
-        m_persist = (cre != persist::NewTemp);
+            int shmid = shmget(key, size, 0666 | ((cre != persist::PreExist)? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
+            ATOMIC(std::cout << BLUE_MSG << "shmget key " << FMT("0x%x") << key << ", size " << size << " => " << shmid << ENDCOLOR << std::flush);
+            if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
+            void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
+            ATOMIC(std::cout << BLUE_MSG << "shmat id " << FMT("0x%x") << shmid << " => " << FMT("0x%lx") << (long)ptr << ENDCOLOR << std::flush);
+            if (ptr == (void*)-1) throw std::runtime_error(std::string(strerror(errno)));
+            m_key = key;
+            m_size = size;
+            m_ptr = (hdr*)ptr;
+            m_persist = (cre != persist::NewTemp);
 //        if (cre) m_ptr->used += sizeof(m_ptr->used);
-        ATOMIC(std::cout << CYAN_MSG << "ShmHeap: attached " << desc(std::cout) << ENDCOLOR << std::flush);
-    }
-    ~ShmHeap() { detach(); if (!m_persist) destroy(m_key); }
-public: //getters
-    inline int key() { return m_key; }
-    inline size_t size() { return m_size; }
-    inline size_t available() { return size() - used(); }
-    inline size_t used() { return m_ptr->used + sizeof(m_ptr->used); } //account for used space at front
-public: //cleanup
-    void detach()
-    {
-        if (!m_ptr) return; //not attached
-        if (shmdt(m_ptr) == -1) throw strerror(errno);
-        ATOMIC(std::cout << CYAN_MSG << "ShmHeap: dettached " << desc(std::cout) << ENDCOLOR << std::flush);
-        m_ptr = 0;
-    }
-    static void destroy(int key)
-    {
-        if (!key) return; //!owner or !exist
-        ATOMIC(std::cout << CYAN_MSG << "ShmHeap: destroy " << FMT("0x%x") << key << ENDCOLOR << std::flush);
-        int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
-        if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
-        if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
-        throw strerror(errno);
-    }
-public: //allocator
+std::cout << "here1\n" << std::flush;
+std::cout << desc() << " here2\n" << std::flush;
+            ATOMIC(std::cout << CYAN_MSG << "ShmHeap: attached " << desc() << ENDCOLOR << std::flush);
+        }
+        ~ShmHeap() { detach(); if (!m_persist) destroy(m_key); }
+    public: //getters
+        inline int key() const { return m_key; }
+        inline size_t size() const { return m_size; }
+        inline size_t available() const { return size() - used(); }
+        inline size_t used() const { return m_ptr->used + sizeof(m_ptr->used); } //account for used space at front
+    public: //cleanup
+        void detach()
+        {
+            if (!m_ptr) return; //not attached
+            if (shmdt(m_ptr) == -1) throw std::runtime_error(strerror(errno));
+            ATOMIC(std::cout << CYAN_MSG << "ShmHeap: dettached " << desc() << ENDCOLOR << std::flush);
+            m_ptr = 0;
+        }
+        static void destroy(int key)
+        {
+            if (!key) return; //!owner or !exist
+            int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
+            ATOMIC(std::cout << CYAN_MSG << "ShmHeap: destroy " << FMT("0x%x") << key << " => " << FMT("0x%x") << shmid << ENDCOLOR << std::flush);
+            if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
+            if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
+            throw std::runtime_error(strerror(errno));
+        }
+    public: //allocator
 //generates a unique key from a src location:
 //same src location will generate same key, even across processes
-    static void crekey(std::string& key, const char* filename, int line)
-    {
-        const char* bp = strrchr(filename, '/');
-        if (!bp) bp = filename;
-        key = bp;
-        key += ':';
-        char buf[10];
-        sprintf(buf, "%d", line);
-        key += buf; //line;
-    }
+        static void crekey(std::string& key, const char* filename, int line)
+        {
+            const char* bp = strrchr(filename, '/');
+            if (!bp) bp = filename;
+            key = bp;
+            key += ':';
+            char buf[10];
+            sprintf(buf, "%d", line);
+            key += buf; //line;
+        }
 //allocate named storage:
 //NOTE: assumes infrequent allocation (traverses linked list of entries)
-    void* alloc(const char* key, int size, int alignment = sizeof(uint32_t)) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
-    {
+        void* alloc(const char* key, int size, int alignment = sizeof(uint32_t)) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
+        {
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
 //first check if symbol already exists:
-        entry* symptr = &m_ptr->symtab[0];
-        for (;;) //check if symbol is already defined
-        {
-            size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
-            ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << ofs << ENDCOLOR << std::flush);
-            if (!strcmp(symptr->name, key)) return &symptr->name[0] + rdup(strlen(symptr->name) + 1, alignment);
-            if (!symptr->nextofs) break;
-            symptr = &m_ptr->symtab[0] + symptr->nextofs;
+            std::unique_lock<std::mutex> lock(m_ptr->mutex);
+            entry* symptr = &m_ptr->symtab[0];
+            for (;;) //check if symbol is already defined
+            {
+                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
+                ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << ofs << ENDCOLOR << std::flush);
+                if (!strcmp(symptr->name, key)) return &symptr->name[0] + rdup(strlen(symptr->name) + 1, alignment);
+                if (!symptr->nextofs) break;
+                symptr = &m_ptr->symtab[0] + symptr->nextofs;
+            }
+            int keylen = rdup(strlen(key) + 1, alignment);
+            size = sizeof(symptr->nextofs) + keylen + rdup(size, alignment);
+            m_ptr->used = rdup(m_ptr->used, sizeof(symptr->nextofs));
+            if (available() < size) return 0; //not enough space
+            void* newptr = (void*)m_ptr + used(); //+ sizeof(symptr->nextofs) + keylen;
+            symptr->nextofs = (entry*)newptr - &m_ptr->symtab[0];
+            newptr += sizeof(symptr->nextofs) + keylen;
+            size_t ofs = (long)newptr - (long)m_ptr; //newptr - (void*)m_ptr;
+            ATOMIC(std::cout << GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << ofs << ", remaining " << available() << ENDCOLOR << std::flush);
+            return newptr;
         }
-        int keylen = rdup(strlen(key) + 1, alignment);
-        size = sizeof(symptr->nextofs) + keylen + rdup(size, alignment);
-        m_ptr->used = rdup(m_ptr->used, sizeof(symptr->nextofs));
-        if (available() < size) return 0; //not enough space
-        void* newptr = (void*)m_ptr + used(); //+ sizeof(symptr->nextofs) + keylen;
-        symptr->nextofs = (entry*)newptr - &m_ptr->symtab[0];
-        newptr += sizeof(symptr->nextofs) + keylen;
-        size_t ofs = (long)newptr - (long)m_ptr; //newptr - (void*)m_ptr;
-        ATOMIC(std::cout << GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << ofs << ", remaining " << available() << ENDCOLOR << std::flush);
-        return newptr;
-    }
-private: //data
-    int m_key; //only used for owner
+    private: //data
+        int m_key; //only used for owner
 //    void* m_ptr; //ptr to start of shm
-    size_t m_size; //total size (bytes)
-    typedef struct { size_t nextofs; char name[1]; } entry;
-    typedef struct { size_t used; entry symtab[1]; } hdr;
+        size_t m_size; //total size (bytes)
+        typedef struct { size_t nextofs; char name[1]; } entry;
+        typedef struct { size_t used; std::mutex mutex; entry symtab[1]; } hdr;
 //    inline entry* symtab() { return &m_ptr->symtab[0]; }
-    hdr* m_ptr; //ptr to start of shm
-    bool m_persist;
-private: //helpers
-    const char* desc(std::ostream& ostrm)
-    {
-        ostrm << m_size << " bytes for key " << FMT("0x%x") << m_key;
-        ostrm << " at " << FMT("0x%x") << m_ptr;
-        ostrm << ", used = " << used() << ", avail " << available();
-        return "";
-    }
+        hdr* m_ptr; //ptr to start of shm
+        bool m_persist;
+    private: //helpers
+        const std::string& desc() const
+        {
+            static std::ostringstream ostrm; //ret val must persist after return; only one instance expected (sharing not a problem)
+            ostrm.clear();
+            ostrm << m_size << " bytes for key " << FMT("0x%x") << m_key;
+            ostrm << " at " << FMT("0x%x") << m_ptr;
+            ostrm << ", used = " << used() << ", avail " << available();
+            return ostrm.str();
+        }
+    };
+    static ShmHeap shmheap; //use static member to reduce clutter in var instances
 };
-ShmHeap shmheap(0, 0x1000, ShmHeap::persist::NewPerm);
-
-void operator delete(void* ptr) noexcept
-{
-    ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << " (ignored)" << ENDCOLOR << std::flush);
-}
-void* operator new(size_t size, const char* filename, int line)
-{
-    std::string key;
-    shmheap.crekey(key, filename, line);
-    void* ptr = shmheap.alloc(key.c_str(), size);
-//    ++Complex::nalloc;
-//    if (Complex::nalloc == 1)
-    ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key '" << key << "' at adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
-    return ptr;
-}
-//tag alloc with src location:
-//NOTE: cpp avoids recursion so macro names can match actual function names here
-#define new  new(__FILE__, __LINE__)
+ShmHeapAlloc::ShmHeap ShmHeapAlloc::shmheap(0x4567feed, 0x1000, ShmHeapAlloc::ShmHeap::persist::NewPerm);
 
 
 //overload new + delete operators:
@@ -299,7 +313,7 @@ void operator delete[](void* arrayToDelete)
 #endif
 
 
-class Complex 
+class Complex: public ShmHeapAlloc
 {
 public:
     Complex() {} //needed for custom new()
