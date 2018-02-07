@@ -3,6 +3,27 @@
 // g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 shmalloc.cpp -o shmalloc
 
 
+#define TOSTR(str)  TOSTR_NESTED(str)
+#define TOSTR_NESTED(str)  #str
+
+//ANSI color codes (for console output):
+//https://en.wikipedia.org/wiki/ANSI_escape_code
+#define ANSI_COLOR(code)  "\x1b[" code "m"
+#define RED_MSG  ANSI_COLOR("1;31") //too dark: "0;31"
+#define GREEN_MSG  ANSI_COLOR("1;32")
+#define YELLOW_MSG  ANSI_COLOR("1;33")
+#define BLUE_MSG  ANSI_COLOR("1;34")
+#define MAGENTA_MSG  ANSI_COLOR("1;35")
+#define PINK_MSG  MAGENTA_MSG
+#define CYAN_MSG  ANSI_COLOR("1;36")
+#define GRAY_MSG  ANSI_COLOR("0;37")
+//#define ENDCOLOR  ANSI_COLOR("0")
+//append the src line# to make debug easier:
+#define ENDCOLOR_ATLINE(n)  " &" TOSTR(n) ANSI_COLOR("0") "\n"
+#define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%d) //NOTE: requires extra param
+#define ENDCOLOR  ENDCOLOR_ATLINE(__LINE__)
+
+
 //see https://www.ibm.com/developerworks/aix/tutorials/au-memorymanager/index.html
 //see also http://anki3d.org/cpp-allocators-for-games/
 
@@ -103,9 +124,10 @@ class ShmHeap
 {
 public: //ctor/dtor
     enum class persist: int {PreExist = 0, NewTemp = +1, NewPerm = -1};
-    explicit ShmHeap(int key): ShmHeap(key, 0, PreExist) {} //child processes
+    explicit ShmHeap(int key): ShmHeap(key, 0, persist::PreExist) {} //child processes
     explicit ShmHeap(int key, size_t size, persist cre): m_key(0), m_size(0), m_ptr(0), m_persist(false) //parent process
     {
+        ATOMIC(std::cout << CYAN_MSG << "hello" << ENDCOLOR << std::flush);
 //        if ((key = ftok("hello.txt", 'R')) == -1) /*Here the file must exist */ 
 //        int fd = shm_open(filepath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
 //        if (fd == -1) throw "shm_open failed";
@@ -114,20 +136,20 @@ public: //ctor/dtor
 //        if (rptr == MAP_FAILED) /* Handle error */;
 //create shm seg:
 //        if (!key) throw "ShmHeap: bad key";
-        if (cre != PreExist) destroy(key); //delete first (parent wants clean start)
+        if (cre != persist::PreExist) destroy(key); //delete first (parent wants clean start)
         if (!key) key = (rand() << 16) | 0xfeed;
     	if ((size < 1) || (size >= 10000000)) throw "ShmHeap: bad size"; //set reasonable limits
 //NOTE: size will be rounded up to a multiple of PAGE_SIZE
-        int shmid = shmget(key, size, 0666 | ((cre != PreExist)? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
+        int shmid = shmget(key, size, 0666 | ((cre != persist::PreExist)? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
         if (shmid == -1) throw strerror(errno); //failed to create or attach
         void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
         if (ptr == (void*)-1) throw strerror(errno);
         m_key = key;
         m_size = size;
         m_ptr = (hdr*)ptr;
-        m_persist = (cre != NewTemp);
+        m_persist = (cre != persist::NewTemp);
 //        if (cre) m_ptr->used += sizeof(m_ptr->used);
-        ATOMIC(std::cout << "ShmHeap: attached " << desc(std::cout) << "\n" << std::flush);
+        ATOMIC(std::cout << CYAN_MSG << "ShmHeap: attached " << desc(std::cout) << ENDCOLOR << std::flush);
     }
     ~ShmHeap() { detach(); if (!m_persist) destroy(m_key); }
 public: //getters
@@ -140,13 +162,13 @@ public: //cleanup
     {
         if (!m_ptr) return; //not attached
         if (shmdt(m_ptr) == -1) throw strerror(errno);
-        ATOMIC(std::cout << "ShmHeap: dettached " << desc(std::cout) << "\n" << std::flush);
+        ATOMIC(std::cout << CYAN_MSG << "ShmHeap: dettached " << desc(std::cout) << ENDCOLOR << std::flush);
         m_ptr = 0;
     }
     static void destroy(int key)
     {
         if (!key) return; //!owner or !exist
-        ATOMIC(std::cout << "ShmHeap: destroy " << FMT("0x%x") << key << "\n" << std::flush);
+        ATOMIC(std::cout << CYAN_MSG << "ShmHeap: destroy " << FMT("0x%x") << key << ENDCOLOR << std::flush);
         int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
         if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
         if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
@@ -175,7 +197,7 @@ public: //allocator
         for (;;) //check if symbol is already defined
         {
             size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
-            ATOMIC(std::cout << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << ofs << "\n" << std::flush);
+            ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << ofs << ENDCOLOR << std::flush);
             if (!strcmp(symptr->name, key)) return &symptr->name[0] + rdup(strlen(symptr->name) + 1, alignment);
             if (!symptr->nextofs) break;
             symptr = &m_ptr->symtab[0] + symptr->nextofs;
@@ -188,7 +210,7 @@ public: //allocator
         symptr->nextofs = (entry*)newptr - &m_ptr->symtab[0];
         newptr += sizeof(symptr->nextofs) + keylen;
         size_t ofs = (long)newptr - (long)m_ptr; //newptr - (void*)m_ptr;
-        ATOMIC(std::cout << "alloc key '" << key << "', size " << size << " at ofs " << ofs << ", remaining " << available() << "\n" << std::flush);
+        ATOMIC(std::cout << GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << ofs << ", remaining " << available() << ENDCOLOR << std::flush);
         return newptr;
     }
 private: //data
@@ -201,19 +223,19 @@ private: //data
     hdr* m_ptr; //ptr to start of shm
     bool m_persist;
 private: //helpers
-    const char* desc(sd::ostream& ostrm)
+    const char* desc(std::ostream& ostrm)
     {
-        ostrm << size << " bytes for key " << FMT("0x%x") << m_key;
+        ostrm << m_size << " bytes for key " << FMT("0x%x") << m_key;
         ostrm << " at " << FMT("0x%x") << m_ptr;
         ostrm << ", used = " << used() << ", avail " << available();
         return "";
     }
 };
-ShmHeap shmheap(0, 0x1000, true);
+ShmHeap shmheap(0, 0x1000, ShmHeap::persist::NewPerm);
 
 void operator delete(void* ptr) noexcept
 {
-    ATOMIC(std::cout << "dealloc adrs " << FMT("0x%x") << ptr << " (ignored)\n" << std::flush);
+    ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << " (ignored)" << ENDCOLOR << std::flush);
 }
 void* operator new(size_t size, const char* filename, int line)
 {
@@ -222,7 +244,7 @@ void* operator new(size_t size, const char* filename, int line)
     void* ptr = shmheap.alloc(key.c_str(), size);
 //    ++Complex::nalloc;
 //    if (Complex::nalloc == 1)
-    ATOMIC(std::cout << "alloc size " << size << ", key '" << key << "' at adrs " << FMT("0x%x") << ptr << "\n" << std::flush);
+    ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key '" << key << "' at adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
     return ptr;
 }
 //tag alloc with src location:
