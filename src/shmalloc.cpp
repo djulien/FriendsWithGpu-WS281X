@@ -138,6 +138,7 @@ public:
     }
     void operator delete(void* ptr) noexcept
     {
+        shmheap.dealloc(ptr);
         ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << " deleted but space not reclaimed" << ENDCOLOR << std::flush);
     }
 //private: //configurable shm seg
@@ -151,7 +152,7 @@ public:
             init_params = {false, key, size, cre}; //kludge: save info and init later (to avoid segv during static init)
         }
         struct { bool init; int key; size_t size; persist cre; } init_params;
-        void init()
+        void defered_init() //kludge: delay init until needed (else segv during static init)
         {
             if (init_params.init) return; //already inited
             init_params.init = true;
@@ -159,6 +160,7 @@ public:
             int key = init_params.key;
             size_t size = init_params.size;
             persist cre = init_params.cre;
+            ATOMIC(std::cout << BLUE_MSG << "defered_init(key " << FMT("0x%x") << key << ", size " << size << ", cre " << cre << ")" << ENDCOLOR << std::flush);
 //        ATOMIC(std::cout << CYAN_MSG << "hello" << ENDCOLOR << std::flush);
 //        if ((key = ftok("hello.txt", 'R')) == -1) /*Here the file must exist */ 
 //        int fd = shm_open(filepath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
@@ -182,11 +184,15 @@ public:
             m_size = size;
             m_ptr = (hdr*)ptr;
             m_persist = (cre != persist::NewTemp);
-            if (cre != persist::PreExist)
+            if (cre != persist::PreExist) //init shm seg
             {
-                m_ptr->used = 0; //redundant (smh init to 0 anyway)
-                m_ptr->symtab[0].nextofs = 0;
-                m_ptr->symtab[0].name[0] = '\0';
+//these are redundant (smh init to 0 anyway):
+//                m_ptr->used = 0;
+//                m_ptr->symtab[0].nextofs = 0;
+//                m_ptr->symtab[0].name[0] = '\0';
+//this one definitely needed:
+                m_ptr->used = (long)&m_ptr->symtab[0] - (long)m_ptr;
+//this one is probably needed:
                 new (&m_ptr->mutex) std::mutex(); //make sure mutex is inited; placement new: https://stackoverflow.com/questions/2494471/c-is-it-possible-to-call-a-constructor-directly-without-new
             }
 //        if (cre) m_ptr->used += sizeof(m_ptr->used);
@@ -204,7 +210,7 @@ public:
         inline int key() const { return m_key; }
         inline size_t size() const { return m_size; }
         inline size_t available() const { return size() - used(); }
-        inline size_t used() const { return m_ptr->used + sizeof(m_ptr->used); } //account for used space at front
+        inline size_t used() const { return m_ptr->used; } // + sizeof(m_ptr->used); } //account for used space at front
     public: //cleanup
         void detach()
         {
@@ -239,20 +245,14 @@ public:
 //NOTE: assumes infrequent allocation (traverses linked list of entries)
         void* alloc(const char* key, int size, int alignment = sizeof(uint32_t)) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
         {
-            init(); //defer init until needed (avoid problems with static init)
+            defered_init(); //defer init until needed (avoid problems with static init)
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
 //first check if symbol already exists:
-            std::unique_lock<std::mutex> lock(m_ptr->mutex);
-            entry* symptr = &m_ptr->symtab[0];
-            for (;;) //check if symbol is already defined
-            {
-                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
-                ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << ofs << ENDCOLOR << std::flush);
-                if (!strcmp(symptr->name, key)) return &symptr->name[0] + rdup(strlen(symptr->name) + 1, alignment);
-                if (!symptr->nextofs) break;
-                symptr = &m_ptr->symtab[0] + symptr->nextofs;
-            }
             int keylen = rdup(strlen(key) + 1, alignment);
+            std::unique_lock<std::mutex> lock(m_ptr->mutex);
+            entry* symptr = find_name(key);
+            if (symptr->name[0]) return &symptr->name[0] + keylen; //already there
+
             size = sizeof(symptr->nextofs) + keylen + rdup(size, alignment);
             m_ptr->used = rdup(m_ptr->used, sizeof(symptr->nextofs));
             if (available() < size) return 0; //not enough space
@@ -262,6 +262,22 @@ public:
             size_t ofs = (long)newptr - (long)m_ptr; //newptr - (void*)m_ptr;
             ATOMIC(std::cout << GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << ofs << ", remaining " << available() << ENDCOLOR << std::flush);
             return newptr;
+        }
+        void dealloc(void* ptr)
+        {
+            std::unique_lock<std::mutex> lock(m_ptr->mutex);
+            entry* symptr = &m_ptr->symtab[0];
+            for (;;)
+            {
+                if (!symptr->name[0]) break; //eof
+                int keylen = strlen(symptr->name) + 1; //NOTE: unknown alignment
+                void* symadrs = (long)&symptr->name[0] + keylen;
+                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
+                ATOMIC(std::cout << BLUE_MSG << "check key '" << symptr->name << "' adrs " << FMT("0x%x") << symadrs << "..+8 is at dealloc adrs " << FMT("0x%x") << ptr << "?" << ENDCOLOR << std::flush);
+                if ((symadrs + keylen <= ptr) && (ptr <= symadrs + rdup(keylen, 8)) return;
+                symptr->nextofs =  = (long)&m_ptr->symtab[0] + symptr->nextofs;
+            }
+            throw std::runtime_error("ShmHeap: attempt to dealloc unknown address");
         }
     private: //data
         int m_key; //only used for owner
@@ -273,6 +289,20 @@ public:
         hdr* m_ptr; //ptr to start of shm
         bool m_persist;
     private: //helpers
+//check if symbol is already defined:
+        entry* find_entry(const char* key)
+        {
+            entry* symptr = &m_ptr->symtab[0];
+            for (;;)
+            {
+                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
+                ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << ofs << ENDCOLOR << std::flush);
+                if (!symptr->name[0] || !strcmp(symptr->name, key)) return entry;
+                if (!symptr->nextofs) throw std::runtime_error("ShmHeap: bad symbol chain");
+                symptr = (long)&m_ptr->symtab[0] + symptr->nextofs;
+            }
+        }
+//show shm details (for debug):
         const std::string /*NO &*/ desc() const
 //        const char* desc() const
         {
