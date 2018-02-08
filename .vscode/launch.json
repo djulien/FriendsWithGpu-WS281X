@@ -10,6 +10,7 @@
             "name": "Launch Program",
             "x-program": "${workspaceFolder}/index.js",
             "program": "${workspaceFolder}/demos/pin-finder.js",
+            "no-program": "${workspaceFolder}/src/shmalloc",
             "args": [],
             "cwd": "${workspaceRoot}",
             "env": {

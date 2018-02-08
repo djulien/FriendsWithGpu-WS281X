@@ -119,6 +119,7 @@ std::mutex atomic_mut;
 #include <errno.h>
 #include <cstdlib>
 #include <string.h>
+//#include <string> //https://stackoverflow.com/questions/6320995/why-i-cannot-cout-a-string
 #include <stdexcept>
 #define rdup(num, den)  (((num) + (den) - 1) / (den) * (den))
 //mixin class for custom allocator:
@@ -139,9 +140,6 @@ public:
     {
         ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << " deleted but space not reclaimed" << ENDCOLOR << std::flush);
     }
-//tag allocated var with src location:
-//NOTE: cpp avoids recursion so macro names can match actual function names here
-#define new  new(__FILE__, __LINE__)
 //private: //configurable shm seg
     class ShmHeap
     {
@@ -150,6 +148,17 @@ public:
         explicit ShmHeap(int key): ShmHeap(key, 0, persist::PreExist) {} //child processes
         explicit ShmHeap(int key, size_t size, persist cre): m_key(0), m_size(0), m_ptr(0), m_persist(false) //parent process
         {
+            init_params = {false, key, size, cre}; //kludge: save info and init later (to avoid segv during static init)
+        }
+        struct { bool init; int key; size_t size; persist cre; } init_params;
+        void init()
+        {
+            if (init_params.init) return; //already inited
+            init_params.init = true;
+//kludge: restore ctor params:
+            int key = init_params.key;
+            size_t size = init_params.size;
+            persist cre = init_params.cre;
 //        ATOMIC(std::cout << CYAN_MSG << "hello" << ENDCOLOR << std::flush);
 //        if ((key = ftok("hello.txt", 'R')) == -1) /*Here the file must exist */ 
 //        int fd = shm_open(filepath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
@@ -173,9 +182,21 @@ public:
             m_size = size;
             m_ptr = (hdr*)ptr;
             m_persist = (cre != persist::NewTemp);
+            if (cre != persist::PreExist)
+            {
+                m_ptr->used = 0; //redundant (smh init to 0 anyway)
+                m_ptr->symtab[0].nextofs = 0;
+                m_ptr->symtab[0].name[0] = '\0';
+                new (&m_ptr->mutex) std::mutex(); //make sure mutex is inited; placement new: https://stackoverflow.com/questions/2494471/c-is-it-possible-to-call-a-constructor-directly-without-new
+            }
 //        if (cre) m_ptr->used += sizeof(m_ptr->used);
-std::cout << "here1\n" << std::flush;
-std::cout << desc() << " here2\n" << std::flush;
+//std::cout << "here1\n" << std::flush;
+//            const char* d = desc().c_str();
+//std::cout << "here2\n" << std::flush;
+//            std::cout << "here2 desc = " << desc() << "\n" << std::flush;
+//            printf("desc = %d:\n", strlen(d));
+//            printf("desc = %d:%s\n", strlen(d), d);
+//std::cout << desc() << " here3\n" << std::flush;
             ATOMIC(std::cout << CYAN_MSG << "ShmHeap: attached " << desc() << ENDCOLOR << std::flush);
         }
         ~ShmHeap() { detach(); if (!m_persist) destroy(m_key); }
@@ -218,6 +239,7 @@ std::cout << desc() << " here2\n" << std::flush;
 //NOTE: assumes infrequent allocation (traverses linked list of entries)
         void* alloc(const char* key, int size, int alignment = sizeof(uint32_t)) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
         {
+            init(); //defer init until needed (avoid problems with static init)
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
 //first check if symbol already exists:
             std::unique_lock<std::mutex> lock(m_ptr->mutex);
@@ -251,19 +273,25 @@ std::cout << desc() << " here2\n" << std::flush;
         hdr* m_ptr; //ptr to start of shm
         bool m_persist;
     private: //helpers
-        const std::string& desc() const
+        const std::string /*NO &*/ desc() const
+//        const char* desc() const
         {
-            static std::ostringstream ostrm; //ret val must persist after return; only one instance expected (sharing not a problem)
-            ostrm.clear();
+//            static std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
+//            ostrm.str(""); ostrm.clear(); //https://stackoverflow.com/questions/5288036/how-to-clear-ostringstream
+            std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
             ostrm << m_size << " bytes for key " << FMT("0x%x") << m_key;
             ostrm << " at " << FMT("0x%x") << m_ptr;
             ostrm << ", used = " << used() << ", avail " << available();
-            return ostrm.str();
+//            std::cout << ostrm.str().c_str() << "\n" << std::flush;
+            return ostrm.str(); //.c_str();
         }
     };
     static ShmHeap shmheap; //use static member to reduce clutter in var instances
 };
 ShmHeapAlloc::ShmHeap ShmHeapAlloc::shmheap(0x4567feed, 0x1000, ShmHeapAlloc::ShmHeap::persist::NewPerm);
+//tag allocated var with src location:
+//NOTE: cpp avoids recursion so macro names can match actual function names here
+#define new  new(__FILE__, __LINE__)
 
 
 //overload new + delete operators:
