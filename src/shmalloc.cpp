@@ -1,7 +1,9 @@
 //shared memory allocator
 //to compile:
 // g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 shmalloc.cpp -o shmalloc
-
+// gdb ./shmalloc
+// bt
+// x/80xw 0x7ffff7ff7000
 
 #define TOSTR(str)  TOSTR_NESTED(str)
 #define TOSTR_NESTED(str)  #str
@@ -134,6 +136,7 @@ public:
 //    ++Complex::nalloc;
 //    if (Complex::nalloc == 1)
         ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key '" << key << "' at adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
+        if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
         return ptr;
     }
     void operator delete(void* ptr) noexcept
@@ -155,12 +158,11 @@ public:
         void defered_init() //kludge: delay init until needed (else segv during static init)
         {
             if (init_params.init) return; //already inited
-            init_params.init = true;
 //kludge: restore ctor params:
             int key = init_params.key;
             size_t size = init_params.size;
             persist cre = init_params.cre;
-            ATOMIC(std::cout << BLUE_MSG << "defered_init(key " << FMT("0x%x") << key << ", size " << size << ", cre " << cre << ")" << ENDCOLOR << std::flush);
+            ATOMIC(std::cout << BLUE_MSG << "defered_init(key " << FMT("0x%x") << key << ", size " << size << ", cre " << (int)cre << ")" << ENDCOLOR << std::flush);
 //        ATOMIC(std::cout << CYAN_MSG << "hello" << ENDCOLOR << std::flush);
 //        if ((key = ftok("hello.txt", 'R')) == -1) /*Here the file must exist */ 
 //        int fd = shm_open(filepath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
@@ -182,7 +184,7 @@ public:
             if (ptr == (void*)-1) throw std::runtime_error(std::string(strerror(errno)));
             m_key = key;
             m_size = size;
-            m_ptr = (hdr*)ptr;
+            m_ptr = static_cast<decltype(m_ptr)>(ptr);
             m_persist = (cre != persist::NewTemp);
             if (cre != persist::PreExist) //init shm seg
             {
@@ -190,11 +192,15 @@ public:
 //                m_ptr->used = 0;
 //                m_ptr->symtab[0].nextofs = 0;
 //                m_ptr->symtab[0].name[0] = '\0';
+                m_ptr->nextofs = (long)&m_ptr->symtab[0] - (long)m_ptr; //eof
 //this one definitely needed:
-                m_ptr->used = (long)&m_ptr->symtab[0] - (long)m_ptr;
+//                m_ptr->used = (long)&m_ptr->symtab[0] - (long)m_ptr;
 //this one is probably needed:
                 new (&m_ptr->mutex) std::mutex(); //make sure mutex is inited; placement new: https://stackoverflow.com/questions/2494471/c-is-it-possible-to-call-a-constructor-directly-without-new
             }
+            init_params.init = true;
+//            std::atexit(exiting); //this happens automatically
+//            void exiting() { std::cout << "Exiting"; }
 //        if (cre) m_ptr->used += sizeof(m_ptr->used);
 //std::cout << "here1\n" << std::flush;
 //            const char* d = desc().c_str();
@@ -209,12 +215,13 @@ public:
     public: //getters
         inline int key() const { return m_key; }
         inline size_t size() const { return m_size; }
-        inline size_t available() const { return size() - used(); }
-        inline size_t used() const { return m_ptr->used; } // + sizeof(m_ptr->used); } //account for used space at front
+//        inline size_t available() const { return size() - used(); }
+//        inline size_t used() const { return m_ptr->used; } // + sizeof(m_ptr->used); } //account for used space at front
     public: //cleanup
         void detach()
         {
             if (!m_ptr) return; //not attached
+//  int shmctl(int shmid, int cmd, struct shmid_ds *buf);
             if (shmdt(m_ptr) == -1) throw std::runtime_error(strerror(errno));
             ATOMIC(std::cout << CYAN_MSG << "ShmHeap: dettached " << desc() << ENDCOLOR << std::flush);
             m_ptr = 0;
@@ -245,37 +252,59 @@ public:
 //NOTE: assumes infrequent allocation (traverses linked list of entries)
         void* alloc(const char* key, int size, int alignment = sizeof(uint32_t)) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
         {
-            defered_init(); //defer init until needed (avoid problems with static init)
+            defered_init(); //defer init until needed (avoids problems with static init)
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
 //first check if symbol already exists:
             int keylen = rdup(strlen(key) + 1, alignment);
             std::unique_lock<std::mutex> lock(m_ptr->mutex);
-            entry* symptr = find_name(key);
-            if (symptr->name[0]) return &symptr->name[0] + keylen; //already there
-
-            size = sizeof(symptr->nextofs) + keylen + rdup(size, alignment);
-            m_ptr->used = rdup(m_ptr->used, sizeof(symptr->nextofs));
-            if (available() < size) return 0; //not enough space
-            void* newptr = (void*)m_ptr + used(); //+ sizeof(symptr->nextofs) + keylen;
-            symptr->nextofs = (entry*)newptr - &m_ptr->symtab[0];
-            newptr += sizeof(symptr->nextofs) + keylen;
-            size_t ofs = (long)newptr - (long)m_ptr; //newptr - (void*)m_ptr;
-            ATOMIC(std::cout << GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << ofs << ", remaining " << available() << ENDCOLOR << std::flush);
-            return newptr;
+//check if symbol is already defined:
+//            entry* symptr = &m_ptr->symtab[0];
+//            entry* parent = (long)&m_ptr->nextofs - (long)m_ptr; //symofs = m_ptr->nextofs;
+//            entry* parent = symtab(0);
+            entry* symptr = symtab(m_ptr->nextofs);
+            for (;;)
+            {
+                if (!symptr->name[0]) //eof
+                {
+//            size = sizeof(symptr->nextofs) + keylen + rdup(size, alignment);
+//            m_ptr->used = rdup(m_ptr->used, sizeof(symptr->nextofs));
+//            if (available() < size) return 0; //not enough space
+                    size_t neweof = (long)symptr + keylen + rdup(size, alignment);
+                    ATOMIC(std::cout << GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << ((long)symptr - (long)m_ptr) << ", remaining " << ((long)m_ptr + m_size - neweof) << ENDCOLOR << std::flush);
+                    if (neweof > (long)m_ptr + m_size) return 0; //not enough space
+                    symptr->nextofs = neweof;
+                    strcpy(symptr->name, key);
+                    break;
+                }
+                if (!symptr->nextofs) throw std::runtime_error("ShmHeap: symbol chain broken");
+//                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
+                ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << symofs(symptr) << ENDCOLOR << std::flush);
+                if (!strcmp(symptr->name, key)) break; //found
+//                parent = symptr;
+                symptr = symtab(symptr->nextofs);
+//                symptr = (long)&m_ptr->symtab[0] + symptr->nextofs;
+            }
+            return (void*)symptr->name + keylen; //static_cast<void*>((long)symptr->name + keylen);
         }
         void dealloc(void* ptr)
         {
             std::unique_lock<std::mutex> lock(m_ptr->mutex);
-            entry* symptr = &m_ptr->symtab[0];
+//            entry* symptr = (void*)m_ptr + m_ptr->nextofs;
+//            size_t symofs = (long)&m_ptr->symtab[0] - (long)m_ptr;
+            entry* symptr = symtab(m_ptr->nextofs);
             for (;;)
             {
                 if (!symptr->name[0]) break; //eof
+                if (!symptr->nextofs) throw std::runtime_error("ShmHeap: symbol chain broken");
                 int keylen = strlen(symptr->name) + 1; //NOTE: unknown alignment
-                void* symadrs = (long)&symptr->name[0] + keylen;
-                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
-                ATOMIC(std::cout << BLUE_MSG << "check key '" << symptr->name << "' adrs " << FMT("0x%x") << symadrs << "..+8 is at dealloc adrs " << FMT("0x%x") << ptr << "?" << ENDCOLOR << std::flush);
-                if ((symadrs + keylen <= ptr) && (ptr <= symadrs + rdup(keylen, 8)) return;
-                symptr->nextofs =  = (long)&m_ptr->symtab[0] + symptr->nextofs;
+                void* varadrs = (void*)symptr->name + keylen; //static_cast<void*>((long)symptr->name + keylen);
+                ATOMIC(std::cout << BLUE_MSG << "check if key '" << symptr->name << "' at ofs " << symofs(symptr) << " with adrs " << FMT("0x%x") << varadrs << ".." << FMT("0x%x") << symptr->nextofs << " is at dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
+                if ((varadrs <= ptr) && (ptr < (void*)symtab(symptr->nextofs))) //adrs + rdup(keylen, 8))
+                {
+                    symptr->nextofs = symtab(symptr->nextofs)->nextofs; //remove from chain // = (long)&m_ptr->symtab[0] + symptr->nextofs;
+                    return;
+                }
+                symptr = symtab(symptr->nextofs);
             }
             throw std::runtime_error("ShmHeap: attempt to dealloc unknown address");
         }
@@ -283,35 +312,36 @@ public:
         int m_key; //only used for owner
 //    void* m_ptr; //ptr to start of shm
         size_t m_size; //total size (bytes)
-        typedef struct { size_t nextofs; char name[1]; } entry;
-        typedef struct { size_t used; std::mutex mutex; entry symtab[1]; } hdr;
+        typedef struct { size_t nextofs; char name[1]; } entry; //named storage entry
+//        inline entry* symtab(size_t ofs) { return ofs? (void*)m_ptr + ofs: 0; }
+        inline entry* symtab(size_t ofs) const { return (entry*)((long)m_ptr + ofs); }
+        inline size_t symofs(entry* symptr) const { return (long)symptr - (long)m_ptr; }
+//        typedef struct { size_t used; std::mutex mutex; entry symtab[1]; } hdr;
 //    inline entry* symtab() { return &m_ptr->symtab[0]; }
-        hdr* m_ptr; //ptr to start of shm
+//        hdr* m_ptr; //ptr to start of shm
+        struct { size_t nextofs; std::mutex mutex; entry symtab[1]; }* m_ptr; //shm struct ptr
+//        struct { size_t nextofs; std::mutex mutex; }* m_ptr; //shm struct ptr
+//        inline entry* symtab(size_t ofs) { return ofs? (void*)m_ptr + ofs: 0; }
         bool m_persist;
     private: //helpers
-//check if symbol is already defined:
-        entry* find_entry(const char* key)
-        {
-            entry* symptr = &m_ptr->symtab[0];
-            for (;;)
-            {
-                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
-                ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << ofs << ENDCOLOR << std::flush);
-                if (!symptr->name[0] || !strcmp(symptr->name, key)) return entry;
-                if (!symptr->nextofs) throw std::runtime_error("ShmHeap: bad symbol chain");
-                symptr = (long)&m_ptr->symtab[0] + symptr->nextofs;
-            }
-        }
 //show shm details (for debug):
         const std::string /*NO &*/ desc() const
 //        const char* desc() const
         {
+            entry* symptr = symtab(m_ptr->nextofs);
+            for (;;)
+            {
+                if (!symptr->name[0]) break; //eof
+                if (!symptr->nextofs) throw std::runtime_error("ShmHeap: symbol chain broken");
+                symptr = symtab(symptr->nextofs);
+            }
+            size_t used = symofs(symptr);
 //            static std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
 //            ostrm.str(""); ostrm.clear(); //https://stackoverflow.com/questions/5288036/how-to-clear-ostringstream
             std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
             ostrm << m_size << " bytes for key " << FMT("0x%x") << m_key;
             ostrm << " at " << FMT("0x%x") << m_ptr;
-            ostrm << ", used = " << used() << ", avail " << available();
+            ostrm << ", used = " << used << ", avail " << (m_size - used);
 //            std::cout << ostrm.str().c_str() << "\n" << std::flush;
             return ostrm.str(); //.c_str();
         }
@@ -321,7 +351,8 @@ public:
 ShmHeapAlloc::ShmHeap ShmHeapAlloc::shmheap(0x4567feed, 0x1000, ShmHeapAlloc::ShmHeap::persist::NewPerm);
 //tag allocated var with src location:
 //NOTE: cpp avoids recursion so macro names can match actual function names here
-#define new  new(__FILE__, __LINE__)
+//#define new  new(__FILE__, __LINE__)
+#define NEW  new(__FILE__, __LINE__)
 
 
 //overload new + delete operators:
@@ -431,7 +462,7 @@ int main(int argc, char* argv[])
     std::cout << timestamp() << "start\n" << std::flush;
     for (int i = 0; i < NUM_LOOP; i++)
     {
-        for (int j = 0; j < NUM_ENTS; j++) array[j] = new Complex (i, j);
+        for (int j = 0; j < NUM_ENTS; j++) array[j] = new(__FILE__, __LINE__ + j) Complex (i, j);
         for (int j = 0; j < NUM_ENTS; j++) delete array[j];
     }
     std::cout << timestamp() << "finish\n" << std::flush;
