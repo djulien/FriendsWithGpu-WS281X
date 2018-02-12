@@ -1,9 +1,13 @@
-//shared memory allocator
-//to compile:
+#!/bin/bash -x
+g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o shmalloc -x c++ - <<//EOF
+//shared memory allocator test
+//self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
+//or, to compile manually:
 // g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 shmalloc.cpp -o shmalloc
 // gdb ./shmalloc
 // bt
 // x/80xw 0x7ffff7ff7000
+
 
 #include "shmalloc.h"
 //#define ShmHeap  ShmHeapAlloc::ShmHeap

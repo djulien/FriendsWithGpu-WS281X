@@ -12,23 +12,24 @@
 
 #include <mutex>
 #include <condition_variable>
+//for example see http://en.cppreference.com/w/cpp/thread/condition_variable
 
 
-#ifdef SHM_KEY
- #include "shmalloc.h"
+//#ifdef SHM_KEY
+// #include "shmalloc.h"
 //ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, 0x4567feed);
-#endif
+//#endif
 
-#ifdef SHM_KEY
+//#ifdef SHM_KEY
 //multi-process queue:
 //can be accessed by multiple proceses
-class MsgQue: public ShmHeapAlloc //: public MsgQue
-#else
+//class MsgQue: public ShmHeapAlloc //: public MsgQue
+//#else
 //single process queue:
 //can be accessed by multiple threads within same process
 //class MsgQue: public MsgQueBase
 class MsgQue//Base
-#endif
+//#endif
 {
 public: //ctor/dtor
     explicit MsgQue(const char* name = 0): m_msg(0)
@@ -37,8 +38,8 @@ public: //ctor/dtor
     }
     ~MsgQue()
     {
-        if (m_msg /*&& WANT_DETAILS*/) ATOMIC(std::cout << RED_MSG << m_name << ".dtor: !empty" << FMT("0x%x") << m_msg << ENDCOLOR) //benign, but might be caller bug so complain
-        else ATOMIC(std::cout << YELLOW_MSG << m_name << ".dtor: empty" << ENDCOLOR);
+        if (m_msg /*&& WANT_DETAILS*/) ATOMIC(std::cout << RED_MSG << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR) //benign, but might be caller bug so complain
+        else ATOMIC(std::cout << GREEN_MSG << m_name << ".dtor: empty @exit" << ENDCOLOR);
 //        if (m_autodel) delete this;
     }
 #if 0

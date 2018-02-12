@@ -36,6 +36,23 @@
 #define rdup(num, den)  (((num) + (den) - 1) / (den) * (den))
 #define size32_t  uint32_t //don't need huge sizes in shared memory; cut down on wasted bytes
 
+//make a unique key based on source code location:
+//std::string srckey;
+#define SRCKEY  ShmHeap::crekey(__FILE__, __LINE__)
+
+//shared memory lookup + alloc
+//template<type TYPE>
+//class ShmObject
+//{
+//public:
+//    explicit ShmObject() {}
+//    ~ShmObject() {}
+//public:
+//};
+//MsgQue& mainq = *(MsgQue*)shmlookup(SRCKEY, [] { return new (shmaddrshmalloc(sizeof(MsgQue), key)) MsgQue("mainq"); }
+//MsgQue& mainq = *(MsgQue*)shmlookup(SRCKEY, [] (shmaddr) { return new (shmaddr) MsgQue("mainq"); }
+#define SHARED(key, type, ctor)  *(type*)shmheap.alloc(key, sizeof(type), true, [] (void* shmaddr) { new (shmaddr) ctor; })
+
 
 //shared memory segment:
 class ShmSeg
@@ -125,7 +142,10 @@ public: //ctor/dtor
         new (&mutex()) std::mutex(); //make sure mutex is inited; placement new: https://stackoverflow.com/questions/2494471/c-is-it-possible-to-call-a-constructor-directly-without-new
 //                m_shmptr[1].nextofs = 0; //eof marker
         gc(true);
-        ATOMIC(std::cout << BLUE_MSG << "sizeof(mutex) = " << sizeof(std::mutex) << ", sizeof(size_t) = " << sizeof(size_t) << ", x/80xw (addr) to examine memory" << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << BLUE_MSG << "sizeof(mutex) = " << sizeof(std::mutex) 
+            << ", sizeof(cond_var) = " << sizeof(std::condition_variable)
+            << ", sizeof(size_t) = " << sizeof(size_t)
+            << /*", x/80xw (addr) to examine memory" <<*/ ENDCOLOR << std::flush);
 //        init_params.init = true;
 //            std::atexit(exiting); //this happens automatically
 //            void exiting() { std::cout << "Exiting"; }
@@ -168,6 +188,21 @@ public: //getters
     inline std::mutex& mutex() { return symtab(0)->mutex; }
     inline size32_t shmofs(void* ptr) const { return (long)ptr - (long)shmptr(); } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
 public: //allocator methods
+//generate unique key from src location:
+//same src location will generate same key, even across processes
+    static const char* crekey(/*std::string& key,*/ const char* filename, int line)
+    {
+        static std::string srckey; //NOTE: must persist after return; not thread safe (must be used immediately)
+        const char* bp = strrchr(filename, '/');
+        if (!bp) bp = filename;
+        srckey = bp;
+        srckey += ':';
+        char buf[10];
+        sprintf(buf, "%d", line);
+        srckey += buf; //line;
+        return srckey.c_str();
+    }
+//protect critical section: used to synchronize (serialize) threads/processes
     class scoped_lock: public std::unique_lock<std::mutex>
     {
     public:
@@ -176,21 +211,10 @@ public: //allocator methods
 //    private:
 //        static std::mutex& m_mutex;
     };
-//generates a unique key from a src location:
-//same src location will generate same key, even across processes
-    static void crekey(std::string& key, const char* filename, int line)
-    {
-        const char* bp = strrchr(filename, '/');
-        if (!bp) bp = filename;
-        key = bp;
-        key += ':';
-        char buf[10];
-        sprintf(buf, "%d", line);
-        key += buf; //line;
-    }
 //allocate named storage:
+//creates new shm object if needed, else shares existing object
 //NOTE: assumes infrequent allocation (traverses linked list of entries)
-    void* alloc(const char* key, size_t size, int alignment = sizeof(uint32_t)) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
+    void* alloc(const char* key, size_t size, bool want_throw = false, void (*ctor)(void* newptr) = 0, int alignment = sizeof(uint32_t)) //assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
     {
 //        defered_init(); //kludge: defer init until needed (avoids problems with static init)
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
@@ -218,14 +242,18 @@ public: //allocator methods
 //                    long neweof = (long)symptr->name + keylen + rdup(size, alignment);
 //alloc new storage:
                 entry* nextptr = (entry*)&symptr->name[size]; //alloc space for this var
-                size32_t remaining = (long)shmptr() + shmsize() - (long)nextptr->name;
-                ATOMIC(std::cout << GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR << std::flush);
-                if (remaining < 0) return 0; //not enough space
+                int remaining = (long)shmptr() + shmsize() - (long)nextptr->name; //NOTE: must be signed
+                const char* color = (remaining < 0)? RED_MSG: GREEN_MSG;
+                ATOMIC(std::cout << color << "alloc key '" << key << "', size " << size << " at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR << std::flush);
+                if (remaining < 0) //not enough space
+                    if (want_throw) throw std::runtime_error(RED_MSG "ShmHeap: alloc failed (insufficient space)" ENDCOLOR);
+                    else return 0;
                 symptr->nextofs = shmofs(nextptr); //neweof - (long)m_ptr;
                 strcpy(symptr->name, key);
                 memset(symptr->name + keylen, 0, size - keylen); //clear storage for new var
                 nextptr->nextofs = 0; //new eof marker (in case space was reclaimed earlier)
                 dump("after alloc:");
+                if (ctor) (*ctor)(symptr->name + keylen); //initialize new object
                 return symptr->name + keylen; //static_cast<void*>((long)symptr->name + keylen);
 //                    break;
             }
@@ -305,11 +333,11 @@ private: //helpers; NOTE: mutex must be owned before using these
             entry* symptr = symtab(parent->nextofs);
 //                if (!symptr->name[0]) break; //eof
 //                if (!symptr->nextofs) throw std::runtime_error("ShmHeap: symbol chain broken");
+            parent = symptr;
             if (!symptr->nextofs) break; //eof
 //                symptr = symtab(symptr->nextofs);
-            parent = symptr;
         }
-        size32_t used = shmofs(parent); //symptr);
+        size32_t used = shmofs(parent->name); //symptr);
 //            static std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
 //            ostrm.str(""); ostrm.clear(); //https://stackoverflow.com/questions/5288036/how-to-clear-ostringstream
         std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
@@ -332,7 +360,8 @@ private: //helpers; NOTE: mutex must be owned before using these
 //                if (!symptr->name[0]) //eof
             if (!symptr->nextofs) //eof
             {
-                ATOMIC(std::cout << BLUE_MSG << FMT("[0x%x]") << shmofs(symptr) << " eof" << ENDCOLOR << std::flush);
+                size32_t used = shmofs(symptr->name), remaining = shmsize() - used;
+                ATOMIC(std::cout << BLUE_MSG << FMT("[0x%x]") << shmofs(symptr) << " eof, " << used << " used (" << remaining << " remaining)" << ENDCOLOR << std::flush);
                 return;
             }
             int keylen = strlen(symptr->name) + 1; //NOTE: unknown alignment
@@ -354,17 +383,17 @@ class ShmHeapAlloc
 public:
     void* operator new(size_t size, const char* filename, int line, int adjust = 0)
     {
-        std::string key;
+//        std::string key;
         if (adjust) line += adjust;
-        shmheap.crekey(key, filename, line); //create unique key
+        const char* key = shmheap.crekey(filename, line); //create unique key
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
 //TODO?  alignof(void*); //http://www.boost.org/doc/libs/1_59_0/doc/html/align/vocabulary.html
 //alignas(Foo) unsigned char memory[sizeof(Foo)];
 //Foo* p = ::new((void*)memory) Foo();
-        void* ptr = shmheap.alloc(key.c_str(), size);
+        void* ptr = shmheap.alloc(key, size);
 //    ++Complex::nalloc;
 //    if (Complex::nalloc == 1)
-        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key " << key.length() << ":'" << key << "' at adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key " << strlen(key) << ":'" << key << "' at adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
         if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
         return ptr;
     }
@@ -384,9 +413,14 @@ private:
 #define new_SHM(...)  new(__FILE__, __LINE__, __VA_ARGS__)
 
 
-#ifdef SHM_KEY
-ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, SHM_KEY); //0x4567feed);
-#endif
+//#ifdef SHM_KEY
+//ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, SHM_KEY); //0x4567feed);
+//#endif
+
+
+
+
+
 
 
 #ifdef OLD_ONE

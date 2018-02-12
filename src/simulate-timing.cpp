@@ -1,6 +1,10 @@
-//from http://en.cppreference.com/w/cpp/thread/condition_variable
-//to compile:
+#!/bin/bash -x
+g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  -x c++ - <<//EOF
+//simulate multi-threaded (multi-process) timing
+//self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
+//or, to compile manually:
 //  g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 simulate-timing.cpp -o simulate-timing
+
 
 #include <iostream>
 #include <sstream>
@@ -19,7 +23,7 @@
 #include "atomic.h"
 //#define SHM_KEY  0x4567feed
 #include "msgque.h"
-#define new_SHM(ignore)  new
+//#define new_SHM(ignore)  new
 
 
 #include <chrono>
@@ -62,15 +66,10 @@ void busy_msec(int msec)
 }
 
 
+#define SHM_KEY  0x4567feed
 #ifdef SHM_KEY
-template<type TYPE>
-class ShmObject
-{
-public:
-    explicit ShmObject() {}
-    ~ShmObject() {}
-public:
-};
+ #include "shmalloc.h"
+ ShmHeap /*ShmHeapAlloc::*/shmheap(274, ShmHeap::persist::NewPerm, 0x4567feed);
 //int pending = 0;
 //std::vector<int> pending;
 //std::mutex mut;
@@ -79,13 +78,10 @@ public:
 //MsgQue mainq("mainq"), wkerq("wkerq");
 //ShmObject<MsgQue> mainq("mainq"), wkerq("wkerq");
 //MsgQue& mainq = *new (shmheap.alloc(sizeof(MsgQue), __FILE__, __LINE__)) MsgQue("mainq");
-#define SRCKEY  shmheap.crekey(__FILE__, __LINE__)
 //lamba functions: http://en.cppreference.com/w/cpp/language/lambda
-#define SHARED(key, ctor)
-MsgQue& mainq = *(MsgQue*)shmlookup(SRCKEY, [](const char* key) { return new (shmalloc(sizeof(MsgQue), key)) MsgQue("mainq"); }
-MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
-MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
-shared<MsgQue> mainq("mainq", SRCKEY), wkerq("wkerq", SRCKEY + 1);
+ MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq"));
+ MsgQue& wkerq = SHARED(SRCKEY, MsgQue, MsgQue("wkerq"));
+//MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
 //MsgQue& mainq = *new_SHM(0) MsgQue("mainq");
 //MsgQue& wkerq = *new_SHM(0) MsgQue("wkerq");
 //MsgQue& wkerq = *new () MsgQue("wkerq");
@@ -94,11 +90,44 @@ shared<MsgQue> mainq("mainq", SRCKEY), wkerq("wkerq", SRCKEY + 1);
 //ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, 0x4567feed);
 //ShmMsgQue& mainq = *new ()("mainq"), wkerq("wkerq");
 //        for (int j = 0; j < NUM_ENTS; j++) array[j] = new_SHM(+j) Complex (i, j); //kludge: force unique key for shmalloc
+ #define THREAD  IpcThread
 #else
-MsgQue mainq("mainq"), wkerq("wkerq");
+ MsgQue mainq("mainq"), wkerq("wkerq");
 //MsgQue& mainq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("mainq");
 //MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
+ #define THREAD  std::thread
 #endif
+
+//simulate std::thread using a forked process:
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h> //fork
+class IpcThread
+{
+public: //ctor/dtor
+    typedef void (*_Callable)(void); //void* data); //TODO: make generic?
+//    template<typename _Callable, typename... _Args>
+//    explicit IpcThread(_Callable&& entpt, _Args&&... args)
+    explicit IpcThread(_Callable&& entpt) //, _Args&&... args)
+    {
+        m_pid = fork();
+        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "fork: pid = " << m_pid << ENDCOLOR << std::flush);
+        if (!m_pid) return; //parent
+        if (m_pid == -1) throw std::runtime_error(strerror(errno));
+        (*entpt)(/*args*/);
+        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "child " << m_pid << " exit" << ENDCOLOR << std::flush);
+        exit(0); //kludge; don't want to execute remainder of caller
+    }
+public: //methods
+    void join(void)
+    {
+        int status;
+        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "join: wait for pid " << m_pid << ENDCOLOR << std::flush);
+        waitpid(m_pid, &status, /*options*/ 0); //NOTE: will block until child state changes
+    }
+private: //data
+    pid_t m_pid;
+};
 
 
 #if 0
@@ -215,7 +244,7 @@ int main()
     return 0;
 #endif
     int frnum = 0;
-    std::vector<std::thread> wkers;
+    std::vector<THREAD> wkers;
     MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, &mainq = " << FMT("0x%x") << (long)&mainq);
 //    pending = 10;
     for (int n = 0; n < NUM_WKERs; ++n) wkers.emplace_back(wker_main);
