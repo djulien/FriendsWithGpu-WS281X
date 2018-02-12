@@ -7,50 +7,26 @@
 #include <string>
 #include <string.h> //strlen
 #include <thread>
-#include <mutex>
-#include <condition_variable>
 //#include <exception>
 //#include <unistd.h> //getpid
-#include <vector>
+
+#define WANT_DETAILS  false //true
+
+#include "colors.h"
+#include "ostrfmt.h"
+#include "elapsed.h"
+#include "vectorex.h"
+#include "atomic.h"
+//#define SHM_KEY  0x4567feed
+#include "msgque.h"
+#define new_SHM(ignore)  new
+
 
 #include <chrono>
 //#include <thread>
 //https://stackoverflow.com/questions/4184468/sleep-for-milliseconds
 #define sleep_msec(msec)  std::this_thread::sleep_for(std::chrono::milliseconds(msec))
 
-#define WANT_DETAILS  false //true
-
-
-//extended vector:
-//adds find() and join() methods
-template<class TYPE>
-class vector_ex: public std::vector<TYPE>
-{
-public:
-    int find(const TYPE& that)
-    {
-//        for (auto& val: *this) if (val == that) return &that - this;
-        for (auto it = this->begin(); it != this->end(); ++it)
-            if (*it == that) return it - this->begin();
-        return -1;
-    }
-    std::string join(const char* sep = ",", const char* if_empty = "")
-    {
-        std::stringstream buf;
-        for (auto it = this->begin(); it != this->end(); ++it)
-            buf << sep << *it;
-//        return this->size()? buf.str().substr(strlen(sep)): buf.str();
-        if (!this->size()) buf << sep << if_empty; //"(empty)";
-        return buf.str().substr(strlen(sep));
-    }
-};
-
-
-//atomic operations:
-//std::recursive_mutex atomic_mut;
-std::mutex atomic_mut;
-//use macro so stmt can be nested within scoped lock:
-#define ATOMIC(stmt)  { std::unique_lock<std::mutex> lock(atomic_mut); stmt; }
 
 //convert thread id to terse int:
 int thrid() //bool locked = false)
@@ -75,116 +51,6 @@ int thrid() //bool locked = false)
 }
 
 
-#define TOSTR(str)  TOSTR_NESTED(str)
-#define TOSTR_NESTED(str)  #str
-
-//ANSI color codes (for console output):
-//https://en.wikipedia.org/wiki/ANSI_escape_code
-#define ANSI_COLOR(code)  "\x1b[" code "m"
-#define RED_MSG  ANSI_COLOR("1;31") //too dark: "0;31"
-#define GREEN_MSG  ANSI_COLOR("1;32")
-#define YELLOW_MSG  ANSI_COLOR("1;33")
-#define BLUE_MSG  ANSI_COLOR("1;34")
-#define MAGENTA_MSG  ANSI_COLOR("1;35")
-#define PINK_MSG  MAGENTA_MSG
-#define CYAN_MSG  ANSI_COLOR("1;36")
-#define GRAY_MSG  ANSI_COLOR("0;37")
-//#define ENDCOLOR  ANSI_COLOR("0")
-//append the src line# to make debug easier:
-#define ENDCOLOR_ATLINE(n)  " &" TOSTR(n) ANSI_COLOR("0") "\n"
-#define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%d) //NOTE: requires extra param
-#define ENDCOLOR  ENDCOLOR_ATLINE(__LINE__)
-
-
-//custom stream manipulator for printf-style formating:
-//idea from https://stackoverflow.com/questions/535444/custom-manipulator-for-c-iostream
-//and https://stackoverflow.com/questions/11989374/floating-point-format-for-stdostream
-//std::ostream& fmt(std::ostream& out, const char* str)
-#include <stdio.h> //snprintf
-class FMT
-{
-public:
-    explicit FMT(const char* fmt): m_fmt(fmt) {}
-private:
-    class fmter //actual worker class
-    {
-    public:
-        explicit fmter(std::ostream& strm, const FMT& fmt): m_strm(strm), m_fmt(fmt.m_fmt) {}
-//output next object (any type) to stream:
-        template<typename TYPE>
-        std::ostream& operator<<(const TYPE& value)
-        {
-//            return m_strm << "FMT(" << m_fmt << "," << value << ")";
-            char buf[20]; //enlarge as needed
-            int needlen = snprintf(buf, sizeof(buf), m_fmt, value);
-            if (needlen < sizeof(buf)) return m_strm << buf; //fits ok
-            char* bigger = new char[needlen + 1];
-            snprintf(bigger, needlen, m_fmt, value);
-            m_strm << bigger;
-            delete bigger;
-            return m_strm;
-//            std::string buf(40);
-//            for (;;)
-//            {
-//                if (needlen < buf.capacity()) break; //it all fits
-//                buf.reserve(needlen + 1);
-//            }
-        }
-    private:
-        std::ostream& m_strm;
-        const char* m_fmt;
-    };
-    const char* m_fmt; //save fmt string for inner class
-//kludge: return derived stream to allow operator overloading:
-    friend FMT::fmter operator<<(std::ostream& strm, const FMT& fmt)
-    {
-        return FMT::fmter(strm, fmt);
-    }
-};
-
-
-//std::chrono::duration<double> elapsed()
-double elapsed_msec()
-{
-    static auto started = std::chrono::high_resolution_clock::now(); //std::chrono::system_clock::now();
-//    std::cout << "f(42) = " << fibonacci(42) << '\n';
-//    auto end = std::chrono::system_clock::now();
-//     std::chrono::duration<double> elapsed_seconds = end-start;    
-//    long sec = std::chrono::system_clock::now() - started;
-    auto now = std::chrono::high_resolution_clock::now(); //std::chrono::system_clock::now();
-//https://stackoverflow.com/questions/14391327/how-to-get-duration-as-int-millis-and-float-seconds-from-chrono
-//http://en.cppreference.com/w/cpp/chrono
-//    std::chrono::milliseconds msec = std::chrono::duration_cast<std::chrono::milliseconds>(fs);
-//    std::chrono::duration<float> duration = now - started;
-//    float msec = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-#if 0
-    typedef std::chrono::milliseconds ms;
-    typedef std::chrono::duration<float> fsec;
-    fsec fs = now - started;
-    ms d = std::chrono::duration_cast<ms>(fs);
-    std::cout << fs.count() << "s\n";
-    std::cout << d.count() << "ms\n";
-    return d.count();
-#else
-    std::chrono::duration<double, std::milli> elapsed = now - started;
-//    std::cout << "Waited " << elapsed.count() << " ms\n";
-    return elapsed.count();
-#endif
-}
-
-
-std::string timestamp()
-{
-    std::stringstream ss;
-//    ss << thrid;
-//    ss << THRID;
-//    float x = 1.2;
-//    int h = 42;
-    ss << FMT("[%4.3f msec] ") << elapsed_msec();
-    return ss.str();
-}
-
-
 //busy wait:
 //NOTE: used to simulate real CPU work; cen't use blocking wait() function
 //NOTE: need to calibrate to cpu speed
@@ -196,116 +62,45 @@ void busy_msec(int msec)
 }
 
 
-//simple msg que:
-//uses mutex (shared) and cond var
-//for ipc, mutex + cond var need to be in shared memory; for threads, just needs to be in heap
-//this is designed for synchronous usage; msg que holds 1 int ( can be used as bitmap)
-//template<int MAXLEN>
-//no-base class to share mutex across all template instances:
-//template<int MAXDEPTH>
-//
-//class MsgQue: public MsgQueBase
-class MsgQue//Base
+#ifdef SHM_KEY
+template<type TYPE>
+class ShmObject
 {
 public:
-    explicit MsgQue(const char* name = 0): m_msg(0)
-    {
-        if (WANT_DETAILS) { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
-    }
-    ~MsgQue()
-    {
-        if (m_msg && WANT_DETAILS) ATOMIC(std::cout << RED_MSG << m_name << ".dtor: !empty" << FMT("0x%x") << m_msg << ENDCOLOR); //benign, but might be caller bug so complain
-    }
+    explicit ShmObject() {}
+    ~ShmObject() {}
 public:
-    MsgQue& clear()
-    {
-        m_msg = 0;
-        return *this; //fluent
-    }
-    MsgQue& send(int msg, bool broadcast = false)
-    {
-//        std::stringstream ssout;
-        scoped_lock lock;
-//        if (m_count >= MAXLEN) throw new Error("MsgQue.send: queue full (" MAXLEN ")");
-        if (m_msg & msg) throw "MsgQue.send: msg already queued"; // + tostr(msg) + " already queued");
-        m_msg |= msg; //use bitmask for multiple msgs
-        if (!(m_msg & msg)) throw "MsgQue.send: msg enqueue failed"; // + tostr(msg) + " failed");
-        if (WANT_DETAILS) ATOMIC(std::cout << BLUE_MSG << timestamp() << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "1") << ", now qued " << FMT("0x%x") << m_msg << ENDCOLOR);
-        if (!broadcast) m_condvar.notify_one(); //wake main thread
-        else m_condvar.notify_all(); //wake *all* wker threads
-        return *this; //fluent
-    }
-//rcv filters:
-    bool wanted(int val) { if (WANT_DETAILS) ATOMIC(std::cout << FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
-    bool not_wanted(int val) { if (WANT_DETAILS) ATOMIC(std::cout << FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
-//    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
-    int rcv(bool (MsgQue::*filter)(int val), int operand = 0, bool remove = false)
-    {
-//        std::unique_lock<std::mutex> lock(mutex);
-        scoped_lock lock;
-//        m_condvar.wait(scoped_lock());
-        if (WANT_DETAILS) ATOMIC(std::cout << BLUE_MSG << timestamp() << m_name << ".rcv: " << FMT("0x%x") << m_msg << ENDCOLOR);
-        while (!(this->*filter)(operand)) m_condvar.wait(lock); //ignore spurious wakeups
-        int retval = m_msg;
-        if (remove) m_msg = 0;
-        return retval;
-#if 0
-        auto_ptr<SDL_LockedMutex> lock_HERE(mutex.cast); //SDL_LOCK(mutex));
-        myprintf(33, "here-rcv 0x%x 0x%x, pending %d" ENDCOLOR, toint(mutex.cast), toint(cond.cast), this->pending.size());
-        while (!this->pending.size()) //NOTE: need loop in order to handle "spurious wakeups"
-        {
-            if (/*!cond ||*/ !OK(SDL_CondWait(cond, mutex))) exc(RED_MSG "Wait for signal 0x%x:(0x%x,0x%x) failed" ENDCOLOR, toint(this), toint(mutex.cast), toint(cond.cast)); //throw SDL_Exception("SDL_CondWait");
-            if (!this->pending.size()) err(YELLOW_MSG "Ignoring spurious wakeup" ENDCOLOR); //paranoid
-        }
-        void* data = pending.back(); //signal already happened
-//        myprintf(33, "here-rcv got 0x%x" ENDCOLOR, toint(data));
-        pending.pop_back();
-        myprintf(30, BLUE_MSG "rcved[%d] 0x%x from signal 0x%x" ENDCOLOR, this->pending.size(), toint(data), toint(this));
-        return data;
-#endif
-    }
-#if 0
-    void wake(void* msg = NULL)
-    {
-        auto_ptr<SDL_LockedMutex> lock_HERE(mutex.cast); //SDL_LOCK(mutex));
-        myprintf(33, "here-send 0x%x 0x%x, pending %d, msg 0x%x" ENDCOLOR, toint(mutex.cast), toint(cond.cast), this->pending.size(), toint(msg));
-        this->pending.push_back(msg); //remember signal happened in case receiver is not listening yet
-        if (/*!cond ||*/ !OK(SDL_CondSignal(cond))) exc(RED_MSG "Send signal 0x%x failed" ENDCOLOR, toint(this)); //throw SDL_Exception("SDL_CondSignal");
-//        myprintf(33, "here-sent 0x%x" ENDCOLOR, toint(msg));
-        myprintf(30, BLUE_MSG "sent[%d] 0x%x to signal 0x%x" ENDCOLOR, this->pending.size(), toint(msg), toint(this));
-    }
-#endif
-//protected:
-private:
-    class scoped_lock: public std::unique_lock<std::mutex>
-    {
-    public:
-        explicit scoped_lock(): std::unique_lock<std::mutex>(m_mutex) {};
-//        ~scoped_lock() { ATOMIC(cout << "unlock\n"); }
-    };
-//    static const char* tostr(int val)
-//    {
-//        static char buf[20];
-//        snprintf(buf, sizeof(buf), "0x%x", val);
-//        return buf;
-//    }
-//protected:
-private:
-    static std::mutex m_mutex; //assume low usage, share across all signals
-    std::condition_variable m_condvar;
-//    int m_msg[MAXLEN], m_count;
-    std::string m_name; //for debug only
-    /*volatile*/ int m_msg;
 };
-std::mutex MsgQue::m_mutex;
-
-
 //int pending = 0;
 //std::vector<int> pending;
 //std::mutex mut;
 //std::condition_variable main_wake, wker_wake;
 //Signal main_wake, wker_wake;
+//MsgQue mainq("mainq"), wkerq("wkerq");
+//ShmObject<MsgQue> mainq("mainq"), wkerq("wkerq");
+//MsgQue& mainq = *new (shmheap.alloc(sizeof(MsgQue), __FILE__, __LINE__)) MsgQue("mainq");
+#define SRCKEY  shmheap.crekey(__FILE__, __LINE__)
+//lamba functions: http://en.cppreference.com/w/cpp/language/lambda
+#define SHARED(key, ctor)
+MsgQue& mainq = *(MsgQue*)shmlookup(SRCKEY, [](const char* key) { return new (shmalloc(sizeof(MsgQue), key)) MsgQue("mainq"); }
+MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
+MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
+shared<MsgQue> mainq("mainq", SRCKEY), wkerq("wkerq", SRCKEY + 1);
+//MsgQue& mainq = *new_SHM(0) MsgQue("mainq");
+//MsgQue& wkerq = *new_SHM(0) MsgQue("wkerq");
+//MsgQue& wkerq = *new () MsgQue("wkerq");
+//#define new_SHM(...)  new(__FILE__, __LINE__, __VA_ARGS__)
+
+//ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, 0x4567feed);
+//ShmMsgQue& mainq = *new ()("mainq"), wkerq("wkerq");
+//        for (int j = 0; j < NUM_ENTS; j++) array[j] = new_SHM(+j) Complex (i, j); //kludge: force unique key for shmalloc
+#else
 MsgQue mainq("mainq"), wkerq("wkerq");
+//MsgQue& mainq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("mainq");
+//MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
+#endif
+
+
 #if 0
 std::string data;
 bool ready = false;
@@ -421,7 +216,7 @@ int main()
 #endif
     int frnum = 0;
     std::vector<std::thread> wkers;
-    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers");
+    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, &mainq = " << FMT("0x%x") << (long)&mainq);
 //    pending = 10;
     for (int n = 0; n < NUM_WKERs; ++n) wkers.emplace_back(wker_main);
     MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");
@@ -444,6 +239,7 @@ int main()
     }
     for (auto& w: wkers) w.join(); //    std::vector<std::thread> wkers;
     MAIN_MSG(CYAN_MSG, "quit");
+    wkerq.clear(); //leave queue in empty state (benign; avoid warning)
 }
 #if 0 //explicit mutex + cond var
 int main()
