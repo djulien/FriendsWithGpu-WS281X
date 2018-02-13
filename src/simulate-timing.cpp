@@ -1,7 +1,6 @@
 #!/bin/bash -x
 #g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  -x c++ - <<//EOF
-#cat << EOF > /tmp/yourfilehere  
-cat <</EOF > src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  src.cpp
+echo -ne "\n\n\n" > src.cpp; cat <</EOF >> src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  src.cpp
 //simulate multi-threaded (multi-process) timing
 //self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
 //or, to compile manually:
@@ -23,7 +22,7 @@ cat <</EOF > src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m
 //#include <exception>
 //#include <unistd.h> //getpid
 
-#define WANT_DETAILS  false //true
+#define WANT_DETAILS  true //false //true
 
 #include "colors.h"
 #include "ostrfmt.h"
@@ -41,29 +40,6 @@ cat <</EOF > src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m
 #define sleep_msec(msec)  std::this_thread::sleep_for(std::chrono::milliseconds(msec))
 
 
-//convert thread id to terse int:
-int thrid() //bool locked = false)
-{
-//    auto thrid = std::this_thread::get_id();
-//    if (!locked)
-//    {
-    auto id = std::this_thread::get_id();
-    static vector_ex<std::thread::id> ids;
-    std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
-//        return thrid(true);
-//    }
-//        std::lock_guard<std::mutex> lock(m);
-    int ofs = ids.find(id);
-    if (ofs == -1) { ofs = ids.size(); ids.push_back(id); }
-//    std::stringstream ss;
-//    ss << thrid;
-//    ss << THRID;
-//    ss << ofs;
-//    return ss.str();
-    return ofs;
-}
-
-
 //busy wait:
 //NOTE: used to simulate real CPU work; cen't use blocking wait() function
 //NOTE: need to calibrate to cpu speed
@@ -78,7 +54,9 @@ void busy_msec(int msec)
 #define SHM_KEY  0x4567feed
 #ifdef SHM_KEY
  #include "shmalloc.h"
- ShmHeap /*ShmHeapAlloc::*/shmheap(274, ShmHeap::persist::NewPerm, 0x4567feed);
+ #include "ipcthread.h"
+ #define SHMLEN  (56 + 2 * (sizeof(MsgQue) + 16 + 8))
+ ShmHeap /*ShmHeapAlloc::*/shmheap(SHMLEN, ShmHeap::persist::NewPerm, 0x4567feed);
 //int pending = 0;
 //std::vector<int> pending;
 //std::mutex mut;
@@ -100,43 +78,46 @@ void busy_msec(int msec)
 //ShmMsgQue& mainq = *new ()("mainq"), wkerq("wkerq");
 //        for (int j = 0; j < NUM_ENTS; j++) array[j] = new_SHM(+j) Complex (i, j); //kludge: force unique key for shmalloc
  #define THREAD  IpcThread
+ #define THREADID  getpid()
 #else
+// MsgQue& mainq = MsgQue("mainq"); //TODO
+// MsgQue& wkerq = MsgQue("wkerq"); //TODO
  MsgQue mainq("mainq"), wkerq("wkerq");
 //MsgQue& mainq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("mainq");
 //MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
  #define THREAD  std::thread
+ #define THREADID  std::this_thread::get_id()
 #endif
 
-//simulate std::thread using a forked process:
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h> //fork
-class IpcThread
+
+//convert thread id to terse int:
+int thrid() //bool locked = false)
 {
-public: //ctor/dtor
-    typedef void (*_Callable)(void); //void* data); //TODO: make generic?
-//    template<typename _Callable, typename... _Args>
-//    explicit IpcThread(_Callable&& entpt, _Args&&... args)
-    explicit IpcThread(_Callable&& entpt) //, _Args&&... args)
-    {
-        m_pid = fork();
-        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "fork: pid = " << m_pid << ENDCOLOR << std::flush);
-        if (!m_pid) return; //parent
-        if (m_pid == -1) throw std::runtime_error(strerror(errno));
-        (*entpt)(/*args*/);
-        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "child " << m_pid << " exit" << ENDCOLOR << std::flush);
-        exit(0); //kludge; don't want to execute remainder of caller
-    }
-public: //methods
-    void join(void)
-    {
-        int status;
-        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "join: wait for pid " << m_pid << ENDCOLOR << std::flush);
-        waitpid(m_pid, &status, /*options*/ 0); //NOTE: will block until child state changes
-    }
-private: //data
-    pid_t m_pid;
-};
+//    auto thrid = std::this_thread::get_id();
+//    if (!locked)
+//    {
+    auto id = THREADID; //td::this_thread::get_id();
+//#ifdef SHM_KEY
+//    return id;
+//#endif
+#ifdef SHM_KEY
+    static vector_ex<std::thread::id>& ids = SHARED(SRCKEY, vector_ex<std::thread::id>, vector_ex<std::thread::id>);
+#else
+    static vector_ex<std::thread::id> ids;
+#endif
+    std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
+//        return thrid(true);
+//    }
+//        std::lock_guard<std::mutex> lock(m);
+    int ofs = ids.find(id);
+    if (ofs == -1) { ofs = ids.size(); ids.push_back(id); }
+//    std::stringstream ss;
+//    ss << thrid;
+//    ss << THRID;
+//    ss << ofs;
+//    return ss.str();
+    return ofs;
+}
 
 
 #if 0
@@ -254,7 +235,7 @@ int main()
 #endif
     int frnum = 0;
     std::vector<THREAD> wkers;
-    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, &mainq = " << FMT("0x%x") << (long)&mainq);
+    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, &mainq = " << FMT("0x%p") << (long)&mainq);
 //    pending = 10;
     for (int n = 0; n < NUM_WKERs; ++n) wkers.emplace_back(wker_main);
     MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");

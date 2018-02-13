@@ -26,6 +26,8 @@
 #include <errno.h>
 #include <cstdlib>
 #include <stdint.h> //uintptr_t
+#include <mutex>
+#include <condition_variable>
 #include <string.h>
 //#include <string> //https://stackoverflow.com/questions/6320995/why-i-cannot-cout-a-string
 #include <stdexcept>
@@ -134,7 +136,7 @@ class ShmHeap: public ShmSeg
 #define dump(...)  dump(__LINE__, __VA_ARGS__) //incl line# in debug; https://gcc.gnu.org/onlinedocs/cpp/Variadic-Macros.html
 #define gc(...)  gc(__LINE__, __VA_ARGS__) //incl line# in debug; https://gcc.gnu.org/onlinedocs/cpp/Variadic-Macros.html
 public: //ctor/dtor
-    explicit ShmHeap(size_t size, persist cre = persist::NewTemp, key_t key = 0): ShmSeg(size, cre, key) //, scoped_lock::m_mutex(mutex())
+    explicit ShmHeap(size_t size, persist cre = persist::NewTemp, key_t key = 0): ShmSeg(/*hdrlen() +*/ size, cre, key) //, scoped_lock::m_mutex(mutex())
     {
         if (cre == persist::Reuse) return; //no need to init shm seg
 //these are redundant (smh init to 0 anyway):
@@ -155,6 +157,7 @@ public: //ctor/dtor
             << ", sizeof(void*) = " << sizeof(void*)
             << ", sizeof(uintptr_t) = " << sizeof(uintptr_t)
             << ", sizeof(entry) = " << sizeof(entry)
+            << ", hdr len (overhead) = " << hdrlen()
             << /*", x/80xw (addr) to examine memory" <<*/ ENDCOLOR << std::flush);
 //        init_params.init = true;
 //            std::atexit(exiting); //this happens automatically
@@ -184,6 +187,7 @@ private: //data
     } entry;
 //        inline entry* symtab(size_t ofs) { return ofs? (void*)m_ptr + ofs: 0; }
     inline entry* symtab(size_t ofs) const { return (entry*)(shmptr() + ofs); } //relative ofs -> ptr
+    inline size_t hdrlen() const { return shmofs(symtab(0)[1].name); }
 //        inline size32_t symofs(entry* symptr) const { return (long)symptr - (long)m_symtab; }
 //        typedef struct { size_t used; std::mutex mutex; entry symtab[1]; } hdr;
 //    inline entry* symtab() { return &m_ptr->symtab[0]; }
@@ -253,9 +257,9 @@ public: //allocator methods
 //alloc new storage:
                 entry* nextptr = (entry*)(symptr->name + size); //alloc space for this var
                 long remaining = (uintptr_t)shmptr() + shmsize() - (uintptr_t)nextptr->name; //NOTE: must be signed
-                ATOMIC(std::cout << FMT("ptr 0x%p") << shmptr() << FMT(" + size %zu") << shmsize() << FMT(" - name* 0x%p") << (uintptr_t)nextptr->name << " = remaining " << remaining << ENDCOLOR << std::flush);
+//                ATOMIC(std::cout << FMT("ptr 0x%p") << shmptr() << FMT(" + size %zu") << shmsize() << FMT(" - name* 0x%p") << (uintptr_t)nextptr->name << " = remaining " << remaining << ENDCOLOR << std::flush);
                 const char* color = (remaining < 0)? RED_MSG: GREEN_MSG;
-                ATOMIC(std::cout << color << "alloc key '" << key << "', size " << size << " at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR << std::flush);
+                ATOMIC(std::cout << color << "alloc key '" << key << "', size " << size << "+" << (shmofs(nextptr->name) - shmofs(nextptr)) << " at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR << std::flush);
                 if (remaining < 0) //not enough space
                     if (want_throw) throw std::runtime_error(RED_MSG "ShmHeap: alloc failed (insufficient space)" ENDCOLOR);
                     else return 0;
@@ -329,13 +333,13 @@ private: //helpers; NOTE: mutex must be owned before using these
 //            m_ptr->symtab[0].name[0] = '\0'; //eof marker
 //            m_shmptr->symtab[0].nextofs = 0; //eof marker
         entry* entries = symtab(0);
-        entry* e0 = &entries[0]; entry* e1 = &entries[1];
-        ATOMIC(std::cout << FMT("shmptr = 0x%p") << shmptr()
-            << FMT(", &ent[0] = 0x%p") << e0
-            << FMT(" ofs 0x%lx") << shmofs(&entries[0])
-            << FMT(", &ent[1] = 0x%p") << &e1
-            << FMT(" ofs 0x%lx") << shmofs(&entries[1])
-            << ENDCOLOR << std::flush);
+//        entry* e0 = &entries[0]; entry* e1 = &entries[1];
+//        ATOMIC(std::cout << FMT("shmptr = 0x%p") << shmptr()
+//            << FMT(", &ent[0] = 0x%p") << e0
+//            << FMT(" ofs 0x%lx") << shmofs(&entries[0])
+//            << FMT(", &ent[1] = 0x%p") << e1
+//            << FMT(" ofs 0x%lx") << shmofs(&entries[1])
+//            << ENDCOLOR << std::flush);
         entries[0].nextofs = shmofs(&entries[1]);
         entries[1].nextofs = 0; //eof marker
 //        }
@@ -359,7 +363,8 @@ private: //helpers; NOTE: mutex must be owned before using these
 //            static std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
 //            ostrm.str(""); ostrm.clear(); //https://stackoverflow.com/questions/5288036/how-to-clear-ostringstream
         std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
-        ostrm << shmsize() << " bytes for shm key " << FMT("0x%lx") << shmkey()
+        ostrm << shmsize() << " bytes"
+            << " for shm key " << FMT("0x%lx") << shmkey()
             << " at " << FMT("0x%p") << shmptr()
             << ", used = " << used << ", avail " << (shmsize() - used);
 //            std::cout << ostrm.str().c_str() << "\n" << std::flush;
