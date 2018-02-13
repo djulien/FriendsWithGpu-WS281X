@@ -1,9 +1,18 @@
 #!/bin/bash -x
-g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  -x c++ - <<//EOF
+#g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  -x c++ - <<//EOF
+#cat << EOF > /tmp/yourfilehere  
+cat <</EOF > src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  src.cpp
 //simulate multi-threaded (multi-process) timing
 //self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
 //or, to compile manually:
 //  g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 simulate-timing.cpp -o simulate-timing
+
+//GDB in GUI mode: gdb -tui  exe-name
+//quick reference to TUI commands: http://beej.us/guide/bggdb/#qref
+// layout src   or  split
+// info b
+// disp var
+// printf "%x\n", var
 
 
 #include <iostream>

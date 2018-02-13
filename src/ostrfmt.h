@@ -25,9 +25,11 @@ private:
 //            return m_strm << "FMT(" << m_fmt << "," << value << ")";
             char buf[20]; //enlarge as needed
             int needlen = snprintf(buf, sizeof(buf), m_fmt, value);
-            if (needlen < sizeof(buf)) return m_strm << buf; //fits ok
+//printf("fmt: len %d too big? %d\n", needlen, needlen >= sizeof(buf));
+            if (needlen < sizeof(buf)) { m_strm << buf; return m_strm; } //fits ok
             char* bigger = new char[needlen + 1];
-            snprintf(bigger, needlen, m_fmt, value);
+            snprintf(bigger, needlen + 1, m_fmt, value); //try again
+//printf("fmt: len %d too big? %d\n", needlen, needlen >= sizeof(buf));
             m_strm << bigger;
             delete bigger;
             return m_strm;
