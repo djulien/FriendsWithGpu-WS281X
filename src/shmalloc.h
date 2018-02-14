@@ -435,6 +435,10 @@ private:
 //#define NEW  new(__FILE__, __LINE__)
 #define new_SHM(...)  new(__FILE__, __LINE__, __VA_ARGS__)
 
+//allow caller to calculate size of shm needed:
+#define SHMVAR_LEN(thing)  (sizeof(thing) + 16 + 8)
+#define SHMHDR_LEN  56
+
 
 //#ifdef SHM_KEY
 //ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, SHM_KEY); //0x4567feed);
@@ -444,6 +448,7 @@ private:
 //based on example at https://stackoverflow.com/questions/826569/compelling-examples-of-custom-c-allocators
 //more info at: http://www.cplusplus.com/forum/general/130920/
 //example at: http://www.josuttis.com/cppcode/myalloc.hpp.html
+//more info at: https://www.codeproject.com/Articles/4795/C-Standard-Allocator-An-Introduction-and-Implement
 //namespace mmap_allocator_namespace
 template <typename TYPE>
 class ShmAllocator//: public std::allocator<TYPE>
@@ -468,7 +473,7 @@ public: //ctor/dtor; nops - allocator has no state
 public: //methods
 //rebind allocator to another type:
     template <class OTHER>
-    struct rebind { typedef ShmAlloc<OTHER> other; };
+    struct rebind { typedef ShmAllocator<OTHER> other; };
 //get value address:
     pointer address (reference value) const { return &value; }
     const_pointer address (const_reference value) const { return &value; }
@@ -488,14 +493,14 @@ public: //methods
 //        return (pointer)the_pointer;
 //print message and allocate memory with global new:
         std::cerr << "allocate " << num << " element(s)"
-                    << " of size " << sizeof(T) << std::endl;
+                    << " of size " << sizeof(TYPE) << std::endl;
 //        return std::allocator<TYPE>::allocate(n, hint);
         pointer ptr = (pointer)(::operator new(num * sizeof(TYPE)));
         std::cerr << " allocated at: " << (void*)ptr << std::endl;
         return ptr;
     }
 //init elements of allocated storage ptr with value:
-    void construct (pointer ptr, const T& value)
+    void construct (pointer ptr, const TYPE& value)
     {
         new ((void*)ptr) TYPE(value); //init memory with placement new
     }
@@ -526,10 +531,10 @@ public: //methods
 
 //all specializations of this allocator are interchangeable:
 template <class T1, class T2>
-bool operator== (const MyAlloc<T1>&, const MyAlloc<T2>&) throw() { return true; }
+bool operator== (const ShmAllocator<T1>&, const ShmAllocator<T2>&) throw() { return true; }
 template <class T1, class T2>
-bool operator!= (const MyAlloc<T1>&, const MyAlloc<T2>&) throw() { return false; }
-}
+bool operator!= (const ShmAllocator<T1>&, const ShmAllocator<T2>&) throw() { return false; }
+
 
 
 

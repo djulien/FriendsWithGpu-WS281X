@@ -7,7 +7,7 @@
 
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <unistd.h> //fork
+#include <unistd.h> //fork, getpid
 
 class IpcThread
 {
@@ -22,7 +22,7 @@ public: //ctor/dtor
         ATOMIC(std::cout << YELLOW_MSG << timestamp() << "fork: child pid = " << m_pid << ENDCOLOR << std::flush);
         if (m_pid == -1) throw std::runtime_error(strerror(errno));
         (*entpt)(/*args*/);
-        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "child " << m_pid << " exit" << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << RED_MSG << timestamp() << "child " << m_pid << " exit" << ENDCOLOR << std::flush);
         exit(0); //kludge; don't want to execute remainder of caller
     }
 public: //std::thread emulation

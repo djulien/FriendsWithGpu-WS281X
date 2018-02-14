@@ -14,6 +14,9 @@
 #include <condition_variable>
 //for example see http://en.cppreference.com/w/cpp/thread/condition_variable
 
+#define VOLATILE  //volatile //TODO: is this needed for multi-threaded app?
+static VOLATILE std::mutex shared_mutex;
+
 
 //#ifdef SHM_KEY
 // #include "shmalloc.h"
@@ -32,7 +35,7 @@ class MsgQue//Base
 //#endif
 {
 public: //ctor/dtor
-    explicit MsgQue(const char* name = 0): m_msg(0)
+    explicit MsgQue(const char* name = 0, VOLATILE std::mutex& mutex = /*std::mutex()*/ shared_mutex): m_msg(0), m_mutex(mutex)
     {
         /*if (WANT_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
     }
@@ -64,17 +67,21 @@ public: //ctor/dtor
         ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
     }
 #endif
+public: //getters
+    inline VOLATILE std::mutex& mutex() { return m_mutex; } //in case caller wants to share between instances
 public: //methods
     MsgQue& clear()
     {
-        scoped_lock lock;
+//        scoped_lock lock;
+        std::unique_lock<VOLATILE std::mutex> scoped_lock(m_mutex);
         m_msg = 0;
         return *this; //fluent
     }
     MsgQue& send(int msg, bool broadcast = false)
     {
 //        std::stringstream ssout;
-        scoped_lock lock;
+//        scoped_lock lock;
+        std::unique_lock<VOLATILE std::mutex> scoped_lock(m_mutex);
 //        if (m_count >= MAXLEN) throw new Error("MsgQue.send: queue full (" MAXLEN ")");
         if (m_msg & msg) throw "MsgQue.send: msg already queued"; // + tostr(msg) + " already queued");
         m_msg |= msg; //use bitmask for multiple msgs
@@ -90,11 +97,11 @@ public: //methods
 //    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
     int rcv(bool (MsgQue::*filter)(int val), int operand = 0, bool remove = false)
     {
-//        std::unique_lock<std::mutex> lock(mutex);
-        scoped_lock lock;
+        std::unique_lock<VOLATILE std::mutex> scoped_lock(m_mutex);
+//        scoped_lock lock;
 //        m_condvar.wait(scoped_lock());
         if (WANT_DETAILS) ATOMIC(std::cout << BLUE_MSG << timestamp() << m_name << ".rcv: " << FMT("0x%x") << m_msg << ENDCOLOR);
-        while (!(this->*filter)(operand)) m_condvar.wait(lock); //ignore spurious wakeups
+        while (!(this->*filter)(operand)) m_condvar.wait(scoped_lock); //ignore spurious wakeups
         int retval = m_msg;
         if (remove) m_msg = 0;
         return retval;
@@ -126,12 +133,13 @@ public: //methods
 #endif
 //protected:
 private: //helpers
-    class scoped_lock: public std::unique_lock<std::mutex>
-    {
-    public:
-        /*explicit*/ scoped_lock(): std::unique_lock<std::mutex>(m_mutex) {};
-//        ~scoped_lock() { ATOMIC(cout << "unlock\n"); }
-    };
+//can't use nested class on non-static members :(
+//    class scoped_lock: public std::unique_lock<std::mutex>
+//    {
+//    public:
+//        /*explicit*/ scoped_lock(): std::unique_lock<std::mutex>(m_mutex) {};
+////        ~scoped_lock() { ATOMIC(cout << "unlock\n"); }
+//    };
 //    static const char* tostr(int val)
 //    {
 //        static char buf[20];
@@ -140,13 +148,14 @@ private: //helpers
 //    }
 //protected:
 private: //data
-    static std::mutex m_mutex; //assume low usage, share across all signals
+//    static std::mutex my_mutex; //assume low usage, share across all signals
+    VOLATILE std::mutex& m_mutex;
     std::condition_variable m_condvar;
 //    int m_msg[MAXLEN], m_count;
     std::string m_name; //for debug only
     /*volatile*/ int m_msg;
 };
-std::mutex MsgQue::m_mutex;
+//std::mutex MsgQue::my_mutex;
 
 
 #if 0

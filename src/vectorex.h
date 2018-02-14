@@ -4,16 +4,19 @@
 #define _VECTOREX_H
 
 #include <vector>
-
+#include <memory> //std::allocator
+#include <string.h> //strlen
 
 //extended vector:
 //adds find() and join() methods
-template<class TYPE>
+template<class TYPE, class ALLOC = std::allocator<TYPE>>
 class vector_ex: public std::vector<TYPE>
 {
 public: //ctors
+//    static std::allocator<TYPE> def_alloc; //default allocator; TODO: is this needed?
     /*explicit*/ vector_ex() {}
-    explicit vector_ex(std::size_t count, const std::allocator& alloc = std::allocator): std::vector<TYPE>(count, alloc) {}
+//    explicit vector_ex(std::size_t count, const std::allocator<TYPE>& alloc = def_alloc): std::vector<TYPE>(count, alloc) {}
+    explicit vector_ex(std::size_t count, const ALLOC& alloc = ALLOC()): std::vector<TYPE>(count, alloc) {}
 public: //extensions
     int find(const TYPE& that)
     {
@@ -32,5 +35,8 @@ public: //extensions
         return buf.str().substr(strlen(sep));
     }
 };
+//template<class TYPE>
+//std::allocator<TYPE> vector_ex<TYPE>::def_alloc; //default allocator; TODO: is this needed?
+
 
 #endif //ndef _VECTOREX_H

@@ -1,6 +1,6 @@
 #!/bin/bash -x
 #g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  -x c++ - <<//EOF
-echo -ne "\n\n\n" > src.cpp; cat <</EOF >> src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  src.cpp
+echo -ne "\n\n\n" > src.cpp; cat <</EOF >> src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  src.cpp
 //simulate multi-threaded (multi-process) timing
 //self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
 //or, to compile manually:
@@ -15,10 +15,10 @@ echo -ne "\n\n\n" > src.cpp; cat <</EOF >> src.cpp; g++  -fPIC -pthread -Wall -W
 
 
 #include <iostream>
-#include <sstream>
-#include <string>
-#include <string.h> //strlen
-#include <thread>
+//#include <sstream>
+//#include <string>
+//#include <string.h> //strlen
+//#include <thread>
 //#include <exception>
 //#include <unistd.h> //getpid
 
@@ -52,16 +52,16 @@ void busy_msec(int msec)
 
 
 #define SHM_KEY  0x4567feed
+#include <thread>
 
-#ifdef SHM_KEY
+#ifdef SHM_KEY //multi-process
  #include "shmalloc.h"
  #include "ipcthread.h"
  #define THREAD  IpcThread
+ #define THIS_THREAD  IpcThread
 
  vector_ex<THREAD::id> size_calc(1); //dummy var to calculate size of shared memory needed
- #define SHMENTRY_LEN(thing)  (sizeof(thing) + 16 + 8)
- #define SHMHDR_LEN  56
- #define SHMLEN  (SHMHDR_LEN + 2 * SHMENTRY_LEN(MsgQue) + SHMENTRY_LEN(size_calc))
+ #define SHMLEN  (SHMHDR_LEN + 2 * SHMVAR_LEN(MsgQue) + SHMVAR_LEN(size_calc))
  ShmHeap /*ShmHeapAlloc::*/shmheap(SHMLEN, ShmHeap::persist::NewPerm, 0x4567feed);
 //int pending = 0;
 //std::vector<int> pending;
@@ -72,8 +72,8 @@ void busy_msec(int msec)
 //ShmObject<MsgQue> mainq("mainq"), wkerq("wkerq");
 //MsgQue& mainq = *new (shmheap.alloc(sizeof(MsgQue), __FILE__, __LINE__)) MsgQue("mainq");
 //lamba functions: http://en.cppreference.com/w/cpp/language/lambda
- MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq"));
- MsgQue& wkerq = SHARED(SRCKEY, MsgQue, MsgQue("wkerq"));
+ MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq", shmheap.mutex()));
+ MsgQue& wkerq = SHARED(SRCKEY, MsgQue, MsgQue("wkerq", mainq.mutex()));
 //MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
 //MsgQue& mainq = *new_SHM(0) MsgQue("mainq");
 //MsgQue& wkerq = *new_SHM(0) MsgQue("wkerq");
@@ -83,15 +83,18 @@ void busy_msec(int msec)
 //ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, 0x4567feed);
 //ShmMsgQue& mainq = *new ()("mainq"), wkerq("wkerq");
 //        for (int j = 0; j < NUM_ENTS; j++) array[j] = new_SHM(+j) Complex (i, j); //kludge: force unique key for shmalloc
-#else
+#else //multi-thread
  #define THREAD  std::thread
+ #define THIS_THREAD  std::this_thread
 // MsgQue& mainq = MsgQue("mainq"); //TODO
 // MsgQue& wkerq = MsgQue("wkerq"); //TODO
- MsgQue mainq("mainq"), wkerq("wkerq");
+ MsgQue mainq("mainq"), wkerq("wkerq", mainq.mutex());
 //MsgQue& mainq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("mainq");
 //MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
 #endif
 
+
+#include <unistd.h> //fork, getpid
 
 //convert thread id to terse int:
 int thrid() //bool locked = false)
@@ -99,22 +102,24 @@ int thrid() //bool locked = false)
 //    auto thrid = std::this_thread::get_id();
 //    if (!locked)
 //    {
-    auto id = THREAD::get_id(); //td::this_thread::get_id();
-    ATOMIC(std::cout << BLUE_MSG << "my thread id " << id << ENDCOLOR << std::flush);
+    auto id = THIS_THREAD::get_id(); //std::this_thread::get_id();
+    ATOMIC(std::cout << CYAN_MSG << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << ENDCOLOR << std::flush);
 //#ifdef SHM_KEY
 //    return id;
 //#endif
 #ifdef SHM_KEY
     typedef vector_ex<THREAD::id, ShmAllocator<THREAD::id>> vectype;
     static vectype& ids = SHARED(SRCKEY, vectype, vectype);
+    std::unique_lock<std::mutex> lock(shmheap.mutex()); //low usage; reuse mutex
 #else
     static vector_ex<THREAD::id> ids;
-#endif
     std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
+#endif
 //        return thrid(true);
 //    }
 //        std::lock_guard<std::mutex> lock(m);
     int ofs = ids.find(id);
+    if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR);
     if (ofs == -1) { ofs = ids.size(); ids.push_back(id); }
 //    std::stringstream ss;
 //    ss << thrid;
