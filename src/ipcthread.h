@@ -25,6 +25,9 @@ public: //ctor/dtor
         ATOMIC(std::cout << YELLOW_MSG << timestamp() << "child " << m_pid << " exit" << ENDCOLOR << std::flush);
         exit(0); //kludge; don't want to execute remainder of caller
     }
+public: //std::thread emulation
+    typedef pid_t id;
+    static id get_id(void) { return getpid(); }
 public: //methods
     void join(void)
     {

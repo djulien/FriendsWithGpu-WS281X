@@ -129,7 +129,7 @@ private: //helpers
     class scoped_lock: public std::unique_lock<std::mutex>
     {
     public:
-        explicit scoped_lock(): std::unique_lock<std::mutex>(m_mutex) {};
+        /*explicit*/ scoped_lock(): std::unique_lock<std::mutex>(m_mutex) {};
 //        ~scoped_lock() { ATOMIC(cout << "unlock\n"); }
     };
 //    static const char* tostr(int val)

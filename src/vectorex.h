@@ -11,7 +11,10 @@
 template<class TYPE>
 class vector_ex: public std::vector<TYPE>
 {
-public:
+public: //ctors
+    /*explicit*/ vector_ex() {}
+    explicit vector_ex(std::size_t count, const std::allocator& alloc = std::allocator): std::vector<TYPE>(count, alloc) {}
+public: //extensions
     int find(const TYPE& that)
     {
 //        for (auto& val: *this) if (val == that) return &that - this;

@@ -1106,7 +1106,7 @@ private:
     class scoped_lock: public std::unique_lock<std::mutex>
     {
     public:
-        explicit scoped_lock(): std::unique_lock<std::mutex>(m_mutex) {};
+        /*explicit*/ scoped_lock(): std::unique_lock<std::mutex>(m_mutex) {};
 //        ~scoped_lock() { ATOMIC(cout << "unlock\n"); }
     };
 //    static const char* tostr(int val)
@@ -3342,7 +3342,7 @@ public:
 //protected:
 private:
 //    explicit GpuCanvas_js(const char* title, int w, int h, bool pivot): inner(title, w, h, pivot) { all.push_back(this); };
-    explicit GpuCanvas_js(const char* title, int w, int h/*, bool pivot*/): inner(new GpuCanvas(title, w, h/*, pivot*/))
+    /*explicit*/ GpuCanvas_js(const char* title, int w, int h/*, bool pivot*/): inner(new GpuCanvas(title, w, h/*, pivot*/))
     {
         all.push_back(this);
         async.req.data = this; //find myself later

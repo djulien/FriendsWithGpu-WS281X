@@ -440,8 +440,96 @@ private:
 //ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, SHM_KEY); //0x4567feed);
 //#endif
 
+//allocator for stl objects:
+//based on example at https://stackoverflow.com/questions/826569/compelling-examples-of-custom-c-allocators
+//more info at: http://www.cplusplus.com/forum/general/130920/
+//example at: http://www.josuttis.com/cppcode/myalloc.hpp.html
+//namespace mmap_allocator_namespace
+template <typename TYPE>
+class ShmAllocator//: public std::allocator<TYPE>
+{
+public: //type defs
+    typedef TYPE value_type;
+    typedef TYPE* pointer;
+    typedef const TYPE* const_pointer;
+    typedef TYPE& reference;
+    typedef const TYPE& const_reference;
+    typedef std::size_t size_type;
+//??    typedef off_t offset_type;
+    typedef std::ptrdiff_t difference_type;
+public: //ctor/dtor; nops - allocator has no state
+//    mmap_allocator() throw(): std::allocator<T>(), filename(""), offset(0), access_mode(DEFAULT_STL_ALLOCATOR),	map_whole_file(false), allow_remap(false), bypass_file_pool(false), private_file(), keep_forever(false) {}
+    ShmAllocator() throw()/*: std::allocator<TYPE>()*/ { fprintf(stderr, "Hello allocator!\n"); }
+//    mmap_allocator(const std::allocator<T> &a) throw():	std::allocator<T>(a), filename(""),	offset(0), access_mode(DEFAULT_STL_ALLOCATOR), map_whole_file(false), allow_remap(false), bypass_file_pool(false), private_file(), keep_forever(false) {}
+    ShmAllocator(const ShmAllocator& that) throw()/*: std::allocator<TYPE>(that)*/ {}
+    template <class OTHER>
+    ShmAllocator(const ShmAllocator<OTHER>& that) throw()/*: std::allocator<TYPE>(that)*/ {}
+    ~ShmAllocator() throw() {}
+public: //methods
+//rebind allocator to another type:
+    template <class OTHER>
+    struct rebind { typedef ShmAlloc<OTHER> other; };
+//get value address:
+    pointer address (reference value) const { return &value; }
+    const_pointer address (const_reference value) const { return &value; }
+//max #elements that can be allocated:
+    size_type max_size() const throw() { return std::numeric_limits<std::size_t>::max() / sizeof(TYPE); }
+//allocate but don't initialize:
+    pointer allocate(size_type num, const void* hint = 0)
+    {
+//        void *the_pointer;
+//        if (get_verbosity() > 0) fprintf(stderr, "Alloc %zd bytes.\n", num *sizeof(TYPE));
+//        if (access_mode == DEFAULT_STL_ALLOCATOR) return std::allocator<TYPE>::allocate(num, hint);
+//        if (num == 0) return NULL;
+//        if (bypass_file_pool) the_pointer = private_file.open_and_mmap_file(filename, access_mode, offset, n*sizeof(T), map_whole_file, allow_remap);
+//        else the_pointer = the_pool.mmap_file(filename, access_mode, offset, n*sizeof(T), map_whole_file, allow_remap);
+//        if (the_pointer == NULL) throw(mmap_allocator_exception("Couldn't mmap file, mmap_file returned NULL"));
+//        if (get_verbosity() > 0) fprintf(stderr, "pointer = %p\n", the_pointer);
+//        return (pointer)the_pointer;
+//print message and allocate memory with global new:
+        std::cerr << "allocate " << num << " element(s)"
+                    << " of size " << sizeof(T) << std::endl;
+//        return std::allocator<TYPE>::allocate(n, hint);
+        pointer ptr = (pointer)(::operator new(num * sizeof(TYPE)));
+        std::cerr << " allocated at: " << (void*)ptr << std::endl;
+        return ptr;
+    }
+//init elements of allocated storage ptr with value:
+    void construct (pointer ptr, const T& value)
+    {
+        new ((void*)ptr) TYPE(value); //init memory with placement new
+    }
+//destroy elements of initialized storage ptr:
+    void destroy (pointer ptr)
+    {
+        ptr->~TYPE(); //call dtor
+    }
+//deallocate storage ptr of deleted elements:
+    void deallocate (pointer ptr, size_type num)
+    {
+//        fprintf(stderr, "Dealloc %d bytes (%p).\n", num * sizeof(TYPE), ptr);
+//        if (get_verbosity() > 0) fprintf(stderr, "Dealloc %zd bytes (%p).\n", num *sizeof(TYPE), ptr);
+//        if (access_mode == DEFAULT_STL_ALLOCATOR) return std::allocator<T>::deallocate(ptr, num);
+//        if (num == 0) return;
+//        if (bypass_file_pool) private_file.munmap_and_close_file();
+//        else if (!keep_forever) the_pool.munmap_file(filename, access_mode, offset, num *sizeof(TYPE));
+//print message and deallocate memory with global delete:
+        std::cerr << "deallocate " << num << " element(s)"
+                    << " of size " << sizeof(TYPE)
+                    << " at: " << (void*)ptr << std::endl;
+//        return std::allocator<TYPE>::deallocate(p, n);
+        ::operator delete((void*)ptr);
+    }
+//private:
+//		friend class mmappable_vector<TYPE, mmap_allocator<TYPE> >;
+};
 
-
+//all specializations of this allocator are interchangeable:
+template <class T1, class T2>
+bool operator== (const MyAlloc<T1>&, const MyAlloc<T2>&) throw() { return true; }
+template <class T1, class T2>
+bool operator!= (const MyAlloc<T1>&, const MyAlloc<T2>&) throw() { return false; }
+}
 
 
 
@@ -476,7 +564,7 @@ public:
     public: //ctor/dtor
         enum class persist: int {PreExist = 0, NewTemp = +1, NewPerm = -1};
         explicit ShmHeap(int key): ShmHeap(key, 0, persist::PreExist) {} //child processes
-        explicit ShmHeap(int key, size32_t size, persist cre): m_key(0), m_size(0), m_shmptr(0), m_persist(false) //parent process
+        /*explicit*/ ShmHeap(int key, size32_t size, persist cre): m_key(0), m_size(0), m_shmptr(0), m_persist(false) //parent process
         {
             init_params = {false, key, size, cre}; //kludge: save info and init later (to avoid segv during static init)
         }
@@ -701,7 +789,7 @@ public:
     class scoped_lock: public std::unique_lock<std::mutex>
     {
     public:
-        explicit scoped_lock(): std::unique_lock<std::mutex>(m_shmptr->mutex) {};
+        /*explicit*/ scoped_lock(): std::unique_lock<std::mutex>(m_shmptr->mutex) {};
 //        ~scoped_lock() { ATOMIC(cout << "unlock\n"); }
     };
 //garbage collector:

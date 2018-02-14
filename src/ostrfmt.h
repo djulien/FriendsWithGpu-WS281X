@@ -11,13 +11,13 @@
 #include <stdio.h> //snprintf
 class FMT
 {
-public:
+public: //ctor
     explicit FMT(const char* fmt): m_fmt(fmt) {}
 private:
     class fmter //actual worker class
     {
     public:
-        explicit fmter(std::ostream& strm, const FMT& fmt): m_strm(strm), m_fmt(fmt.m_fmt) {}
+        /*explicit*/ fmter(std::ostream& strm, const FMT& fmt): m_strm(strm), m_fmt(fmt.m_fmt) {}
 //output next object (any type) to stream:
         template<typename TYPE>
         std::ostream& operator<<(const TYPE& value)

@@ -52,10 +52,16 @@ void busy_msec(int msec)
 
 
 #define SHM_KEY  0x4567feed
+
 #ifdef SHM_KEY
  #include "shmalloc.h"
  #include "ipcthread.h"
- #define SHMLEN  (56 + 2 * (sizeof(MsgQue) + 16 + 8))
+ #define THREAD  IpcThread
+
+ vector_ex<THREAD::id> size_calc(1); //dummy var to calculate size of shared memory needed
+ #define SHMENTRY_LEN(thing)  (sizeof(thing) + 16 + 8)
+ #define SHMHDR_LEN  56
+ #define SHMLEN  (SHMHDR_LEN + 2 * SHMENTRY_LEN(MsgQue) + SHMENTRY_LEN(size_calc))
  ShmHeap /*ShmHeapAlloc::*/shmheap(SHMLEN, ShmHeap::persist::NewPerm, 0x4567feed);
 //int pending = 0;
 //std::vector<int> pending;
@@ -77,16 +83,13 @@ void busy_msec(int msec)
 //ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, 0x4567feed);
 //ShmMsgQue& mainq = *new ()("mainq"), wkerq("wkerq");
 //        for (int j = 0; j < NUM_ENTS; j++) array[j] = new_SHM(+j) Complex (i, j); //kludge: force unique key for shmalloc
- #define THREAD  IpcThread
- #define THREADID  getpid()
 #else
+ #define THREAD  std::thread
 // MsgQue& mainq = MsgQue("mainq"); //TODO
 // MsgQue& wkerq = MsgQue("wkerq"); //TODO
  MsgQue mainq("mainq"), wkerq("wkerq");
 //MsgQue& mainq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("mainq");
 //MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
- #define THREAD  std::thread
- #define THREADID  std::this_thread::get_id()
 #endif
 
 
@@ -96,14 +99,16 @@ int thrid() //bool locked = false)
 //    auto thrid = std::this_thread::get_id();
 //    if (!locked)
 //    {
-    auto id = THREADID; //td::this_thread::get_id();
+    auto id = THREAD::get_id(); //td::this_thread::get_id();
+    ATOMIC(std::cout << BLUE_MSG << "my thread id " << id << ENDCOLOR << std::flush);
 //#ifdef SHM_KEY
 //    return id;
 //#endif
 #ifdef SHM_KEY
-    static vector_ex<std::thread::id>& ids = SHARED(SRCKEY, vector_ex<std::thread::id>, vector_ex<std::thread::id>);
+    typedef vector_ex<THREAD::id, ShmAllocator<THREAD::id>> vectype;
+    static vectype& ids = SHARED(SRCKEY, vectype, vectype);
 #else
-    static vector_ex<std::thread::id> ids;
+    static vector_ex<THREAD::id> ids;
 #endif
     std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
 //        return thrid(true);
