@@ -54,7 +54,7 @@
 //};
 //MsgQue& mainq = *(MsgQue*)shmlookup(SRCKEY, [] { return new (shmaddrshmalloc(sizeof(MsgQue), key)) MsgQue("mainq"); }
 //MsgQue& mainq = *(MsgQue*)shmlookup(SRCKEY, [] (shmaddr) { return new (shmaddr) MsgQue("mainq"); }
-#define SHARED(key, type, ctor)  *(type*)shmheap.alloc(key, sizeof(type), true, [] (void* shmaddr) { new (shmaddr) ctor; })
+#define SHARED(key, type, ctor)  *(type*)ShmHeapAlloc::shmheap.alloc(key, sizeof(type), true, [] (void* shmaddr) { new (shmaddr) ctor; })
 
 //#define VOID  uintptr_t //void //kludge: avoid compiler warnings with pointer arithmetic
 
@@ -69,6 +69,7 @@ public: //ctor/dtor
         if (cre != persist::Reuse) destroy(key); //start fresh
         m_keep = (cre != persist::NewTemp);        
         create(key, size, cre != persist::Reuse);
+//            std::cout << "ctor from " << __FILE__ << ":" << __LINE__ << "\n" << std::flush;
     }
     ~ShmSeg()
     {
@@ -228,12 +229,13 @@ public: //allocator methods
 //allocate named storage:
 //creates new shm object if needed, else shares existing object
 //NOTE: assumes infrequent allocation (traverses linked list of entries)
-    void* alloc(const char* key, size_t size, bool want_throw = false, void (*ctor)(void* newptr) = 0, int alignment = sizeof(uintptr_t)) //NO-assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
+    void* alloc(const char* key, size_t size, size_t extra = 0, bool want_throw = false, void (*ctor)(void* newptr) = 0, int alignment = sizeof(uintptr_t)) //NO-assume 32-bit alignment, allow override; https://en.wikipedia.org/wiki/LP64
     {
 //        defered_init(); //kludge: defer init until needed (avoids problems with static init)
 //more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
         int keylen = rdup(strlen(key) + 1, alignment); //alignment for var storage
         size = rdup(keylen + size, sizeof(symtab(0)->nextofs)); //alignment for following nextofs
+        extra = rdup(extra, sizeof(symtab(0)->nextofs)); //alignment for following nextofs
 //        std::unique_lock<std::mutex> lock(mutex()); //m_shmptr->mutex);
         scoped_lock lock(*this);
 //first check if symbol already exists:
@@ -255,18 +257,19 @@ public: //allocator methods
 //            if (available() < size) return 0; //not enough space
 //                    long neweof = (long)symptr->name + keylen + rdup(size, alignment);
 //alloc new storage:
-                entry* nextptr = (entry*)(symptr->name + size); //alloc space for this var
+                entry* nextptr = (entry*)(symptr->name + size + extra); //alloc space for this var
                 long remaining = (uintptr_t)shmptr() + shmsize() - (uintptr_t)nextptr->name; //NOTE: must be signed
 //                ATOMIC(std::cout << FMT("ptr %p") << shmptr() << FMT(" + size %zu") << shmsize() << FMT(" - name* %p") << (uintptr_t)nextptr->name << " = remaining " << remaining << ENDCOLOR << std::flush);
                 const char* color = (remaining < 0)? RED_MSG: GREEN_MSG;
-                ATOMIC(std::cout << color << "alloc key '" << key << "', size " << size << "+" << (shmofs(nextptr->name) - shmofs(nextptr)) << " at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR << std::flush);
+                ATOMIC(std::cout << color << "alloc key '" << key << "', size " << size << "+" << extra << " extra +" << (shmofs(nextptr->name) - shmofs(nextptr)) << " ovhr at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR << std::flush);
                 if (remaining < 0) //not enough space
                     if (want_throw) throw std::runtime_error(RED_MSG "ShmHeap: alloc failed (insufficient space)" ENDCOLOR);
                     else return 0;
                 symptr->nextofs = shmofs(nextptr); //neweof - (long)m_ptr;
                 strcpy(symptr->name, key);
-                memset(symptr->name + keylen, 0, size - keylen); //clear storage for new var
+                memset(symptr->name + keylen, 0, size + extra - keylen); //clear storage for new var
                 nextptr->nextofs = 0; //new eof marker (in case space was reclaimed earlier)
+                ATOMIC(std::cout << RED_MSG << "TODO: alloc: tell object's allocator about " << extra << " extra bytes" << ENDCOLOR << std::flush);
                 dump("after alloc:");
                 if (ctor) (*ctor)(symptr->name + keylen); //initialize new object
                 return symptr->name + keylen; //static_cast<void*>((long)symptr->name + keylen);
@@ -425,7 +428,8 @@ public:
         shmheap.dealloc(ptr);
         ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR << std::flush);
     }
-private:
+//private:
+public:
     static ShmHeap shmheap;
 };
 
@@ -492,11 +496,10 @@ public: //methods
 //        if (get_verbosity() > 0) fprintf(stderr, "pointer = %p\n", the_pointer);
 //        return (pointer)the_pointer;
 //print message and allocate memory with global new:
-        std::cerr << "allocate " << num << " element(s)"
-                    << " of size " << sizeof(TYPE) << std::endl;
 //        return std::allocator<TYPE>::allocate(n, hint);
         pointer ptr = (pointer)(::operator new(num * sizeof(TYPE)));
-        std::cerr << " allocated at: " << (void*)ptr << std::endl;
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << num << " element(s)"
+                    << " of size " << sizeof(TYPE) << FMT(" at %p") << (long)ptr << ENDCOLOR << std::flush);
         return ptr;
     }
 //init elements of allocated storage ptr with value:

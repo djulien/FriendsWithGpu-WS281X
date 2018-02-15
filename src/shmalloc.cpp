@@ -1,9 +1,10 @@
 #!/bin/bash -x
-#g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o shmalloc -x c++ - <<//EOF
-echo -ne "\n\n\n" > src.cpp; cat <</EOF >> src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o shmalloc  src.cpp
+cat <</EOF | g++ -D__FILENAME__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o shmalloc -x c++ -
+#line 4 __FILENAME__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 
 //shared memory allocator test
 //self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
+//how to get name of bash script: https://stackoverflow.com/questions/192319/how-do-i-know-the-script-file-name-in-a-bash-script
 //or, to compile manually:
 // g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 shmalloc.cpp -o shmalloc
 // gdb ./shmalloc
@@ -17,6 +18,18 @@ echo -ne "\n\n\n" > src.cpp; cat <</EOF >> src.cpp; g++  -fPIC -pthread -Wall -W
 //define shared memory heap:
 //ShmHeap shmheap(0x1000, ShmHeap::persist::NewPerm, 0x4567feed);
 ShmHeap ShmHeapAlloc::shmheap(0x1000, ShmHeap::persist::NewPerm, 0x4567feed);
+
+
+#include "vectorex.h"
+int main()
+{
+    typedef vector_ex<int, ShmAllocator<int>> vectype;
+    static vectype& ids = //SHARED(SRCKEY, vectype, vectype);
+        *(vectype*)ShmHeapAlloc::shmheap.alloc(SRCKEY, sizeof(vectype), 4 * sizeof(int), true, [] (void* shmaddr) { new (shmaddr) vectype; })
+//    std::unique_lock<std::mutex> lock(shmheap.mutex()); //low usage; reuse mutex
+//    std::cout << "hello from " << __FILE__ << ":" << __LINE__ << "\n" << std::flush;
+}
+#define main   mainx
 
 
 class Complex: public ShmHeapAlloc

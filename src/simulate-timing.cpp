@@ -1,6 +1,7 @@
 #!/bin/bash -x
-#g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  -x c++ - <<//EOF
-echo -ne "\n\n\n" > src.cpp; cat <</EOF >> src.cpp; g++  -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o simulate-timing  src.cpp
+cat <</EOF | g++ -D__FILENAME__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o shmalloc -x c++ -
+#line 4 __FILENAME__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
+
 //simulate multi-threaded (multi-process) timing
 //self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
 //or, to compile manually:
@@ -64,7 +65,7 @@ void busy_msec(int msec)
 // vector_ex<THREAD::id> size_calc(NUM_WKERs); //dummy var to calculate size of shared memory needed
  struct { vector_ex<THREAD::id> vect; THREAD::id ids[NUM_WKERs]; } size_calc;
  #define SHMLEN  (SHMHDR_LEN + 2 * SHMVAR_LEN(MsgQue) + SHMVAR_LEN(size_calc))
- ShmHeap /*ShmHeapAlloc::*/shmheap(SHMLEN, ShmHeap::persist::NewPerm, 0x4567feed);
+ ShmHeap ShmHeapAlloc::shmheap(SHMLEN, ShmHeap::persist::NewPerm, 0x4567feed);
 //int pending = 0;
 //std::vector<int> pending;
 //std::mutex mut;
@@ -74,7 +75,7 @@ void busy_msec(int msec)
 //ShmObject<MsgQue> mainq("mainq"), wkerq("wkerq");
 //MsgQue& mainq = *new (shmheap.alloc(sizeof(MsgQue), __FILE__, __LINE__)) MsgQue("mainq");
 //lamba functions: http://en.cppreference.com/w/cpp/language/lambda
- MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq", shmheap.mutex()));
+ MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq", ShmHeapAlloc::shmheap.mutex()));
  MsgQue& wkerq = SHARED(SRCKEY, MsgQue, MsgQue("wkerq", mainq.mutex()));
 //MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
 //MsgQue& mainq = *new_SHM(0) MsgQue("mainq");
@@ -112,7 +113,7 @@ int thrid() //bool locked = false)
 #ifdef SHM_KEY //need shared vector to make thread ids (inx, actually) consistent and unique
     typedef vector_ex<THREAD::id, ShmAllocator<THREAD::id>> vectype;
     static vectype& ids = SHARED(SRCKEY, vectype, vectype);
-    std::unique_lock<std::mutex> lock(shmheap.mutex()); //low usage; reuse mutex
+    std::unique_lock<std::mutex> lock(ShmHeapAlloc::shmheap.mutex()); //low usage; reuse mutex
 #else
     static vector_ex<THREAD::id> ids;
     std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
@@ -247,7 +248,7 @@ int main()
 #endif
     int frnum = 0;
     std::vector<THREAD> wkers;
-    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << (long)&mainq << << FMT(", &wkerq = %p") << (long)&wkerq);
+    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << (long)&mainq << FMT(", &wkerq = %p") << (long)&wkerq);
 //    pending = 10;
     for (int n = 0; n < NUM_WKERs; ++n) wkers.emplace_back(wker_main);
     MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");
