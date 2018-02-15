@@ -51,6 +51,7 @@ void busy_msec(int msec)
 }
 
 
+#define NUM_WKERs  4 //8
 #define SHM_KEY  0x4567feed
 #include <thread>
 
@@ -60,7 +61,8 @@ void busy_msec(int msec)
  #define THREAD  IpcThread
  #define THIS_THREAD  IpcThread
 
- vector_ex<THREAD::id> size_calc(1); //dummy var to calculate size of shared memory needed
+// vector_ex<THREAD::id> size_calc(NUM_WKERs); //dummy var to calculate size of shared memory needed
+ struct { vector_ex<THREAD::id> vect; THREAD::id ids[NUM_WKERs]; } size_calc;
  #define SHMLEN  (SHMHDR_LEN + 2 * SHMVAR_LEN(MsgQue) + SHMVAR_LEN(size_calc))
  ShmHeap /*ShmHeapAlloc::*/shmheap(SHMLEN, ShmHeap::persist::NewPerm, 0x4567feed);
 //int pending = 0;
@@ -107,7 +109,7 @@ int thrid() //bool locked = false)
 //#ifdef SHM_KEY
 //    return id;
 //#endif
-#ifdef SHM_KEY
+#ifdef SHM_KEY //need shared vector to make thread ids (inx, actually) consistent and unique
     typedef vector_ex<THREAD::id, ShmAllocator<THREAD::id>> vectype;
     static vectype& ids = SHARED(SRCKEY, vectype, vectype);
     std::unique_lock<std::mutex> lock(shmheap.mutex()); //low usage; reuse mutex
@@ -222,7 +224,7 @@ void wker_main()
 //    ThreadSafe(std::ostream& strm): std::basic_ostream<char>(strm) {};
 //};
 #define MAIN_MSG(color, msg)  ATOMIC(std::cout << color << timestamp() << FMT("main[%d]") << frnum << " " << msg << ENDCOLOR << std::flush)
-#define NUM_WKERs  4 //8
+//#define NUM_WKERs  4 //8
 #define DURATION  10 //100
 #define MAIN_ENCODE_DELAY  10
 #define MAIN_PRESENT_DELAY  33 //100
@@ -245,7 +247,7 @@ int main()
 #endif
     int frnum = 0;
     std::vector<THREAD> wkers;
-    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, &mainq = " << FMT("0x%p") << (long)&mainq);
+    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << (long)&mainq << << FMT(", &wkerq = %p") << (long)&wkerq);
 //    pending = 10;
     for (int n = 0; n < NUM_WKERs; ++n) wkers.emplace_back(wker_main);
     MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");

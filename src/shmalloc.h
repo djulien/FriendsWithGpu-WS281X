@@ -103,7 +103,7 @@ private: //helpers
         struct shmid_ds info;
         if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
         void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
-        ATOMIC(std::cout << BLUE_MSG << "ShmSeg: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("0x%p") << ptr << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << BLUE_MSG << "ShmSeg: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ENDCOLOR << std::flush);
         if (ptr == (void*)-1) throw std::runtime_error(std::string(strerror(errno)));
         m_key = key;
         m_ptr = ptr;
@@ -257,7 +257,7 @@ public: //allocator methods
 //alloc new storage:
                 entry* nextptr = (entry*)(symptr->name + size); //alloc space for this var
                 long remaining = (uintptr_t)shmptr() + shmsize() - (uintptr_t)nextptr->name; //NOTE: must be signed
-//                ATOMIC(std::cout << FMT("ptr 0x%p") << shmptr() << FMT(" + size %zu") << shmsize() << FMT(" - name* 0x%p") << (uintptr_t)nextptr->name << " = remaining " << remaining << ENDCOLOR << std::flush);
+//                ATOMIC(std::cout << FMT("ptr %p") << shmptr() << FMT(" + size %zu") << shmsize() << FMT(" - name* %p") << (uintptr_t)nextptr->name << " = remaining " << remaining << ENDCOLOR << std::flush);
                 const char* color = (remaining < 0)? RED_MSG: GREEN_MSG;
                 ATOMIC(std::cout << color << "alloc key '" << key << "', size " << size << "+" << (shmofs(nextptr->name) - shmofs(nextptr)) << " at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR << std::flush);
                 if (remaining < 0) //not enough space
@@ -300,7 +300,7 @@ public: //allocator methods
             if (!symptr->nextofs) break; //eof
             int keylen = strlen(symptr->name) + 1; //NOTE: unknown alignment
             uintptr_t varadrs = (uintptr_t)(symptr->name + keylen); //static_cast<void*>((long)symptr->name + keylen);
-            ATOMIC(std::cout << BLUE_MSG << "check '" << symptr->name << FMT("' ofs 0x%lx") << shmofs(symptr) << " adrs " << FMT("0x%p") << varadrs << ".." << FMT("0x%lx") << symptr->nextofs << " ~= dealloc adrs " << FMT("0x%p") << ptr << ENDCOLOR << std::flush);
+            ATOMIC(std::cout << BLUE_MSG << "check '" << symptr->name << FMT("' ofs 0x%lx") << shmofs(symptr) << " adrs " << FMT("%p") << varadrs << ".." << FMT("0x%lx") << symptr->nextofs << " ~= dealloc adrs " << FMT("%p") << ptr << ENDCOLOR << std::flush);
             if ((varadrs <= (uintptr_t)ptr) && ((uintptr_t)ptr < (uintptr_t)symtab(symptr->nextofs))) //adrs + rdup(keylen, 8))
             {
 //                    symptr->nextofs = symtab(symptr->nextofs)->nextofs; //remove from chain // = (long)&m_ptr->symtab[0] + symptr->nextofs;
@@ -334,10 +334,10 @@ private: //helpers; NOTE: mutex must be owned before using these
 //            m_shmptr->symtab[0].nextofs = 0; //eof marker
         entry* entries = symtab(0);
 //        entry* e0 = &entries[0]; entry* e1 = &entries[1];
-//        ATOMIC(std::cout << FMT("shmptr = 0x%p") << shmptr()
-//            << FMT(", &ent[0] = 0x%p") << e0
+//        ATOMIC(std::cout << FMT("shmptr = %p") << shmptr()
+//            << FMT(", &ent[0] = %p") << e0
 //            << FMT(" ofs 0x%lx") << shmofs(&entries[0])
-//            << FMT(", &ent[1] = 0x%p") << e1
+//            << FMT(", &ent[1] = %p") << e1
 //            << FMT(" ofs 0x%lx") << shmofs(&entries[1])
 //            << ENDCOLOR << std::flush);
         entries[0].nextofs = shmofs(&entries[1]);
@@ -365,7 +365,7 @@ private: //helpers; NOTE: mutex must be owned before using these
         std::ostringstream ostrm; //use static to preserve ret val after return; only one instance expected so okay to reuse
         ostrm << shmsize() << " bytes"
             << " for shm key " << FMT("0x%lx") << shmkey()
-            << " at " << FMT("0x%p") << shmptr()
+            << " at " << FMT("%p") << shmptr()
             << ", used = " << used << ", avail " << (shmsize() - used);
 //            std::cout << ostrm.str().c_str() << "\n" << std::flush;
         return ostrm.str(); //.c_str();
@@ -416,14 +416,14 @@ public:
         void* ptr = shmheap.alloc(key, size);
 //    ++Complex::nalloc;
 //    if (Complex::nalloc == 1)
-        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key " << strlen(key) << ":'" << key << "' at adrs " << FMT("0x%p") << ptr << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key " << strlen(key) << ":'" << key << "' at adrs " << FMT("%p") << ptr << ENDCOLOR << std::flush);
         if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
         return ptr;
     }
     void operator delete(void* ptr) noexcept
     {
         shmheap.dealloc(ptr);
-        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("0x%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR << std::flush);
     }
 private:
     static ShmHeap shmheap;

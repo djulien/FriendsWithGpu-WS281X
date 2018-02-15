@@ -18,11 +18,12 @@ public: //ctor/dtor
     explicit IpcThread(_Callable&& entpt) //, _Args&&... args)
     {
         m_pid = fork();
-        if (!m_pid) return; //parent
-        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "fork: child pid = " << m_pid << ENDCOLOR << std::flush);
-        if (m_pid == -1) throw std::runtime_error(strerror(errno));
-        (*entpt)(/*args*/);
-        ATOMIC(std::cout << RED_MSG << timestamp() << "child " << m_pid << " exit" << ENDCOLOR << std::flush);
+        const char* proctype = m_pid? "parent": "child";
+        ATOMIC(std::cout << YELLOW_MSG << timestamp() << "fork (" << proctype << "): child pid = " << (m_pid? m_pid: getpid()) << ENDCOLOR << std::flush);
+        if (m_pid == -1) throw std::runtime_error(strerror(errno)); //fork failed
+        if (m_pid) return; //parent
+        (*entpt)(/*args*/); //call child main()
+        ATOMIC(std::cout << RED_MSG << timestamp() << "child " << getpid() << " exit" << ENDCOLOR << std::flush);
         exit(0); //kludge; don't want to execute remainder of caller
     }
 public: //std::thread emulation
@@ -31,12 +32,13 @@ public: //std::thread emulation
 public: //methods
     void join(void)
     {
-        int status;
+        if (!m_pid || (m_pid == -1)) throw std::runtime_error(RED_MSG "join (child): no process to join" ENDCOLOR);
         ATOMIC(std::cout << YELLOW_MSG << timestamp() << "join: wait for pid " << m_pid << ENDCOLOR << std::flush);
+        int status;
         waitpid(m_pid, &status, /*options*/ 0); //NOTE: will block until child state changes
     }
 private: //data
-    pid_t m_pid;
+    pid_t m_pid; //child pid (valid in parent only)
 };
 
 #endif //ndef _IPC_THREAD_H

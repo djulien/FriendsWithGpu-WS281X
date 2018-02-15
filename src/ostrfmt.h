@@ -25,7 +25,8 @@ private:
 //            return m_strm << "FMT(" << m_fmt << "," << value << ")";
             char buf[20]; //enlarge as needed
             int needlen = snprintf(buf, sizeof(buf), m_fmt, value);
-//printf("fmt: len %d too big? %d\n", needlen, needlen >= sizeof(buf));
+//            buf[sizeof(buf) - 1] = '\0'; //make sure it's delimited (shouldn't be necessary)
+//printf(" [fmt: len %d for '%s' too big? %d] ", needlen, buf, needlen >= sizeof(buf));
             if (needlen < sizeof(buf)) { m_strm << buf; return m_strm; } //fits ok
             char* bigger = new char[needlen + 1];
             snprintf(bigger, needlen + 1, m_fmt, value); //try again
