@@ -14,9 +14,9 @@ class vector_ex: public std::vector<TYPE>
 {
 public: //ctors
 //    static std::allocator<TYPE> def_alloc; //default allocator; TODO: is this needed?
-    /*explicit*/ vector_ex() {}
+//    /*explicit*/ vector_ex() {}
 //    explicit vector_ex(std::size_t count, const std::allocator<TYPE>& alloc = def_alloc): std::vector<TYPE>(count, alloc) {}
-    explicit vector_ex(std::size_t count, const ALLOC& alloc = ALLOC()): std::vector<TYPE>(count, alloc) {}
+    explicit vector_ex(std::size_t count = 0, const ALLOC& alloc = ALLOC()): std::vector<TYPE>(count, alloc) {}
 public: //extensions
     int find(const TYPE& that)
     {
