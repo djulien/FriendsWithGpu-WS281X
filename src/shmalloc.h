@@ -130,6 +130,412 @@ private: //helpers
 };
 
 
+#if 0
+//custom std::allocator (~heap):
+//compatible with stl containers
+#include <cstddef> //ptrdiff_t
+template<typename TYPE, long SHMKEY = 0, int EXTRA = 0> //, int SRCLINE>
+class ShmAllocator//: public std::allocator<TYPE>
+{
+public: //helper types (required by std::allocator interface)
+    typedef TYPE value_type;
+    typedef TYPE* pointer;
+    typedef const TYPE* const_pointer;
+    typedef TYPE& reference;
+    typedef const TYPE& const_reference;
+    typedef std::size_t size_type;
+//??    typedef off_t offset_type;
+    typedef std::ptrdiff_t difference_type;
+public: //ctor/dtor; NOTE: allocator should be stateless
+//    mmap_allocator() throw(): std::allocator<T>(), filename(""), offset(0), access_mode(DEFAULT_STL_ALLOCATOR),	map_whole_file(false), allow_remap(false), bypass_file_pool(false), private_file(), keep_forever(false) {}
+    ShmAllocator() throw()/*: std::allocator<TYPE>()*/ { fprintf(stderr, "Hello allocator!\n"); }
+//    mmap_allocator(const std::allocator<T> &a) throw():	std::allocator<T>(a), filename(""),	offset(0), access_mode(DEFAULT_STL_ALLOCATOR), map_whole_file(false), allow_remap(false), bypass_file_pool(false), private_file(), keep_forever(false) {}
+    ShmAllocator(const ShmAllocator& that) throw()/*: std::allocator<TYPE>(that)*/ {}
+    template <class OTHER_TYPE, long OTHER_SHMKEY, int OTHER_EXTRA>
+    ShmAllocator(const ShmAllocator/*<OTHER_TYPE, OTHER_SHMKEY, OTHER_EXTRA>*/& that) throw()/*: std::allocator<TYPE>(that)*/ {}
+    ~ShmAllocator() throw() {}
+public: //operators
+    template <class OTHER_TYPE, long OTHER_SHMKEY, int OTHER_EXTRA>
+    ShmAllocator/*<TYPE>*/& operator=(const ShmAllocator/*<OTHER_TYPE, OTHER_SHMKEY, OTHER_EXTRA>*/&) { return *this; } //TODO: is this needed?
+public: //member functions
+//rebind allocator to another type:
+    template <class OTHER_TYPE, long OTHER_SHMKEY, int OTHER_EXTRA>
+    struct rebind { typedef ShmAllocator/*<OTHER_TYPE, OTHER_SHMKEY, OTHER_EXTRA>*/ other; };
+//get value address:
+    pointer address(reference value) const { return &value; } //TODO: is this needed?
+    const_pointer address(const_reference value) const { return &value; } //TODO: is this needed?
+//max #elements that can be allocated:
+//        size_type max_size() const { return size_t(-1); }
+    size_type max_size() const throw() { return std::numeric_limits<std::size_t>::max() / sizeof(TYPE); } //TODO: is this needed?
+//allocate but don't initialize:
+    pointer allocate(size_type count, const void* hint = 0)
+    {
+//        void *the_pointer;
+//        if (get_verbosity() > 0) fprintf(stderr, "Alloc %zd bytes.\n", num *sizeof(TYPE));
+//        if (access_mode == DEFAULT_STL_ALLOCATOR) return std::allocator<TYPE>::allocate(num, hint);
+//        if (num == 0) return NULL;
+//        if (bypass_file_pool) the_pointer = private_file.open_and_mmap_file(filename, access_mode, offset, n*sizeof(T), map_whole_file, allow_remap);
+//        else the_pointer = the_pool.mmap_file(filename, access_mode, offset, n*sizeof(T), map_whole_file, allow_remap);
+//        if (the_pointer == NULL) throw(mmap_allocator_exception("Couldn't mmap file, mmap_file returned NULL"));
+//        if (get_verbosity() > 0) fprintf(stderr, "pointer = %p\n", the_pointer);
+//        return (pointer)the_pointer;
+//print message and allocate memory with global new:
+//        return std::allocator<TYPE>::allocate(n, hint);
+//            TYPE* ptr = (TYPE*)malloc(count * sizeof(TYPE)); //TODO: replace
+//            std::cout << RED_MSG << "custom allocated adrs " << FMT("%p") << ptr << ENDCOLOR << std::flush;
+        pointer ptr = (pointer)(::operator new(count * sizeof(TYPE)));
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " element(s)"
+                    << " of size " << sizeof(TYPE) << FMT(" at %p") << (long)ptr << ENDCOLOR << std::flush);
+        return ptr;
+    }
+//init elements of allocated storage ptr with value:
+    void construct(pointer ptr, const TYPE& value) //TODO: is this needed?
+    {
+        new ((void*)ptr) TYPE(value); //init memory with placement new
+    }
+//destroy elements of initialized storage ptr:
+    void destroy (pointer ptr) //TODO: is this needed?
+    {
+        ptr->~TYPE(); //call dtor
+    }
+//deallocate storage ptr of deleted elements:
+    void deallocate (pointer ptr, size_type count)
+    {
+        if (!ptr) return;
+//        fprintf(stderr, "Dealloc %d bytes (%p).\n", num * sizeof(TYPE), ptr);
+//        if (get_verbosity() > 0) fprintf(stderr, "Dealloc %zd bytes (%p).\n", num *sizeof(TYPE), ptr);
+//        if (access_mode == DEFAULT_STL_ALLOCATOR) return std::allocator<T>::deallocate(ptr, num);
+//        if (num == 0) return;
+//        if (bypass_file_pool) private_file.munmap_and_close_file();
+//        else if (!keep_forever) the_pool.munmap_file(filename, access_mode, offset, num *sizeof(TYPE));
+//print message and deallocate memory with global delete:
+//            std::cout << RED_MSG << "custom deallocated adrs " << FMT("%p") << ptr << ENDCOLOR << std::flush;
+        std::cout << "deallocate " << count << " element(s)"
+                    << " of size " << sizeof(TYPE)
+                    << " at: " << (void*)ptr << std::endl;
+//        return std::allocator<TYPE>::deallocate(p, n);
+//            free(ptr); //TODO: replace
+        ::operator delete((void*)ptr);
+    }
+//private:
+//		friend class mmappable_vector<TYPE, mmap_allocator<TYPE> >;
+public: //helpers
+    static key_t crekey() { return (rand() << 16) | 0xfeed; }
+};
+#endif
+#if 0
+//allocator for stl objects:
+//based on example at https://stackoverflow.com/questions/826569/compelling-examples-of-custom-c-allocators
+//more info at: http://www.cplusplus.com/forum/general/130920/
+//example at: http://www.josuttis.com/cppcode/myalloc.hpp.html
+//more info at: https://www.codeproject.com/Articles/4795/C-Standard-Allocator-An-Introduction-and-Implement
+//namespace mmap_allocator_namespace
+template <typename TYPE>
+class ShmAllocator//: public std::allocator<TYPE>
+{
+public: //type defs
+    typedef TYPE value_type;
+    typedef TYPE* pointer;
+    typedef const TYPE* const_pointer;
+    typedef TYPE& reference;
+    typedef const TYPE& const_reference;
+    typedef std::size_t size_type;
+//??    typedef off_t offset_type;
+    typedef std::ptrdiff_t difference_type;
+public: //ctor/dtor; nops - allocator has no state
+//    mmap_allocator() throw(): std::allocator<T>(), filename(""), offset(0), access_mode(DEFAULT_STL_ALLOCATOR),	map_whole_file(false), allow_remap(false), bypass_file_pool(false), private_file(), keep_forever(false) {}
+    ShmAllocator() throw()/*: std::allocator<TYPE>()*/ { fprintf(stderr, "Hello allocator!\n"); }
+//    mmap_allocator(const std::allocator<T> &a) throw():	std::allocator<T>(a), filename(""),	offset(0), access_mode(DEFAULT_STL_ALLOCATOR), map_whole_file(false), allow_remap(false), bypass_file_pool(false), private_file(), keep_forever(false) {}
+    ShmAllocator(const ShmAllocator& that) throw()/*: std::allocator<TYPE>(that)*/ {}
+    template <class OTHER>
+    ShmAllocator(const ShmAllocator<OTHER>& that) throw()/*: std::allocator<TYPE>(that)*/ {}
+    ~ShmAllocator() throw() {}
+public: //methods
+//rebind allocator to another type:
+    template <class OTHER>
+    struct rebind { typedef ShmAllocator<OTHER> other; };
+//get value address:
+    pointer address (reference value) const { return &value; }
+    const_pointer address (const_reference value) const { return &value; }
+//max #elements that can be allocated:
+    size_type max_size() const throw() { return std::numeric_limits<std::size_t>::max() / sizeof(TYPE); }
+//allocate but don't initialize:
+    pointer allocate(size_type num, const void* hint = 0)
+    {
+//        void *the_pointer;
+//        if (get_verbosity() > 0) fprintf(stderr, "Alloc %zd bytes.\n", num *sizeof(TYPE));
+//        if (access_mode == DEFAULT_STL_ALLOCATOR) return std::allocator<TYPE>::allocate(num, hint);
+//        if (num == 0) return NULL;
+//        if (bypass_file_pool) the_pointer = private_file.open_and_mmap_file(filename, access_mode, offset, n*sizeof(T), map_whole_file, allow_remap);
+//        else the_pointer = the_pool.mmap_file(filename, access_mode, offset, n*sizeof(T), map_whole_file, allow_remap);
+//        if (the_pointer == NULL) throw(mmap_allocator_exception("Couldn't mmap file, mmap_file returned NULL"));
+//        if (get_verbosity() > 0) fprintf(stderr, "pointer = %p\n", the_pointer);
+//        return (pointer)the_pointer;
+//print message and allocate memory with global new:
+//        return std::allocator<TYPE>::allocate(n, hint);
+        pointer ptr = (pointer)(::operator new(num * sizeof(TYPE)));
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << num << " element(s)"
+                    << " of size " << sizeof(TYPE) << FMT(" at %p") << (long)ptr << ENDCOLOR << std::flush);
+        return ptr;
+    }
+//init elements of allocated storage ptr with value:
+    void construct (pointer ptr, const TYPE& value)
+    {
+        new ((void*)ptr) TYPE(value); //init memory with placement new
+    }
+//destroy elements of initialized storage ptr:
+    void destroy (pointer ptr)
+    {
+        ptr->~TYPE(); //call dtor
+    }
+//deallocate storage ptr of deleted elements:
+    void deallocate (pointer ptr, size_type num)
+    {
+//        fprintf(stderr, "Dealloc %d bytes (%p).\n", num * sizeof(TYPE), ptr);
+//        if (get_verbosity() > 0) fprintf(stderr, "Dealloc %zd bytes (%p).\n", num *sizeof(TYPE), ptr);
+//        if (access_mode == DEFAULT_STL_ALLOCATOR) return std::allocator<T>::deallocate(ptr, num);
+//        if (num == 0) return;
+//        if (bypass_file_pool) private_file.munmap_and_close_file();
+//        else if (!keep_forever) the_pool.munmap_file(filename, access_mode, offset, num *sizeof(TYPE));
+//print message and deallocate memory with global delete:
+        std::cerr << "deallocate " << num << " element(s)"
+                    << " of size " << sizeof(TYPE)
+                    << " at: " << (void*)ptr << std::endl;
+//        return std::allocator<TYPE>::deallocate(p, n);
+        ::operator delete((void*)ptr);
+    }
+//private:
+//		friend class mmappable_vector<TYPE, mmap_allocator<TYPE> >;
+};
+//all specializations of this allocator are interchangeable:
+template <class T1, class T2>
+bool operator== (const ShmAllocator<T1>&, const ShmAllocator<T2>&) throw() { return true; }
+template <class T1, class T2>
+bool operator!= (const ShmAllocator<T1>&, const ShmAllocator<T2>&) throw() { return false; }
+#endif
+
+
+//shm traits:
+//responsible for creating and destorying shm objects
+//based on example from: http://jrruethe.github.io/blog/2015/11/22/allocators/
+template<typename TYPE>
+class ShmobjTraits
+{
+public:
+    typedef TYPE type;
+    template<typename OTHER_TYPE>
+    struct rebind { typedef ShmobjTraits<OTHER_TYPE> other; }; //used by stl containers for internal nodes, etc.
+public: //ctors
+    ShmobjTraits(void) {}
+//Copy Constructor:
+    template<typename OTHER_TYPE>
+    ShmobjTraits(ShmobjTraits<OTHER_TYPE> const& other) {}
+public: //operators
+//Address of object
+    type* address(type& obj) const { return &obj; }
+    type const* address(type const& obj) const { return &obj; }
+public: //methods
+//Construct object:
+    void construct(type* ptr, type const& ref) const { new(ptr) type(ref); } //In-place copy construct
+//Destroy object:
+    void destroy(type* ptr) const { ptr->~type(); }
+};
+
+//type-dependent allocator policies:
+#define ALLOCATOR_TRAITS(TYPE)  \
+typedef TYPE type; \
+typedef TYPE value_type; \
+typedef TYPE* pointer; \
+typedef TYPE const* const_pointer; \
+typedef TYPE& reference; \
+typedef TYPE const& const_reference; \
+typedef std::size_t size_type; \
+typedef std::ptrdiff_t difference_type
+
+//allocator policy:
+//responsible for allocating and deallocating memory
+template<typename TYPE>
+struct max_allocations
+{
+    enum { value = static_cast<std::size_t>(-1) / sizeof(TYPE) };
+};
+template<typename TYPE>
+class ShmHeap
+{
+public:
+    ALLOCATOR_TRAITS(TYPE);
+    template<typename OTHER_TYPE>
+    struct rebind { typedef ShmHeap<OTHER_TYPE> other; };
+public: //ctors
+    ShmHeap(void) {} //default ctor
+    template<typename OTHER_TYPE> ShmHeap(ShmHeap<OTHER_TYPE> const& other) {} //copy ctor
+public: //memory mgmt
+//allocate memory:
+    pointer allocate(size_type count, const_pointer /* hint */ = 0)
+    {
+        if (count > max_size()) { throw std::bad_alloc(); }
+        return static_cast<pointer>(::operator new(count * sizeof(type), ::std::nothrow));
+    }
+//Delete memory:
+    void deallocate(pointer ptr, size_type /* count */)
+    {
+        ::operator delete(ptr);
+    }
+//max #objects that can be allocated in one call:
+    size_type max_size(void) const { return max_allocations<TYPE>::value; }
+};
+
+
+//allocator:
+//#define FORWARD_ALLOCATOR_TRAITS(C)                  \
+//typedef typename C::value_type      value_type;      \
+//typedef typename C::pointer         pointer;         \
+//typedef typename C::const_pointer   const_pointer;   \
+//typedef typename C::reference       reference;       \
+//typedef typename C::const_reference const_reference; \
+//typedef typename C::size_type       size_type;       \
+//typedef typename C::difference_type difference_type
+
+template<typename TYPE, typename PolicyTYPE = ShmHeap<TYPE>, typename TraitsTYPE = ShmobjTraits<TYPE> >
+class ShmAllocator: public PolicyTYPE, public TraitsTYPE
+{
+public:
+// Template parameters
+//    typedef PolicyT Policy;
+//    typedef TraitsT Traits;
+//    FORWARD_ALLOCATOR_TRAITS(Policy)
+    ALLOCATOR_TRAITS(TYPE);
+    template<typename OTHER_TYPE>
+    struct rebind
+    {
+        typedef ShmAllocator<OTHER_TYPE,
+                         typename PolicyTYPE::template rebind<OTHER_TYPE>::other,
+                         typename TraitsTYPE::template rebind<OTHER_TYPE>::other
+                        > other;
+    };
+public: //ctors
+    ShmAllocator(void) {} //default ctor
+    template<typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
+    ShmAllocator(ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& other): Policy(other), Traits(other) {} //copy ctor
+};
+
+
+//equivalencies:
+//tell stl which allocators are compatible
+
+//allocators != unless specialization says so:
+template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
+bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
+{
+    return false;
+}
+template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
+bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
+{
+    return !(lhs == rhs);
+}
+//allocator != anything else:
+template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
+bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
+{
+    return false;
+}
+template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
+bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
+{
+    return !(lhs == rhs);
+}
+//Specialize for heap policy:
+template<typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
+bool operator==(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
+{
+    return true;
+}
+template<typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
+bool operator==(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
+{
+    return !(lhs == rhs);
+}
+
+
+#if 0
+//example usage:
+#include <set>
+struct Example
+{
+    int value;
+    Example(int v): value(v) {}
+    bool operator<(Example const& other) const { return value < other.value; }
+};
+int main(int argc, char* argv[])
+{
+    std::set<Example, std::less<Example>, ShmAllocator<Example, ShmHeap<Example> > > foo;
+    foo.insert(Example(3));
+    foo.insert(Example(1));
+    foo.insert(Example(4));
+    foo.insert(Example(2));
+    return 0;
+}
+#endif
+#if 0
+//example from: http://en.cppreference.com/w/cpp/memory/allocator
+#include <memory>
+#include <iostream>
+#include <string>
+int main()
+{
+    std::allocator<int> a1;   // default allocator for ints
+    int* a = a1.allocate(1);  // space for one int
+    a1.construct(a, 7);       // construct the int
+    std::cout << a[0] << '\n';
+    a1.deallocate(a, 1);      // deallocate space for one int
+ 
+    // default allocator for strings
+    std::allocator<std::string> a2;
+ 
+    // same, but obtained by rebinding from the type of a1
+    decltype(a1)::rebind<std::string>::other a2_1;
+ 
+    // same, but obtained by rebinding from the type of a1 via allocator_traits
+    std::allocator_traits<decltype(a1)>::rebind_alloc<std::string> a2_2;
+ 
+    std::string* s = a2.allocate(2); // space for 2 strings
+ 
+    a2.construct(s, "foo");
+    a2.construct(s + 1, "bar");
+ 
+    std::cout << s[0] << ' ' << s[1] << '\n';
+ 
+    a2.destroy(s);
+    a2.destroy(s + 1);
+    a2.deallocate(s, 2);
+}
+#endif
+
+
+//shared memory object wrapper:
+template<typename TYPE, long SHMKEY = 0, int EXTRA = 0> //, int SRCLINE>
+class ShmObj: public TYPE
+{
+public: //ctors/dtors
+    template<typename ... ARGS> //"perfect forwarding"
+    ShmObj(ARGS&& ... args): TYPE(std::forward<ARGS>(args) ...), shmkey(SHMKEY? SHMKEY: crekey()), extra(EXTRA) {} //, srcline(SRCLINE) {}
+public: //data members
+    const key_t shmkey;
+    const int extra; //, srcline;
+private: //data
+private: //helpers
+    static key_t crekey() { return (rand() << 16) | 0xfeed; }
+};
+
+
+
+
+
+
+
+
+#ifdef OLD_ONE
 //shared memory heap:
 //NOTE: very simplistic, not suitable for intense usage
 class ShmHeap: public ShmSeg
@@ -447,102 +853,15 @@ public:
 //#ifdef SHM_KEY
 //ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, SHM_KEY); //0x4567feed);
 //#endif
-
-//allocator for stl objects:
-//based on example at https://stackoverflow.com/questions/826569/compelling-examples-of-custom-c-allocators
-//more info at: http://www.cplusplus.com/forum/general/130920/
-//example at: http://www.josuttis.com/cppcode/myalloc.hpp.html
-//more info at: https://www.codeproject.com/Articles/4795/C-Standard-Allocator-An-Introduction-and-Implement
-//namespace mmap_allocator_namespace
-template <typename TYPE>
-class ShmAllocator//: public std::allocator<TYPE>
-{
-public: //type defs
-    typedef TYPE value_type;
-    typedef TYPE* pointer;
-    typedef const TYPE* const_pointer;
-    typedef TYPE& reference;
-    typedef const TYPE& const_reference;
-    typedef std::size_t size_type;
-//??    typedef off_t offset_type;
-    typedef std::ptrdiff_t difference_type;
-public: //ctor/dtor; nops - allocator has no state
-//    mmap_allocator() throw(): std::allocator<T>(), filename(""), offset(0), access_mode(DEFAULT_STL_ALLOCATOR),	map_whole_file(false), allow_remap(false), bypass_file_pool(false), private_file(), keep_forever(false) {}
-    ShmAllocator() throw()/*: std::allocator<TYPE>()*/ { fprintf(stderr, "Hello allocator!\n"); }
-//    mmap_allocator(const std::allocator<T> &a) throw():	std::allocator<T>(a), filename(""),	offset(0), access_mode(DEFAULT_STL_ALLOCATOR), map_whole_file(false), allow_remap(false), bypass_file_pool(false), private_file(), keep_forever(false) {}
-    ShmAllocator(const ShmAllocator& that) throw()/*: std::allocator<TYPE>(that)*/ {}
-    template <class OTHER>
-    ShmAllocator(const ShmAllocator<OTHER>& that) throw()/*: std::allocator<TYPE>(that)*/ {}
-    ~ShmAllocator() throw() {}
-public: //methods
-//rebind allocator to another type:
-    template <class OTHER>
-    struct rebind { typedef ShmAllocator<OTHER> other; };
-//get value address:
-    pointer address (reference value) const { return &value; }
-    const_pointer address (const_reference value) const { return &value; }
-//max #elements that can be allocated:
-    size_type max_size() const throw() { return std::numeric_limits<std::size_t>::max() / sizeof(TYPE); }
-//allocate but don't initialize:
-    pointer allocate(size_type num, const void* hint = 0)
-    {
-//        void *the_pointer;
-//        if (get_verbosity() > 0) fprintf(stderr, "Alloc %zd bytes.\n", num *sizeof(TYPE));
-//        if (access_mode == DEFAULT_STL_ALLOCATOR) return std::allocator<TYPE>::allocate(num, hint);
-//        if (num == 0) return NULL;
-//        if (bypass_file_pool) the_pointer = private_file.open_and_mmap_file(filename, access_mode, offset, n*sizeof(T), map_whole_file, allow_remap);
-//        else the_pointer = the_pool.mmap_file(filename, access_mode, offset, n*sizeof(T), map_whole_file, allow_remap);
-//        if (the_pointer == NULL) throw(mmap_allocator_exception("Couldn't mmap file, mmap_file returned NULL"));
-//        if (get_verbosity() > 0) fprintf(stderr, "pointer = %p\n", the_pointer);
-//        return (pointer)the_pointer;
-//print message and allocate memory with global new:
-//        return std::allocator<TYPE>::allocate(n, hint);
-        pointer ptr = (pointer)(::operator new(num * sizeof(TYPE)));
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << num << " element(s)"
-                    << " of size " << sizeof(TYPE) << FMT(" at %p") << (long)ptr << ENDCOLOR << std::flush);
-        return ptr;
-    }
-//init elements of allocated storage ptr with value:
-    void construct (pointer ptr, const TYPE& value)
-    {
-        new ((void*)ptr) TYPE(value); //init memory with placement new
-    }
-//destroy elements of initialized storage ptr:
-    void destroy (pointer ptr)
-    {
-        ptr->~TYPE(); //call dtor
-    }
-//deallocate storage ptr of deleted elements:
-    void deallocate (pointer ptr, size_type num)
-    {
-//        fprintf(stderr, "Dealloc %d bytes (%p).\n", num * sizeof(TYPE), ptr);
-//        if (get_verbosity() > 0) fprintf(stderr, "Dealloc %zd bytes (%p).\n", num *sizeof(TYPE), ptr);
-//        if (access_mode == DEFAULT_STL_ALLOCATOR) return std::allocator<T>::deallocate(ptr, num);
-//        if (num == 0) return;
-//        if (bypass_file_pool) private_file.munmap_and_close_file();
-//        else if (!keep_forever) the_pool.munmap_file(filename, access_mode, offset, num *sizeof(TYPE));
-//print message and deallocate memory with global delete:
-        std::cerr << "deallocate " << num << " element(s)"
-                    << " of size " << sizeof(TYPE)
-                    << " at: " << (void*)ptr << std::endl;
-//        return std::allocator<TYPE>::deallocate(p, n);
-        ::operator delete((void*)ptr);
-    }
-//private:
-//		friend class mmappable_vector<TYPE, mmap_allocator<TYPE> >;
-};
-
-//all specializations of this allocator are interchangeable:
-template <class T1, class T2>
-bool operator== (const ShmAllocator<T1>&, const ShmAllocator<T2>&) throw() { return true; }
-template <class T1, class T2>
-bool operator!= (const ShmAllocator<T1>&, const ShmAllocator<T2>&) throw() { return false; }
+#endif
 
 
 
 
 
-#ifdef OLD_ONE
+
+
+#ifdef OLD_ONE2
 //mixin class for custom allocator:
 class ShmHeapAlloc
 {
