@@ -39,6 +39,12 @@
 #define rdup(num, den)  (((num) + (den) - 1) / (den) * (den))
 //#define size32_t  uint32_t //don't need huge sizes in shared memory; cut down on wasted bytes
 
+//"perfect forwarding" (typesafe args) to ctor:
+#define PERFECT_FWD2BASE_CTOR(type, base)  \
+    template<typename ... ARGS> \
+    type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
+
+
 //make a unique key based on source code location:
 //std::string srckey;
 #define SRCKEY  ShmHeap::crekey(__FILE__, __LINE__)
@@ -60,11 +66,12 @@
 
 
 //shared memory segment:
+//stores persistent state between ShmAllocator instances
 class ShmSeg
 {
 public: //ctor/dtor
     enum class persist: int {Reuse = 0, NewTemp = -1, NewPerm = +1};
-    explicit ShmSeg(size_t size, persist cre = persist::NewTemp, key_t key = 0): m_ptr(0), m_keep(true)
+    explicit ShmSeg(size_t size = 0x1000, persist cre = persist::NewTemp, key_t key = 0): m_ptr(0), m_keep(true)
     {
         if (cre != persist::Reuse) destroy(key); //start fresh
         m_keep = (cre != persist::NewTemp);        
@@ -84,15 +91,17 @@ public: //getters
     inline size_t shmofs(void* ptr) const { return (uintptr_t)ptr - (uintptr_t)m_ptr; } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
 //    inline operator uintptr_t(void* ptr) { return (uintptr_t)(*((void**) a));
     inline size_t shmsize() const { return m_size; }
+//    inline size_t shmused() const { return m_used; }
+//    inline size_t shmavail() const { return m_size - m_used; }
 private: //data
     key_t m_key;
     void* m_ptr;
-    size_t m_size;
+    size_t m_size; //, m_used;
     bool m_keep;
 private: //helpers
     void create(key_t key, size_t size, bool want_new)
     {
-        if (!key) key = (rand() << 16) | 0xfeed;
+        if (!key) key = crekey(); //(rand() << 16) | 0xfeed;
 //#define  SHMKEY  ((key_t) 7890) /* base value for shmem key */
 //#define  PERMS 0666
 //        if (cre != persist::PreExist) destroy(key); //delete first (parent wants clean start)
@@ -109,7 +118,15 @@ private: //helpers
         m_key = key;
         m_ptr = ptr;
         m_size = info.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
+//        m_used = sizeof(size_t);
     }
+//    void* alloc(size_t size)
+//    {
+//        if (shmavail() < size) return 0; //not enough space
+//        void* retval = (intptr_t)m_ptr + m_used;
+//        m_used += size;
+//        return retval;
+//    }
     void detach()
     {
         if (!m_ptr) return; //not attached
@@ -127,7 +144,685 @@ private: //helpers
         if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
         throw std::runtime_error(strerror(errno));
     }
+public: //custom helpers
+    static key_t crekey() { return (rand() << 16) | 0xfeed; }
 };
+
+
+//shm traits:
+//responsible for creating and destroying shm objects (no memory allocate/dealloc)
+//based on example from: http://jrruethe.github.io/blog/2015/11/22/allocators/
+template<typename TYPE>
+class ShmobjTraits
+{
+public:
+    typedef TYPE type;
+    template<typename OTHER_TYPE>
+    struct rebind { typedef ShmobjTraits<OTHER_TYPE> other; }; //used by stl containers for internal nodes, etc.
+public: //ctors
+    ShmobjTraits(void) {}
+//Copy Constructor:
+    template<typename OTHER_TYPE>
+    ShmobjTraits(ShmobjTraits<OTHER_TYPE> const& other) {}
+public: //operators
+//Address of object
+    type* address(type& obj) const { return &obj; }
+    type const* address(type const& obj) const { return &obj; }
+public: //methods
+//Construct object:
+    void construct(type* ptr, type const& ref) const { new (ptr) type(ref); } //In-place copy construct
+//Destroy object:
+    void destroy(type* ptr) const { ptr->~type(); }
+};
+
+//type-dependent allocator policies:
+#define ALLOCATOR_TRAITS(TYPE)  \
+typedef TYPE type; \
+typedef TYPE value_type; \
+typedef TYPE* pointer; \
+typedef TYPE const* const_pointer; \
+typedef TYPE& reference; \
+typedef TYPE const& const_reference; \
+typedef std::size_t size_type; \
+typedef std::ptrdiff_t difference_type
+
+//allocator policy:
+//responsible for allocating and deallocating memory
+//template<typename TYPE>
+//struct max_allocations { enum { value = /*static_cast<std::size_t>(-1)*/ 10000000 / sizeof(TYPE); }; }; //take it easy on shm
+//template<typename TYPE>
+template<typename TYPE> //, int SHM_SIZE = 0x1000, int SHM_KEY = crekey(), int SHM_PERSIST = ShmSeg::persist::NewTemp>
+class ShmHeap //: public ShmSeg
+{
+public:
+    ALLOCATOR_TRAITS(TYPE);
+    template<typename OTHER_TYPE>
+    struct rebind { typedef ShmHeap<OTHER_TYPE> other; };
+public: //ctors
+    ShmHeap(/*void*/ ShmSeg& shmseg = ShmSeg()): m_shmseg(shmseg) {} //default ctor
+    template<typename OTHER_TYPE> ShmHeap(ShmHeap<OTHER_TYPE> const& other): m_shmseg(other.m_shmseg) {} //copy ctor
+public: //memory mgmt
+//allocate memory:
+    pointer allocate(size_type count, const_pointer hint = 0)
+    {
+        if (count > max_size()) { throw std::bad_alloc(); }
+        pointer ptr = static_cast<pointer>(::operator new(count * sizeof(type), ::std::nothrow));
+        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: allocated " << count << " * size " << sizeof(type) << " bytes at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+        return ptr;
+    }
+//Delete memory:
+    void deallocate(pointer ptr, size_type count)
+    {
+        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: deallocate " << count << " bytes at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+        ::operator delete(ptr);
+    }
+//max #objects that can be allocated in one call:
+    size_type max_size(void) const { return m_shmseg.shmsize() / sizeof(TYPE); } //max_allocations<TYPE>::value; }
+private: //data
+    typedef struct { size_t used; std::mutex mutex; } ShmHdr;
+    ShmSeg& m_shmseg;
+};
+
+
+//allocator:
+//#define FORWARD_ALLOCATOR_TRAITS(C)                  \
+//typedef typename C::value_type      value_type;      \
+//typedef typename C::pointer         pointer;         \
+//typedef typename C::const_pointer   const_pointer;   \
+//typedef typename C::reference       reference;       \
+//typedef typename C::const_reference const_reference; \
+//typedef typename C::size_type       size_type;       \
+//typedef typename C::difference_type difference_type
+
+//NOTE from http://en.cppreference.com/w/cpp/memory/allocator:
+//since c++11 all instances of a given allocator are interchangeable (containers store an allocator instance)
+template<typename TYPE, typename PolicyTYPE = ShmHeap<TYPE>, typename TraitsTYPE = ShmobjTraits<TYPE> >
+class ShmAllocator: public PolicyTYPE, public TraitsTYPE
+{
+public:
+// Template parameters
+//    typedef PolicyT Policy;
+//    typedef TraitsT Traits;
+//    FORWARD_ALLOCATOR_TRAITS(Policy)
+    ALLOCATOR_TRAITS(TYPE);
+    template<typename OTHER_TYPE>
+    struct rebind { typedef ShmAllocator<OTHER_TYPE, typename PolicyTYPE::template rebind<OTHER_TYPE>::other, typename TraitsTYPE::template rebind<OTHER_TYPE>::other > other; };
+public: //ctors
+    ShmAllocator(void) {} //default ctor
+    template<typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
+    ShmAllocator(ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& other): PolicyTYPE(other), TraitsTYPE(other) {} //copy ctor
+};
+
+//see https://www.codeproject.com/Articles/1089905/A-Custom-STL-std-allocator-Replacement-Improves-Pe
+//good bkg/perf info: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2007/n2271.html
+
+//equivalencies:
+//tell stl which allocators are compatible
+
+//allocators != unless specialization says so:
+template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
+bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
+{
+    return false;
+}
+template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
+bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
+{
+    return !(lhs == rhs);
+}
+//allocator != anything else:
+template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
+bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
+{
+    return false;
+}
+template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
+bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
+{
+    return !(lhs == rhs);
+}
+//Specialize for heap policy:
+template<typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
+bool operator==(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
+{
+    return true;
+}
+template<typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
+bool operator!=(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
+{
+    return !(lhs == rhs);
+}
+
+
+//mutex mixin class:
+//used to attach mutex directly to another object type (same memory space)
+#include <mutex>
+#include <atomic>
+#include <iostream> //std::cout
+template <class TYPE> //derivation
+//class Mutexed //mixin
+class WithMutex: public TYPE //derivation
+{
+public: //ctor/dtor
+//    Mutexed(): m_locked(false) {} //mixin
+    PERFECT_FWD2BASE_CTOR(WithMutex, TYPE), m_locked(false) {} //derivation
+//    Mutexed(TYPE* ptr):
+//    ~Mutexed() {}
+    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
+private:
+//protected:
+    std::mutex m_mutex;
+    std::atomic<bool> m_locked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
+public:
+    bool islocked() { return m_locked; } //if (m_mutex.try_lock()) { m_mutex.unlock(); return false; }
+//private:
+    void lock() { std::cout << "lock\n" << std::flush; m_mutex.lock(); m_locked = true; }
+    void unlock() { std::cout << "unlock\n" << std::flush; m_locked = false; m_mutex.unlock(); }
+};
+
+
+//allocator mixin class:
+//used to attach allocator to another object type (different address spaces)
+#include <memory> //unique_ptr
+template <class TYPE> //derivation
+//class WithAllocator //mixin
+class WithAllocator //: public TYPE //derivation
+{
+public: //ctor/dtor
+    typedef ShmAllocator<TYPE> Allocator;
+//    Mutexed(): m_locked(false) {} //mixin
+//    PERFECT_FWD2BASE_CTOR(WithMutex, TYPE), m_locked(false) {} //derivation
+//#define PERFECT_FWD2BASE_CTOR(type, base)  
+    template<typename ... ARGS>
+    WithAllocator(ARGS&& ... args, Allocator& alloc = Allocator()): m_data(TYPE(std::forward<ARGS>(args) ...)), m_alloc(&alloc) {}
+    WithAllocator(TYPE& that, Allocator& alloc = Allocator()): m_data(that), m_alloc(&alloc) {} //copy ctor; is this redundant with perfect fwding?
+//    WithAllocator(Allocator& alloc = Allocator()): m_alloc(alloc) {}
+//    WithAllocator(TYPE& data, Allocator& alloc = Allocator()): m_data(data), m_alloc(&alloc) {} //NOTE: constructs new allocator if not provided
+//    Mutexed(TYPE* ptr):
+//    ~Mutexed() {}
+//    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
+public: //operators; NOTE: these are static members
+    void* operator new(size_t size, Allocator& alloc = Allocator()) //, const char* filename, int line, int adjust = 0)
+    {
+        const char* color = (size != sizeof(TYPE))? RED_MSG: YELLOW_MSG;
+        ATOMIC(std::cout << color << "ShmObj.new: size " << size << " vs. sizeof(" TOSTR(TYPE) << ") " << sizeof(TYPE) << ENDCOLOR << std::flush);
+        TYPE* ptr = alloc.allocate(size);
+        ATOMIC(std::cout << color << "ShmObj.new: ptr " << FMT("%p") << ptr << ", data ofs " << ((intptr_t)(TYPE*)this - (intptr_t)this) << ", alloc ofs " << ((intptr_t)&m_alloc - (intptr_t)this) << ENDCOLOR << std::flush);
+//        new ((TYPE*)ptr) TYPE() // const { new (ptr) type(ref); } //In-place copy construct
+        alloc.construct(ptr, TYPE(alloc)); //call ctor
+        new (ptr) (alloc); //set allocator ref
+        return ptr;
+    }
+    void operator delete(void* ptr) noexcept
+    {
+        Allocator& alloc = ((shmobj*)ptr)->m_alloc.rebind<TYPE>();
+        alloc.destroy(ptr);
+//        static_cast<ShmObj>(ptr)->m_alloc.deallocate(ptr);
+//        ((ShmObj*)ptr)->m_alloc.deallocate(ptr);
+//        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR << std::flush);
+    }
+private:
+//protected:
+    TYPE& m_data;
+    std::unique_ptr<Allocator> m_alloc; //allow sharing and auto-cleanup
+public:
+    Allocator& alloc() { return *m_alloc; }
+    TYPE* operator->() { return &m_data; }
+};
+
+
+//shared memory proxy object:
+//wraps a pointer to real data + mutex (different address space)
+//proxy wrapper example: http://www.stroustrup.com/wrapper.pdf
+//see also: https://cppguru.wordpress.com/2009/01/14/c-proxy-template/
+template <class TYPE>
+class shm_ptr //: public Mutexed<TYPE>
+{
+    typedef WithMutex<TYPE> ShmType;
+    typedef ShmAllocator<ShmType> Allocator;
+    union padded //kludge: union makes sizeof() proxy object same as real object
+    {
+//        WithMutex<TYPE>* ptr;
+        ShmType* ptr; //ptr to obj in shmem
+        unique_ptr<Allocator> alloc; //allocator for obj; allocator could be shared with other shmem objs
+//        WithAllocator<InnerType> shmobj;
+//        WithAllocator<TYPE>* ptr;
+//        std::unique_ptr<WithMutex<TYPE>> ptr; //unique_ptr will auto dealloc
+//        WithAllocator<WithMutex<TYPE>>* ptr;
+        TYPE dummy_padding; //NOTE: ctor not called
+    public:
+        padded(ShmType* ptr, Allocator& alloc): ptr(ptr), alloc(&alloc) {} //kludge: need ctor to allow init and avoid "deleted function" error
+        ~padded() {} //NOTE: this is needed
+    } m_inner;
+//helper class to ensure unlock() occurs after member function returns
+    class unlock_later
+    {
+        ShmType* m_ptr;
+    public: //ctor/dtor to wrap lock/unlock
+        unlock_later(ShmType* ptr): m_ptr(ptr) { m_ptr->lock(); }
+        ~unlock_later() { m_ptr->unlock(); }
+    public:
+        ShmType* operator->() { return m_ptr; } //allow access to wrapped members
+    };
+public: //ctor/dtor
+//    ProxyWrapper(TYPE* pp): m_ptr(pp) {}
+//#define INNER_CREATE(args)  m_inner(new ShmType(args)) //pass ctor args down into m_inner
+#define INNER_CREATE(args)  m_inner(new ShmType(args)) //pass ctor args down into m_inner
+    template<typename ... ARGS> //use "perfect forwarding" to ctor
+    shm_ptr(ARGS&& ... args, Allocator& alloc = Allocator()): INNER_CREATE(std::forward<ARGS>(args) ..., alloc) {}
+//    PERFECT_FWD2BASE_CTOR(shm_ptr, INNER_CREATE) {} //perfectly forwarded ctor
+#undef INNER_CREATE
+    ~shm_ptr() { delete m_inner.ptr; } //prevent memory leak
+public: //cast operator
+//nope    TYPE* /*ProxyCaller*/ operator->() { typename WithMutex<TYPE>::scoped_lock lock(m_inner.ptr); return m_inner.ptr; } //ProxyCaller(m_ps.ptr); } //https://stackoverflow.com/questions/22874535/dependent-scope-need-typename-in-front
+    unlock_later operator->() { return unlock_later(m_inner.ptr); }
+//public:
+//    static void lock() { std::cout << "lock\n" << std::flush; }
+//    static void unlock() { std::cout << "unlock\n" << std::flush; }
+};
+
+
+#if 1 //proxy example
+class TestObj
+{
+    std::string m_name;
+    int m_count;
+public:
+    explicit TestObj(const char* name): m_name(name), m_count(0) { std::cout << "TestObj '" << name << "' ctor\n" << std::flush; }
+    ~TestObj() { std::cout << "TestObj '" << m_name << "' dtor\n" << std::flush; } //only used for debug
+    void print() { std::cout << "TestObj.print: (name '" << m_name << "', count " << m_count << ")\n" << std::flush; }
+    int& inc() { return ++m_count; }
+};
+
+int main()
+{
+    TestObj bare("berry");
+    bare.inc();
+    bare.print();
+
+//    ProxyWrapper<Person> person(new Person("testy"));
+    shm_ptr<TestObj> testobj("testy");
+    testobj->inc();
+    testobj->inc();
+    testobj->print();
+
+    std::cout
+        << "sizeof(berry) = " << sizeof(bare)
+        << ", sizeof(test) = " << sizeof(testobj)
+        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
+        << "\n" << std::flush;
+    return 0;
+}
+#endif
+
+
+#if 0 //proxy example
+//"perfect forwarding" (typesafe args) to ctor:
+#define PERFECT_FWD2BASE_CTOR(type, base)  \
+    template<typename ... ARGS> \
+    type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
+
+//mutex mixin class:
+//used to attach mutex to another object type
+#include <mutex>
+#include <atomic>
+#include <iostream>
+template <class TYPE> //derivation
+//class Mutexed //mixin
+class WithMutex: public TYPE //derivation
+{
+public: //ctor/dtor
+//    Mutexed(): m_locked(false) {} //mixin
+    PERFECT_FWD2BASE_CTOR(WithMutex, TYPE), m_locked(false) {} //derivation
+//    Mutexed(TYPE* ptr):
+//    ~Mutexed() {}
+    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
+public: //helper class
+//    class scoped_lock: public std::unique_lock<std::mutex>
+    class scoped_lock
+    {
+//        std::mutex& m_mutex;
+        WithMutex* m_parent; //NOTE: need this because inner class has no access to outer instance data
+    public:
+//        scoped_lock(std::mutex& mutex): m_mutex(mutex) { m_mutex.lock(); }
+//        ~scoped_lock() { m_mutex.unlock(); }
+        scoped_lock(WithMutex* parent): m_parent(parent) { m_parent->lock(); }
+        ~scoped_lock() { m_parent->unlock(); }
+    };
+//#define scoped_lock()  scoped_lock slock(m_mutex)
+//#define scoped_lock()  scoped_lock slock(this) //kludge: link inner class to outer instance data; NOTE: cpp not recursive here
+private:
+//protected:
+    std::mutex m_mutex;
+    std::atomic<bool> m_locked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
+private:
+    void lock() { std::cout << "lock\n" << std::flush; m_mutex.lock(); m_locked = true; }
+    void unlock() { std::cout << "unlock\n" << std::flush; m_locked = false; m_mutex.unlock(); }
+public:
+    bool islocked() { return m_locked; } //if (m_mutex.try_lock()) { m_mutex.unlock(); return false; }
+};
+
+
+//shared memory proxy object:
+//wraps a pointer to real data + mutex
+//proxy wrapper example: http://www.stroustrup.com/wrapper.pdf
+//see also: https://cppguru.wordpress.com/2009/01/14/c-proxy-template/
+template <class TYPE>
+class shm_ptr //: public Mutexed<TYPE>
+{
+    union padded //kludge: union makes sizeof() proxy object same as real object
+    {
+//        Mutexed<TYPE>* ptr;
+        WithMutex<TYPE>* ptr;
+        TYPE dummy_padding;
+    public:
+        padded(WithMutex<TYPE>* ptr): ptr(ptr) {} //kludge: need ctor to allow init and avoid "deleted function" error
+        ~padded() {} //NOTE: this is needed
+    } m_inner;
+//    class ProxyCaller
+//    {
+//        TYPE* m_ptr;
+//    public:
+//        ProxyCaller(TYPE* ptr): m_ptr(ptr) {}
+//        ~ProxyCaller() { unlock(); }
+//        TYPE* operator->() { return m_ptr; }
+//    };
+//    class scoped
+//    {
+//    public:
+//        scoped() { std::cout << "lock\n" << std::flush; }
+//        ~scoped() { std::cout << "unlock\n" << std::flush; }
+//    };
+public:
+//    ProxyWrapper(TYPE* pp): m_ptr(pp) {}
+//    template<typename ... ARGS> //use "perfect forwarding" to ctor
+//    shm_ptr(ARGS&& ... args): m_inner(new TYPE(std::forward<ARGS>(args) ...)) {}
+#define INNER_CREATE(args)  m_inner(new WithMutex<TYPE>(args)) //pass ctor args down into m_inner
+    PERFECT_FWD2BASE_CTOR(shm_ptr, INNER_CREATE) {} //perfectly forwarded ctor
+#undef INNER_CREATE
+    TYPE* /*ProxyCaller*/ operator->() { typename WithMutex<TYPE>::scoped_lock lock(m_inner.ptr); return m_inner.ptr; } //ProxyCaller(m_ps.ptr); } //https://stackoverflow.com/questions/22874535/dependent-scope-need-typename-in-front
+public:
+//    static void lock() { std::cout << "lock\n" << std::flush; }
+//    static void unlock() { std::cout << "unlock\n" << std::flush; }
+};
+
+class TestObj
+{
+    std::string m_name;
+    int m_count;
+public:
+    TestObj(const char* name): m_name(name), m_count(0) {}
+//not needed    ~TestObj() {}
+    void print() { std::cout << "TestObj(name '" << m_name << "', count " << m_count << ")\n" << std::flush; }
+    int& inc() { return ++m_count; }
+};
+
+int main()
+{
+    TestObj bare("berry");
+    bare.inc();
+    bare.print();
+
+//    ProxyWrapper<Person> person(new Person("testy"));
+    shm_ptr<TestObj> testobj("testy");
+    testobj->inc();
+    testobj->inc();
+    testobj->print();
+
+    std::cout << "sizeof(berry) = " << sizeof(bare) << ", sizeof(test) = " << sizeof(testobj) << "\n" << std::flush;
+    return 0;
+}
+#endif
+#if 0 //proxy example
+//proxy wrapper: http://www.stroustrup.com/wrapper.pdf
+//https://cppguru.wordpress.com/2009/01/14/c-proxy-template/
+#include <iostream>
+
+class TestObj
+{
+    std::string m_name;
+    int m_count;
+public:
+    TestObj(const char* name): m_name(name), m_count(0) {}
+//not needed    ~TestObj() {}
+    void print() { std::cout << "TestObj(name '" << m_name << "', count " << m_count << ")\n" << std::flush; }
+    int& inc() { return ++m_count; }
+};
+
+template <class TYPE>
+class shm_ptr
+{
+    union preserve_sizeof //kludge: make sizeof() proxy object same as real object
+    {
+        TYPE* ptr;
+        TYPE data;
+    public:
+        preserve_sizeof(TYPE* ptr): ptr(ptr) {} //kludge: need ctor to allow init and avoid "deleted function" error
+        ~preserve_sizeof() {}
+    } m_ps;
+    class ProxyCaller
+    {
+        TYPE* m_ptr;
+    public:
+        ProxyCaller(TYPE* ptr): m_ptr(ptr) {}
+        ~ProxyCaller() { unlock(); }
+        TYPE* operator->() { return m_ptr; }
+    };
+public:
+//    ProxyWrapper(TYPE* pp): m_ptr(pp) {}
+    template<typename ... ARGS> //use "perfect forwarding" to ctor
+    shm_ptr(ARGS&& ... args): m_ps(new TYPE(std::forward<ARGS>(args) ...)) {}
+    ProxyCaller operator->() { lock(); return ProxyCaller(m_ps.ptr); }
+public:
+    static void lock() { std::cout << "lock\n" << std::flush; }
+    static void unlock() { std::cout << "unlock\n" << std::flush; }
+};
+
+int main()
+{
+    TestObj bare("berry");
+    bare.inc();
+    bare.print();
+
+//    ProxyWrapper<Person> person(new Person("testy"));
+    shm_ptr<TestObj> testobj("testy");
+    testobj->inc();
+    testobj->inc();
+    testobj->print();
+
+    std::cout << "sizeof(berry) = " << sizeof(bare) << ", sizeof(test) = " << sizeof(testobj) << "\n" << std::flush;
+    return 0;
+}
+#endif
+#if 0
+//example usage:
+#include <set>
+struct Example
+{
+    int value;
+    Example(int v): value(v) {}
+    bool operator<(Example const& other) const { return value < other.value; }
+};
+int main(int argc, char* argv[])
+{
+    std::set<Example, std::less<Example>, ShmAllocator<Example, ShmHeap<Example> > > foo;
+    foo.insert(Example(3));
+    foo.insert(Example(1));
+    foo.insert(Example(4));
+    foo.insert(Example(2));
+    return 0;
+}
+#endif
+#if 0
+//example from: http://en.cppreference.com/w/cpp/memory/allocator
+#include <memory>
+#include <iostream>
+#include <string>
+int main()
+{
+    std::allocator<int> a1;   // default allocator for ints
+    int* a = a1.allocate(1);  // space for one int
+    a1.construct(a, 7);       // construct the int
+    std::cout << a[0] << '\n';
+    a1.deallocate(a, 1);      // deallocate space for one int
+ 
+    // default allocator for strings
+    std::allocator<std::string> a2;
+ 
+    // same, but obtained by rebinding from the type of a1
+    decltype(a1)::rebind<std::string>::other a2_1;
+ 
+    // same, but obtained by rebinding from the type of a1 via allocator_traits
+    std::allocator_traits<decltype(a1)>::rebind_alloc<std::string> a2_2;
+ 
+    std::string* s = a2.allocate(2); // space for 2 strings
+ 
+    a2.construct(s, "foo");
+    a2.construct(s + 1, "bar");
+ 
+    std::cout << s[0] << ' ' << s[1] << '\n';
+ 
+    a2.destroy(s);
+    a2.destroy(s + 1);
+    a2.deallocate(s, 2);
+}
+#endif
+
+
+#if 0
+//proxy wrapper: http://www.stroustrup.com/wrapper.pdf
+//shared memory object mixin/wrapper:
+//idea for ptr wrapper from: https://stackoverflow.com/questions/20945439/using-operator-new-and-operator-delete-with-a-custom-memory-pool-allocator
+template<typename TYPE> //, long SHMKEY = 0, int EXTRA = 0> //, int SRCLINE>
+class shmobj //: public TYPE
+{
+public: //data members
+//NOTE: storage is split between local heap and shared memory
+    TYPE& m_data; //shmem
+    typedef ShmAllocator<TYPE> Allocator;
+    Allocator& m_alloc; //local heap
+public: //ctors/dtors
+//    typedef struct { Allocator& alloc; TYPE data; } wrapped;
+    template<typename ... ARGS> //use "perfect forwarding" on ctor
+    shmobj(ARGS&& ... args, Allocator& alloc = Allocator()): m_data(*new TYPE(std::forward<ARGS>(args) ...)), m_alloc(alloc) {} //, srcline(SRCLINE) {}
+public: //operators; NOTE: these are static members
+    void* operator new(size_t size, Allocator& alloc = Allocator()) //, const char* filename, int line, int adjust = 0)
+    {
+        const char* color = (size != sizeof(TYPE))? RED_MSG: YELLOW_MSG;
+        ATOMIC(std::cout << color << "ShmObj.new: size " << size << " vs. sizeof(" TOSTR(TYPE) << ") " << sizeof(TYPE) << ENDCOLOR << std::flush);
+        TYPE* ptr = alloc.allocate(size);
+        ATOMIC(std::cout << color << "ShmObj.new: ptr " << FMT("%p") << ptr << ", data ofs " << ((intptr_t)(TYPE*)this - (intptr_t)this) << ", alloc ofs " << ((intptr_t)&m_alloc - (intptr_t)this) << ENDCOLOR << std::flush);
+//        new ((TYPE*)ptr) TYPE() // const { new (ptr) type(ref); } //In-place copy construct
+        alloc.construct((TYPE*)ptr, TYPE(alloc)); //call ctor
+        new (&ptr->m_alloc) (alloc); //set allocator ref
+        return ptr;
+    }
+    void operator delete(void* ptr) noexcept
+    {
+        Allocator& alloc = ((shmobj*)ptr)->m_alloc.rebind<TYPE>();
+        alloc.destroy(ptr);
+//        static_cast<ShmObj>(ptr)->m_alloc.deallocate(ptr);
+//        ((ShmObj*)ptr)->m_alloc.deallocate(ptr);
+//        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR << std::flush);
+    }
+//private: //data
+//    typedef struct { ALLOC& alloc; TYPE data; } wrapper;
+//    Allocator& m_alloc; //not stored in shmem
+//public: //for debug only
+//    Allocator& alloc() { return m_alloc; }
+};
+#endif
+
+
+#if 0
+#include <memory> //unique_ptr
+template<typename TYPE> //, long SHMKEY = 0, int EXTRA = 0> //, int SRCLINE>
+class ShmObj: public *unique_ptr<TYPE>
+{
+public: //ctors/dtors
+    template<typename ... ARGS> //use "perfect forwarding" on ctor
+    ShmObj(ARGS&& ... args): unique_ptr<TYPE>(new TYPE(std::forward<ARGS>(args) ...)) {} //, srcline(SRCLINE) {}
+};
+
+    std::forward<ARGS>(args) ...): unique_ptr<TYPE>(this), m_alloc(0) {} //, srcline(SRCLINE) {}
+public: //operators; NOTE: these are static members
+    typedef ShmAllocator<TYPE> Allocator;
+    void* operator new(size_t size, Allocator& alloc = Allocator()) //, const char* filename, int line, int adjust = 0)
+    {
+//        if (adjust) line += adjust;
+//        const char* key = shmheap.crekey(filename, line); //create unique key
+//more info about alignment: https://en.wikipedia.org/wiki/Data_structure_alignment
+//TODO?  alignof(void*); //http://www.boost.org/doc/libs/1_59_0/doc/html/align/vocabulary.html
+//alignas(Foo) unsigned char memory[sizeof(Foo)];
+//Foo* p = ::new((void*)memory) Foo();
+        if (size != sizeof(ShmObj)) ATOMIC(std::cout << YELLOW_MSG << "ShmObj.new: [WARNING] size " << size << " != sizeof(ShmObj<" TOSTR(TYPE) << ">) " << sizeof(ShmObj) << ENDCOLOR << std::flush);
+        ShmObj* ptr = alloc.allocate(size);
+        alloc.construct((TYPE*)ptr, TYPE()); // const { new (ptr) type(ref); } //In-place copy construct
+        ptr->m_alloc = &alloc;
+//    ++Complex::nalloc;
+//    if (Complex::nalloc == 1)
+//        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key " << strlen(key) << ":'" << key << "' at adrs " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+//        if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
+        return (TYPE*)ptr;
+    }
+#endif
+
+
+#if 0 //example proxy wrapper
+//proxy wrapper: http://www.stroustrup.com/wrapper.pdf
+//https://cppguru.wordpress.com/2009/01/14/c-proxy-template/
+#include <iostream>
+
+class Person
+{
+    std::string mName;
+public:
+    Person(std::string name): mName(name) {}
+    void printName() { std::cout << mName << std::endl; }
+};
+
+template <class TYPE>
+class ProxyWrapper
+{
+    TYPE* m_ptr;
+    class ProxyCaller
+    {
+        TYPE* m_ptr;
+    public:
+        ProxyCaller(TYPE* pp): m_ptr(pp) {}
+        ~ProxyCaller() { suffix(); }
+        TYPE* operator->() { return m_ptr; }
+    };
+public:
+//    ProxyWrapper(TYPE* pp): m_ptr(pp) {}
+    template<typename ... ARGS> //use "perfect forwarding" on ctor
+    ProxyWrapper(ARGS&& ... args): m_ptr(new TYPE(std::forward<ARGS>(args) ...)) {}
+    ProxyCaller operator->() { prefix(); return ProxyCaller(m_ptr); }
+public:
+    static void prefix() { std::cout << "prefix\n"; }
+    static void suffix() { std::cout << "suffix\n"; }
+};
+
+int main()
+{
+    Person bare("berry");
+    bare.printName();
+
+//    ProxyWrapper<Person> person(new Person("testy"));
+    ProxyWrapper<Person> person("testy");
+    person->printName();
+//should print:
+// prefix
+// test
+// suffix
+    return 0;
+}
+#endif
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
 
 
 #if 0
@@ -313,228 +1008,6 @@ bool operator== (const ShmAllocator<T1>&, const ShmAllocator<T2>&) throw() { ret
 template <class T1, class T2>
 bool operator!= (const ShmAllocator<T1>&, const ShmAllocator<T2>&) throw() { return false; }
 #endif
-
-
-//shm traits:
-//responsible for creating and destorying shm objects
-//based on example from: http://jrruethe.github.io/blog/2015/11/22/allocators/
-template<typename TYPE>
-class ShmobjTraits
-{
-public:
-    typedef TYPE type;
-    template<typename OTHER_TYPE>
-    struct rebind { typedef ShmobjTraits<OTHER_TYPE> other; }; //used by stl containers for internal nodes, etc.
-public: //ctors
-    ShmobjTraits(void) {}
-//Copy Constructor:
-    template<typename OTHER_TYPE>
-    ShmobjTraits(ShmobjTraits<OTHER_TYPE> const& other) {}
-public: //operators
-//Address of object
-    type* address(type& obj) const { return &obj; }
-    type const* address(type const& obj) const { return &obj; }
-public: //methods
-//Construct object:
-    void construct(type* ptr, type const& ref) const { new(ptr) type(ref); } //In-place copy construct
-//Destroy object:
-    void destroy(type* ptr) const { ptr->~type(); }
-};
-
-//type-dependent allocator policies:
-#define ALLOCATOR_TRAITS(TYPE)  \
-typedef TYPE type; \
-typedef TYPE value_type; \
-typedef TYPE* pointer; \
-typedef TYPE const* const_pointer; \
-typedef TYPE& reference; \
-typedef TYPE const& const_reference; \
-typedef std::size_t size_type; \
-typedef std::ptrdiff_t difference_type
-
-//allocator policy:
-//responsible for allocating and deallocating memory
-template<typename TYPE>
-struct max_allocations
-{
-    enum { value = static_cast<std::size_t>(-1) / sizeof(TYPE) };
-};
-template<typename TYPE>
-class ShmHeap
-{
-public:
-    ALLOCATOR_TRAITS(TYPE);
-    template<typename OTHER_TYPE>
-    struct rebind { typedef ShmHeap<OTHER_TYPE> other; };
-public: //ctors
-    ShmHeap(void) {} //default ctor
-    template<typename OTHER_TYPE> ShmHeap(ShmHeap<OTHER_TYPE> const& other) {} //copy ctor
-public: //memory mgmt
-//allocate memory:
-    pointer allocate(size_type count, const_pointer /* hint */ = 0)
-    {
-        if (count > max_size()) { throw std::bad_alloc(); }
-        return static_cast<pointer>(::operator new(count * sizeof(type), ::std::nothrow));
-    }
-//Delete memory:
-    void deallocate(pointer ptr, size_type /* count */)
-    {
-        ::operator delete(ptr);
-    }
-//max #objects that can be allocated in one call:
-    size_type max_size(void) const { return max_allocations<TYPE>::value; }
-};
-
-
-//allocator:
-//#define FORWARD_ALLOCATOR_TRAITS(C)                  \
-//typedef typename C::value_type      value_type;      \
-//typedef typename C::pointer         pointer;         \
-//typedef typename C::const_pointer   const_pointer;   \
-//typedef typename C::reference       reference;       \
-//typedef typename C::const_reference const_reference; \
-//typedef typename C::size_type       size_type;       \
-//typedef typename C::difference_type difference_type
-
-template<typename TYPE, typename PolicyTYPE = ShmHeap<TYPE>, typename TraitsTYPE = ShmobjTraits<TYPE> >
-class ShmAllocator: public PolicyTYPE, public TraitsTYPE
-{
-public:
-// Template parameters
-//    typedef PolicyT Policy;
-//    typedef TraitsT Traits;
-//    FORWARD_ALLOCATOR_TRAITS(Policy)
-    ALLOCATOR_TRAITS(TYPE);
-    template<typename OTHER_TYPE>
-    struct rebind
-    {
-        typedef ShmAllocator<OTHER_TYPE,
-                         typename PolicyTYPE::template rebind<OTHER_TYPE>::other,
-                         typename TraitsTYPE::template rebind<OTHER_TYPE>::other
-                        > other;
-    };
-public: //ctors
-    ShmAllocator(void) {} //default ctor
-    template<typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
-    ShmAllocator(ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& other): Policy(other), Traits(other) {} //copy ctor
-};
-
-
-//equivalencies:
-//tell stl which allocators are compatible
-
-//allocators != unless specialization says so:
-template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
-bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
-{
-    return false;
-}
-template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
-bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
-{
-    return !(lhs == rhs);
-}
-//allocator != anything else:
-template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
-bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
-{
-    return false;
-}
-template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
-bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
-{
-    return !(lhs == rhs);
-}
-//Specialize for heap policy:
-template<typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
-bool operator==(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
-{
-    return true;
-}
-template<typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
-bool operator==(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
-{
-    return !(lhs == rhs);
-}
-
-
-#if 0
-//example usage:
-#include <set>
-struct Example
-{
-    int value;
-    Example(int v): value(v) {}
-    bool operator<(Example const& other) const { return value < other.value; }
-};
-int main(int argc, char* argv[])
-{
-    std::set<Example, std::less<Example>, ShmAllocator<Example, ShmHeap<Example> > > foo;
-    foo.insert(Example(3));
-    foo.insert(Example(1));
-    foo.insert(Example(4));
-    foo.insert(Example(2));
-    return 0;
-}
-#endif
-#if 0
-//example from: http://en.cppreference.com/w/cpp/memory/allocator
-#include <memory>
-#include <iostream>
-#include <string>
-int main()
-{
-    std::allocator<int> a1;   // default allocator for ints
-    int* a = a1.allocate(1);  // space for one int
-    a1.construct(a, 7);       // construct the int
-    std::cout << a[0] << '\n';
-    a1.deallocate(a, 1);      // deallocate space for one int
- 
-    // default allocator for strings
-    std::allocator<std::string> a2;
- 
-    // same, but obtained by rebinding from the type of a1
-    decltype(a1)::rebind<std::string>::other a2_1;
- 
-    // same, but obtained by rebinding from the type of a1 via allocator_traits
-    std::allocator_traits<decltype(a1)>::rebind_alloc<std::string> a2_2;
- 
-    std::string* s = a2.allocate(2); // space for 2 strings
- 
-    a2.construct(s, "foo");
-    a2.construct(s + 1, "bar");
- 
-    std::cout << s[0] << ' ' << s[1] << '\n';
- 
-    a2.destroy(s);
-    a2.destroy(s + 1);
-    a2.deallocate(s, 2);
-}
-#endif
-
-
-//shared memory object wrapper:
-template<typename TYPE, long SHMKEY = 0, int EXTRA = 0> //, int SRCLINE>
-class ShmObj: public TYPE
-{
-public: //ctors/dtors
-    template<typename ... ARGS> //"perfect forwarding"
-    ShmObj(ARGS&& ... args): TYPE(std::forward<ARGS>(args) ...), shmkey(SHMKEY? SHMKEY: crekey()), extra(EXTRA) {} //, srcline(SRCLINE) {}
-public: //data members
-    const key_t shmkey;
-    const int extra; //, srcline;
-private: //data
-private: //helpers
-    static key_t crekey() { return (rand() << 16) | 0xfeed; }
-};
-
-
-
-
-
-
-
-
 #ifdef OLD_ONE
 //shared memory heap:
 //NOTE: very simplistic, not suitable for intense usage

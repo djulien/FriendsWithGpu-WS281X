@@ -659,6 +659,8 @@ inline int Release(/*const*/ SDL_Thread* that) { debug(that); int exitval; SDL_W
 //#define TRACKED(thing)  thing.newwhere = __LINE__; thing.newname = TOSTR(thing); thing
 
 
+#include "autoptr.h"
+#if 0
 //type-safe wrapper for SDL ptrs that cleans up when it goes out of scope:
 //std::shared_ptr<> doesn't allow assignment or provide casting; this custom one does
 template<typename DataType, typename = void>
@@ -713,7 +715,7 @@ public:
 };
 //#define auto_ptr(type)  auto_ptr<type, TOSTR(type)>
 //#define auto_ptr  __SRCLINE__ auto_ptr_noline
-
+#endif
 
 //auto_ptr template specializations:
 //NOTE: compiler chooses more specialized template instead of more general template

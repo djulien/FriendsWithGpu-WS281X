@@ -13,6 +13,8 @@ g++ -D__FILENAME__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-un
 
 
 #include "shmalloc.h"
+
+#ifdef JUNK
 //#define ShmHeap  ShmHeapAlloc::ShmHeap
 
 //define shared memory heap:
@@ -28,6 +30,8 @@ ShmHeap ShmHeapAlloc::shmheap(0x1000, ShmHeap::persist::NewPerm, 0x4567feed);
 //    explicit vector_ex(std::size_t count = 0, const ALLOC& alloc = ALLOC()): std::vector<TYPE>(count, alloc) {}
 
 #include "vectorex.h"
+//#include "autoptr.h"
+//#include <memory> //unique_ptr
 int main()
 {
 #if 0
@@ -35,12 +39,19 @@ int main()
     static vectype& ids = //SHARED(SRCKEY, vectype, vectype);
         *(vectype*)ShmHeapAlloc::shmheap.alloc(SRCKEY, sizeof(vectype), 4 * sizeof(int), true, [] (void* shmaddr) { new (shmaddr) vectype; })
 #else
-    ShmObj<vector_ex<int>, 0x5678feed, 4 * sizeof(int)> vect; //, __LINE__> vect;
+//    ShmObj<vector_ex<int>, 0x5678feed, 4 * sizeof(int)> vect; //, __LINE__> vect;
+//pool + "new" pattern from: https://stackoverflow.com/questions/20945439/using-operator-new-and-operator-delete-with-a-custom-memory-pool-allocator
+//    ShmAllocator<vector_ex<int>> shmalloc;
+//    unique_ptr<ShmObj<vector_ex<int>>> vectp = new (shmalloc) ShmObj<vector_ex<int>>();
+    unique_ptr<ShmObj<vector_ex<int>>> vectp = new ShmObj<vector_ex<int>>();
+#define vect  (*vectp)
+//    ShmPtr<vector_ex<int>> vectp = new vector_ex<int>();
+//    ShmObj<vector_ex<int>> vect;
 #endif
     std::cout << "&vec " << FMT("%p") << &vect
-        << FMT(", shmkey 0x%lx") << vect.shmkey
+        << FMT(", shmkey 0x%lx") << vect.allocator.shmkey()
         << ", sizeof(vect) " << sizeof(vect)
-        << ", extra " << vect.extra
+//        << ", extra " << vect.extra
         << ", #ents " << vect.size()
 //        << ", srcline " << vect.srcline
         << "\n" << std::flush;
@@ -57,9 +68,10 @@ int main()
 //    std::unique_lock<std::mutex> lock(shmheap.mutex()); //low usage; reuse mutex
 //    std::cout << "hello from " << __FILE__ << ":" << __LINE__ << "\n" << std::flush;
 }
-#define main   mainx
+//#define main   mainx
+#endif
 
-
+#if 0
 class Complex: public ShmHeapAlloc
 {
 public:
@@ -91,6 +103,8 @@ int main(int argc, char* argv[])
 //    std::cout << "#alloc: " << Complex::nalloc << ", #free: " << Complex::nfree << "\n" << std::flush;
     return 0;
 }
+#endif
+
 
 //eof
 #if 0 //custom new + delete
