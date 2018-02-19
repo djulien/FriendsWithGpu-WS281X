@@ -65,13 +65,34 @@
 //#define VOID  uintptr_t //void //kludge: avoid compiler warnings with pointer arithmetic
 
 
+//shmem key:
+//define unique type for function signatures
+class ShmKey
+{
+    key_t m_key;
+public: //ctor/dtor
+//    explicit ShmKey(key_t key = 0): key(key? key: crekey()) {}
+    explicit ShmKey(int key = 0): m_key(key? key: crekey()) {}
+    explicit ShmKey(const ShmKey&& other): m_key((int)other) {} //copy ctor
+    ~ShmKey() {}
+public: //operators
+    inline operator int() { return m_key; }
+//    bool operator!() { return key != 0; }
+//    inline key_t 
+public: //static helpers
+    static inline key_t crekey() { return (rand() << 16) | 0xfeed; }
+};
+
+
 //shared memory segment:
-//stores persistent state between ShmAllocator instances
+//used to store persistent/shared data across processes
+//NO: stores persistent state between ShmAllocator instances
 class ShmSeg
 {
 public: //ctor/dtor
     enum class persist: int {Reuse = 0, NewTemp = -1, NewPerm = +1};
-    explicit ShmSeg(size_t size = 0x1000, persist cre = persist::NewTemp, key_t key = 0): m_ptr(0), m_keep(true)
+//    ShmSeg(persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
+    explicit ShmSeg(ShmKey key = ShmKey(0), persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
     {
         if (cre != persist::Reuse) destroy(key); //start fresh
         m_keep = (cre != persist::NewTemp);        
@@ -84,7 +105,7 @@ public: //ctor/dtor
         if (!m_keep) destroy(m_key);
     }
 public: //getters
-    inline int shmkey() const { return m_key; }
+    inline ShmKey shmkey() const { return m_key; }
     inline void* shmptr() const { return m_ptr; }
 //    inline size32_t shmofs(void* ptr) const { return (VOID*)ptr - (VOID*)m_ptr; } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
 //    inline size32_t shmofs(void* ptr) const { return (uintptr_t)ptr - (uintptr_t)m_ptr; } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
@@ -94,14 +115,14 @@ public: //getters
 //    inline size_t shmused() const { return m_used; }
 //    inline size_t shmavail() const { return m_size - m_used; }
 private: //data
-    key_t m_key;
+    ShmKey m_key;
     void* m_ptr;
     size_t m_size; //, m_used;
     bool m_keep;
 private: //helpers
-    void create(key_t key, size_t size, bool want_new)
+    void create(ShmKey key, size_t size, bool want_new)
     {
-        if (!key) key = crekey(); //(rand() << 16) | 0xfeed;
+        if (!key) key = key.crekey(); //(rand() << 16) | 0xfeed;
 //#define  SHMKEY  ((key_t) 7890) /* base value for shmem key */
 //#define  PERMS 0666
 //        if (cre != persist::PreExist) destroy(key); //delete first (parent wants clean start)
@@ -135,7 +156,7 @@ private: //helpers
         m_ptr = 0; //can't use m_shmptr after this point
         ATOMIC(std::cout << CYAN_MSG << "ShmSeg: dettached " << ENDCOLOR << std::flush); //desc();
     }
-    static void destroy(key_t key)
+    static void destroy(ShmKey key)
     {
         if (!key) return; //!owner or !exist
         int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
@@ -144,25 +165,72 @@ private: //helpers
         if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
         throw std::runtime_error(strerror(errno));
     }
-public: //custom helpers
-    static key_t crekey() { return (rand() << 16) | 0xfeed; }
+//public: //custom helpers
+//    static key_t crekey() { return (rand() << 16) | 0xfeed; }
 };
 
 
+//mutex mixin class:
+//used to attach mutex directly to another object type (same memory space)
+//optional auto lock/unlock around access to methods
+#include <mutex>
+#include <atomic>
+#include <iostream> //std::cout
+template <class TYPE, bool AUTOLOCK = true> //derivation
+//class Mutexed //mixin
+class WithMutex: public TYPE //derivation
+{
+public: //ctor/dtor
+//    Mutexed(): m_locked(false) {} //mixin
+    PERFECT_FWD2BASE_CTOR(WithMutex, TYPE), m_locked(false) {} //derivation
+//    Mutexed(TYPE* ptr):
+//    ~Mutexed() {}
+//    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
+private:
+//protected:
+    std::mutex m_mutex;
+    std::atomic<bool> m_locked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
+public:
+    bool islocked() { return m_locked; } //if (m_mutex.try_lock()) { m_mutex.unlock(); return false; }
+//private:
+    void lock() { ATOMIC(std::cout << "lock\n" << std::flush); m_mutex.lock(); m_locked = true; }
+    void unlock() { ATOMIC(std::cout << "unlock\n" << std::flush); m_locked = false; m_mutex.unlock(); }
+private:
+//helper class to ensure unlock() occurs after member function returns
+    class unlock_later
+    {
+        TYPE* m_ptr;
+    public: //ctor/dtor to wrap lock/unlock
+        unlock_later(TYPE* ptr): m_ptr(ptr) { if (AUTOLOCK) m_ptr->lock(); }
+        ~unlock_later() { if (AUTOLOCK) m_ptr->unlock(); }
+    public:
+        inline TYPE* operator->() { return m_ptr; } //allow access to wrapped members
+    };
+public: //pointer operator; allows safe multi-process access to shared object's members
+//nope    TYPE* /*ProxyCaller*/ operator->() { typename WithMutex<TYPE>::scoped_lock lock(m_inner.ptr); return m_inner.ptr; } //ProxyCaller(m_ps.ptr); } //https://stackoverflow.com/questions/22874535/dependent-scope-need-typename-in-front
+    inline unlock_later& operator->() { return unlock_later(this); }
+//    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
+//public:
+//    static void lock() { std::cout << "lock\n" << std::flush; }
+//    static void unlock() { std::cout << "unlock\n" << std::flush; }
+};
+
+
+#if 1 //stl-compatible allocator
 //shm traits:
 //responsible for creating and destroying shm objects (no memory allocate/dealloc)
 //based on example from: http://jrruethe.github.io/blog/2015/11/22/allocators/
-template<typename TYPE>
+template <typename TYPE>
 class ShmobjTraits
 {
 public:
     typedef TYPE type;
-    template<typename OTHER_TYPE>
+    template <typename OTHER_TYPE>
     struct rebind { typedef ShmobjTraits<OTHER_TYPE> other; }; //used by stl containers for internal nodes, etc.
 public: //ctors
     ShmobjTraits(void) {}
 //Copy Constructor:
-    template<typename OTHER_TYPE>
+    template <typename OTHER_TYPE>
     ShmobjTraits(ShmobjTraits<OTHER_TYPE> const& other) {}
 public: //operators
 //Address of object
@@ -175,32 +243,37 @@ public: //methods
     void destroy(type* ptr) const { ptr->~type(); }
 };
 
+
 //type-dependent allocator policies:
 #define ALLOCATOR_TRAITS(TYPE)  \
-typedef TYPE type; \
-typedef TYPE value_type; \
-typedef TYPE* pointer; \
-typedef TYPE const* const_pointer; \
-typedef TYPE& reference; \
-typedef TYPE const& const_reference; \
-typedef std::size_t size_type; \
-typedef std::ptrdiff_t difference_type
+    typedef TYPE type; \
+    typedef TYPE value_type; \
+    typedef TYPE* pointer; \
+    typedef TYPE const* const_pointer; \
+    typedef TYPE& reference; \
+    typedef TYPE const& const_reference; \
+    typedef std::size_t size_type; \
+    typedef std::ptrdiff_t difference_type
+
+//template <typename TYPE>
+//struct max_allocations { enum { value = static_cast<std::size_t>(-1) / sizeof(TYPE)}; };
+//struct max_allocations { enum { value = /*static_cast<std::size_t>(-1)*/ 10000000 / sizeof(TYPE); }; }; //take it easy on shm
 
 //allocator policy:
 //responsible for allocating and deallocating memory
-//template<typename TYPE>
-//struct max_allocations { enum { value = /*static_cast<std::size_t>(-1)*/ 10000000 / sizeof(TYPE); }; }; //take it easy on shm
-//template<typename TYPE>
-template<typename TYPE> //, int SHM_SIZE = 0x1000, int SHM_KEY = crekey(), int SHM_PERSIST = ShmSeg::persist::NewTemp>
+template <typename TYPE> //, int SHM_SIZE = 0x1000, int SHM_KEY = crekey(), int SHM_PERSIST = ShmSeg::persist::NewTemp>
 class ShmHeap //: public ShmSeg
 {
 public:
     ALLOCATOR_TRAITS(TYPE);
-    template<typename OTHER_TYPE>
+    template <typename OTHER_TYPE>
     struct rebind { typedef ShmHeap<OTHER_TYPE> other; };
 public: //ctors
-    ShmHeap(/*void*/ ShmSeg& shmseg = ShmSeg()): m_shmseg(shmseg) {} //default ctor
-    template<typename OTHER_TYPE> ShmHeap(ShmHeap<OTHER_TYPE> const& other): m_shmseg(other.m_shmseg) {} //copy ctor
+    ShmHeap(void) {} //default ctor
+//    ShmHeap(/*void*/ ShmSeg& shmseg = ShmSeg()): m_shmseg(shmseg) {} //default ctor
+    template <typename OTHER_TYPE>
+    ShmHeap(ShmHeap<OTHER_TYPE> const& other) {} //copy ctor
+//    ShmHeap(ShmHeap<OTHER_TYPE> const& other): m_shmseg(other.m_shmseg) {} //copy ctor
 public: //memory mgmt
 //allocate memory:
     pointer allocate(size_type count, const_pointer hint = 0)
@@ -217,10 +290,12 @@ public: //memory mgmt
         ::operator delete(ptr);
     }
 //max #objects that can be allocated in one call:
-    size_type max_size(void) const { return m_shmseg.shmsize() / sizeof(TYPE); } //max_allocations<TYPE>::value; }
-private: //data
-    typedef struct { size_t used; std::mutex mutex; } ShmHdr;
-    ShmSeg& m_shmseg;
+    static size_type max_size(void) const { return  / sizeof(TYPE); } //max_allocations<TYPE>::value; }
+//    size_type max_size(void) const { return m_shmseg.shmsize() / sizeof(TYPE); } //max_allocations<TYPE>::value; }
+//TODO
+//private: //data
+//    typedef struct { size_t used; std::mutex mutex; } ShmHdr;
+//    ShmSeg& m_shmseg;
 };
 
 
@@ -236,7 +311,7 @@ private: //data
 
 //NOTE from http://en.cppreference.com/w/cpp/memory/allocator:
 //since c++11 all instances of a given allocator are interchangeable (containers store an allocator instance)
-template<typename TYPE, typename PolicyTYPE = ShmHeap<TYPE>, typename TraitsTYPE = ShmobjTraits<TYPE> >
+template <typename TYPE, typename PolicyTYPE = ShmHeap<TYPE>, typename TraitsTYPE = ShmobjTraits<TYPE> >
 class ShmAllocator: public PolicyTYPE, public TraitsTYPE
 {
 public:
@@ -260,73 +335,72 @@ public: //ctors
 //tell stl which allocators are compatible
 
 //allocators != unless specialization says so:
-template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
+template <typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
 bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
 {
     return false;
 }
-template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
+template <typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
 bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
 {
     return !(lhs == rhs);
 }
 //allocator != anything else:
-template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
+template <typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
 bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
 {
     return false;
 }
-template<typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
+template <typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
 bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
 {
     return !(lhs == rhs);
 }
 //Specialize for heap policy:
-template<typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
+template <typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
 bool operator==(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
 {
     return true;
 }
-template<typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
+template <typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
 bool operator!=(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
 {
     return !(lhs == rhs);
 }
+#endif
 
 
-//mutex mixin class:
-//used to attach mutex directly to another object type (same memory space)
-#include <mutex>
-#include <atomic>
-#include <iostream> //std::cout
-template <class TYPE> //derivation
-//class Mutexed //mixin
-class WithMutex: public TYPE //derivation
+#if 0 //example usage
+#include <set>
+struct Example
 {
-public: //ctor/dtor
-//    Mutexed(): m_locked(false) {} //mixin
-    PERFECT_FWD2BASE_CTOR(WithMutex, TYPE), m_locked(false) {} //derivation
-//    Mutexed(TYPE* ptr):
-//    ~Mutexed() {}
-    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
-private:
-//protected:
-    std::mutex m_mutex;
-    std::atomic<bool> m_locked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
-public:
-    bool islocked() { return m_locked; } //if (m_mutex.try_lock()) { m_mutex.unlock(); return false; }
-//private:
-    void lock() { std::cout << "lock\n" << std::flush; m_mutex.lock(); m_locked = true; }
-    void unlock() { std::cout << "unlock\n" << std::flush; m_locked = false; m_mutex.unlock(); }
+    int value;
+    Example(int v): value(v) {}
+    bool operator<(Example const& other) const
+    {
+        return value < other.value;
+    }
 };
+int main(int argc, char* argv[])
+{
+    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
+    foo.insert(Example(3));
+    foo.insert(Example(1));
+    foo.insert(Example(4));
+    foo.insert(Example(2));
+    return 0;
+}
+#endif
 
 
+#if 0
 //allocator mixin class:
 //used to attach allocator to another object type (different address spaces)
-#include <memory> //unique_ptr
-template <class TYPE> //derivation
+//#include <memory> //unique_ptr
+//template <class TYPE> //derivation
+template <typename TYPE, typename PolicyTYPE = ShmHeap<TYPE>, typename TraitsTYPE = ShmobjTraits<TYPE> >
 //class WithAllocator //mixin
-class WithAllocator //: public TYPE //derivation
+class WithAllocator: public TYPE //derivation
 {
 public: //ctor/dtor
     typedef ShmAllocator<TYPE> Allocator;
@@ -334,8 +408,8 @@ public: //ctor/dtor
 //    PERFECT_FWD2BASE_CTOR(WithMutex, TYPE), m_locked(false) {} //derivation
 //#define PERFECT_FWD2BASE_CTOR(type, base)  
     template<typename ... ARGS>
-    WithAllocator(ARGS&& ... args, Allocator& alloc = Allocator()): m_data(TYPE(std::forward<ARGS>(args) ...)), m_alloc(&alloc) {}
-    WithAllocator(TYPE& that, Allocator& alloc = Allocator()): m_data(that), m_alloc(&alloc) {} //copy ctor; is this redundant with perfect fwding?
+    WithAllocator(ARGS&& ... args, Allocator& alloc = Allocator()): TYPE(std::forward<ARGS>(args) ..., alloc) {}
+//    WithAllocator(TYPE& that, Allocator& alloc = Allocator()): m_data(that), m_alloc(&alloc) {} //copy ctor; is this redundant with perfect fwding?
 //    WithAllocator(Allocator& alloc = Allocator()): m_alloc(alloc) {}
 //    WithAllocator(TYPE& data, Allocator& alloc = Allocator()): m_data(data), m_alloc(&alloc) {} //NOTE: constructs new allocator if not provided
 //    Mutexed(TYPE* ptr):
@@ -369,57 +443,64 @@ public:
     Allocator& alloc() { return *m_alloc; }
     TYPE* operator->() { return &m_data; }
 };
+#endif
 
 
+#if 0
 //shared memory proxy object:
 //wraps a pointer to real data + mutex (different address space)
+//passes allocator into object ctor, serializes member access (optional lock/unlock)
+//also deallocates when object goes out of scope
 //proxy wrapper example: http://www.stroustrup.com/wrapper.pdf
 //see also: https://cppguru.wordpress.com/2009/01/14/c-proxy-template/
-template <class TYPE>
+template <class TYPE, bool AUTOLOCK = true>
 class shm_ptr //: public Mutexed<TYPE>
 {
     typedef WithMutex<TYPE> ShmType;
     typedef ShmAllocator<ShmType> Allocator;
-    union padded //kludge: union makes sizeof() proxy object same as real object
+    union padded //kludge: union makes sizeof() proxy object same as real object (in case caller uses address arithmetic)
     {
 //        WithMutex<TYPE>* ptr;
         ShmType* ptr; //ptr to obj in shmem
-        unique_ptr<Allocator> alloc; //allocator for obj; allocator could be shared with other shmem objs
+//        unique_ptr<Allocator> alloc; //allocator for obj; allocator could be shared with other shmem objs
 //        WithAllocator<InnerType> shmobj;
 //        WithAllocator<TYPE>* ptr;
 //        std::unique_ptr<WithMutex<TYPE>> ptr; //unique_ptr will auto dealloc
 //        WithAllocator<WithMutex<TYPE>>* ptr;
         TYPE dummy_padding; //NOTE: ctor not called
     public:
-        padded(ShmType* ptr, Allocator& alloc): ptr(ptr), alloc(&alloc) {} //kludge: need ctor to allow init and avoid "deleted function" error
+//        padded(ShmType* ptr, Allocator& alloc): ptr(ptr), alloc(&alloc) {} //kludge: need ctor to allow init and avoid "deleted function" error
+        padded(ShmType* ptr): ptr(ptr) {} //kludge: need ctor to allow init and avoid "deleted function" error
         ~padded() {} //NOTE: this is needed
     } m_inner;
-//helper class to ensure unlock() occurs after member function returns
-    class unlock_later
-    {
-        ShmType* m_ptr;
-    public: //ctor/dtor to wrap lock/unlock
-        unlock_later(ShmType* ptr): m_ptr(ptr) { m_ptr->lock(); }
-        ~unlock_later() { m_ptr->unlock(); }
-    public:
-        ShmType* operator->() { return m_ptr; } //allow access to wrapped members
-    };
 public: //ctor/dtor
 //    ProxyWrapper(TYPE* pp): m_ptr(pp) {}
 //#define INNER_CREATE(args)  m_inner(new ShmType(args)) //pass ctor args down into m_inner
-#define INNER_CREATE(args)  m_inner(new ShmType(args)) //pass ctor args down into m_inner
     template<typename ... ARGS> //use "perfect forwarding" to ctor
-    shm_ptr(ARGS&& ... args, Allocator& alloc = Allocator()): INNER_CREATE(std::forward<ARGS>(args) ..., alloc) {}
+//    shm_ptr(ARGS&& ... args, Allocator& alloc = Allocator()): INNER_CREATE(std::forward<ARGS>(args) ..., alloc) {}
 //    PERFECT_FWD2BASE_CTOR(shm_ptr, INNER_CREATE) {} //perfectly forwarded ctor
-#undef INNER_CREATE
+    shm_ptr(ARGS&& ... args, Allocator& alloc = Allocator()): m_inner(new ShmType(std::forward<ARGS>(args) ..., alloc)) {}
+//#undef INNER_CREATE
     ~shm_ptr() { delete m_inner.ptr; } //prevent memory leak
-public: //cast operator
+private:
+//helper class to ensure unlock() occurs after member function returns
+    class unlock_later
+    {
+        WithMutex<TYPE>* m_ptr;
+    public: //ctor/dtor to wrap lock/unlock
+        unlock_later(WithMutex<TYPE>* ptr): m_ptr(ptr) { if (AUTOLOCK) m_ptr->lock(); }
+        ~unlock_later() { if (AUTOLOCK) m_ptr->unlock(); }
+    public:
+        inline WithMutex<TYPE>* operator->() { return m_ptr; } //allow access to wrapped members
+    };
+public: //pointer operator; allows safe multi-process access to shared object's members
 //nope    TYPE* /*ProxyCaller*/ operator->() { typename WithMutex<TYPE>::scoped_lock lock(m_inner.ptr); return m_inner.ptr; } //ProxyCaller(m_ps.ptr); } //https://stackoverflow.com/questions/22874535/dependent-scope-need-typename-in-front
-    unlock_later operator->() { return unlock_later(m_inner.ptr); }
+    inline unlock_later& operator->() { return unlock_later(m_inner.ptr); }
 //public:
 //    static void lock() { std::cout << "lock\n" << std::flush; }
 //    static void unlock() { std::cout << "unlock\n" << std::flush; }
 };
+#endif
 
 
 #if 1 //proxy example
@@ -428,28 +509,57 @@ class TestObj
     std::string m_name;
     int m_count;
 public:
-    explicit TestObj(const char* name): m_name(name), m_count(0) { std::cout << "TestObj '" << name << "' ctor\n" << std::flush; }
-    ~TestObj() { std::cout << "TestObj '" << m_name << "' dtor\n" << std::flush; } //only used for debug
-    void print() { std::cout << "TestObj.print: (name '" << m_name << "', count " << m_count << ")\n" << std::flush; }
+    explicit TestObj(const char* name): m_name(name), m_count(0) { ATOMIC(std::cout << FMT("TestObj@%p") << this << " '" << name << "' ctor\n" << std::flush); }
+    ~TestObj() { ATOMIC(std::cout << FMT("TestObj@%p") << this << " '" << m_name << "' dtor\n" << std::flush); } //only used for debug
+    void print() { ATOMIC(std::cout << "TestObj.print: (name" << FMT("@%p") << m_name.cstr() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")\n" << std::flush); }
     int& inc() { return ++m_count; }
 };
 
-int main()
+int main(int argc, const char* argv[])
 {
+#if 0
+#if 1
+    ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
+#endif
+    bool owner = fork();
+    if (!owner) sleep(1); //give parent head start
+    ATOMIC(std::cout << (owner? "parent": "child") << " start\n" << std::flush);
+//    std::vector<std::string> args;
+//    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
+#endif
+
     TestObj bare("berry");
     bare.inc();
     bare.print();
 
+#if 0
 //    ProxyWrapper<Person> person(new Person("testy"));
-    shm_ptr<TestObj> testobj("testy");
+#if 0
+    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
+#endif
+//    ShmHeap<TestObj> shm_heap(shm_seg);
+    ShmAllocator<TestObj> shm_alloc(: public PolicyTYPE, public TraitsTYPE
+
+    ATOMIC("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n" << std::flush);
+//    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
+    shm_ptr<TestObj> testobj("testy", shm_alloc);
     testobj->inc();
     testobj->inc();
     testobj->print();
+#endif
+    std::vector<TestObj, ShmAllocator<TestObj, ShmHeap<TestObj>> testobj;
+    testobj.emplace_back("list1");
+    testobj.emplace_back("list2");
+    testobj[0].inc();
+    testobj[0].inc();
+    testobj[1].inc();
+    testobj[0].print();
+    testobj[1].print();
 
     std::cout
         << "sizeof(berry) = " << sizeof(bare)
         << ", sizeof(test) = " << sizeof(testobj)
-        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
+//        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
         << "\n" << std::flush;
     return 0;
 }
