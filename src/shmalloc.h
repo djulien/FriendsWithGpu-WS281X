@@ -72,11 +72,13 @@ class ShmKey
     key_t m_key;
 public: //ctor/dtor
 //    explicit ShmKey(key_t key = 0): key(key? key: crekey()) {}
-    explicit ShmKey(int key = 0): m_key(key? key: crekey()) {}
-    explicit ShmKey(const ShmKey&& other): m_key((int)other) {} //copy ctor
+    /*explicit*/ ShmKey(const int& key = 0): m_key(key? key: crekey()) {}
+//    explicit ShmKey(const ShmKey&& other): m_key((int)other) {} //copy ctor
+//    ShmKey(const ShmKey& that) { *this = that; } //copy ctor
     ~ShmKey() {}
 public: //operators
-    inline operator int() { return m_key; }
+    ShmKey& operator=(const int& key) { m_key = key? key: crekey(); return *this; } //conv operator
+    inline operator int() { return (int)m_key; }
 //    bool operator!() { return key != 0; }
 //    inline key_t 
 public: //static helpers
@@ -280,23 +282,26 @@ public: //memory mgmt
     {
         if (count > max_size()) { throw std::bad_alloc(); }
         pointer ptr = static_cast<pointer>(::operator new(count * sizeof(type), ::std::nothrow));
-        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: allocated " << count << " * size " << sizeof(type) << " bytes at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: allocated " << count << " " << TYPENAME << "(s) * size " << sizeof(type) << " bytes at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
         return ptr;
     }
 //Delete memory:
     void deallocate(pointer ptr, size_type count)
     {
-        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: deallocate " << count << " bytes at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: deallocate " << count << " " << TYPENAME << "(s) * size " << sizeof(type) << " bytes at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
         ::operator delete(ptr);
     }
 //max #objects that can be allocated in one call:
-    static size_type max_size(void) const { return  / sizeof(TYPE); } //max_allocations<TYPE>::value; }
+    static const int max_bytes = 10000000; //std::size_t>(-1); //take it easy on shm
+    static size_type max_size(void) { return max_bytes / sizeof(TYPE); } //max_allocations<TYPE>::value; }
 //    size_type max_size(void) const { return m_shmseg.shmsize() / sizeof(TYPE); } //max_allocations<TYPE>::value; }
 //TODO
 //private: //data
 //    typedef struct { size_t used; std::mutex mutex; } ShmHdr;
 //    ShmSeg& m_shmseg;
+    static const char* TYPENAME;
 };
+//TODO: https://stackoverflow.com/questions/81870/is-it-possible-to-print-a-variables-type-in-standard-c
 
 
 //allocator:
@@ -504,16 +509,21 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 
 
 #if 1 //proxy example
+#include "vectorex.h"
 class TestObj
 {
     std::string m_name;
     int m_count;
 public:
     explicit TestObj(const char* name): m_name(name), m_count(0) { ATOMIC(std::cout << FMT("TestObj@%p") << this << " '" << name << "' ctor\n" << std::flush); }
+    TestObj(const TestObj& that): m_name(that.m_name), m_count(that.m_count) { ATOMIC(std::cout << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << "\n" << std::flush); }
     ~TestObj() { ATOMIC(std::cout << FMT("TestObj@%p") << this << " '" << m_name << "' dtor\n" << std::flush); } //only used for debug
-    void print() { ATOMIC(std::cout << "TestObj.print: (name" << FMT("@%p") << m_name.cstr() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")\n" << std::flush); }
+public:
+    void print() { ATOMIC(std::cout << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name.c_str() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")\n" << std::flush); }
     int& inc() { return ++m_count; }
 };
+template <> const char* ShmHeap<TestObj>::TYPENAME = "TestObj";
+template <> const char* ShmHeap<std::vector<TestObj, ShmAllocator<TestObj, ShmHeap<TestObj>, ShmobjTraits<TestObj>>>>::TYPENAME = "std::vector<TestObj>";
 
 int main(int argc, const char* argv[])
 {
@@ -547,7 +557,20 @@ int main(int argc, const char* argv[])
     testobj->inc();
     testobj->print();
 #endif
-    std::vector<TestObj, ShmAllocator<TestObj, ShmHeap<TestObj>> testobj;
+    typedef ShmAllocator<TestObj, ShmHeap<TestObj>> item_allocator_type;
+    item_allocator_type item_alloc; //explicitly create so it can be reused in other places (carries state)
+    TestObj* optr = item_alloc.allocate(1);
+    typedef std::vector<TestObj, item_allocator_type> list_type;
+//    ShmAllocator<list_type, ShmHeap<list_type>>& list_alloc = item_alloc.rebind<list_type>.other;
+//    item_allocator_type::rebind<list_type> list_alloc;
+    typedef typename item_allocator_type::template rebind<list_type>::other list_allocator_type; //http://www.cplusplus.com/forum/general/161946/
+//    SmhAllocator<list_type, ShmHeap<list_type>> shmalloc;
+    list_allocator_type list_alloc;
+//    list_type testobj(item_alloc); //stack variable
+//    list_type* ptr = list_alloc.allocate(1);
+    list_type& testobj = *new (list_alloc.allocate(1)) list_type(item_alloc); //custom heap variable
+    ATOMIC(std::cout << FMT("&list %p") << &testobj << "\n" << std::flush);
+
     testobj.emplace_back("list1");
     testobj.emplace_back("list2");
     testobj[0].inc();
