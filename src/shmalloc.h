@@ -179,17 +179,19 @@ private: //helpers
 #include <atomic>
 #include <iostream> //std::cout
 template <class TYPE, bool AUTOLOCK = true> //derivation
-//class Mutexed //mixin
+//class WithMutex //mixin/wrapper
 class WithMutex: public TYPE //derivation
 {
 public: //ctor/dtor
 //    Mutexed(): m_locked(false) {} //mixin
     PERFECT_FWD2BASE_CTOR(WithMutex, TYPE), m_locked(false) {} //derivation
+//    PERFECT_FWD2BASE_CTOR(WithMutex, m_wrapped), m_locked(false) {} //wrapped
 //    Mutexed(TYPE* ptr):
 //    ~Mutexed() {}
 //    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
 private:
 //protected:
+//    TYPE m_wrapped;
     std::mutex m_mutex;
     std::atomic<bool> m_locked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
 public:
@@ -201,16 +203,18 @@ private:
 //helper class to ensure unlock() occurs after member function returns
     class unlock_later
     {
-        TYPE* m_ptr;
+        WithMutex<TYPE>* m_ptr;
     public: //ctor/dtor to wrap lock/unlock
-        unlock_later(TYPE* ptr): m_ptr(ptr) { if (AUTOLOCK) m_ptr->lock(); }
+        unlock_later(WithMutex<TYPE>* ptr): m_ptr(ptr) { if (AUTOLOCK) m_ptr->lock(); }
         ~unlock_later() { if (AUTOLOCK) m_ptr->unlock(); }
     public:
         inline TYPE* operator->() { return m_ptr; } //allow access to wrapped members
+//        inline operator TYPE() { return *m_ptr; } //allow access to wrapped members
     };
 public: //pointer operator; allows safe multi-process access to shared object's members
 //nope    TYPE* /*ProxyCaller*/ operator->() { typename WithMutex<TYPE>::scoped_lock lock(m_inner.ptr); return m_inner.ptr; } //ProxyCaller(m_ps.ptr); } //https://stackoverflow.com/questions/22874535/dependent-scope-need-typename-in-front
-    inline unlock_later& operator->() { return unlock_later(this); }
+    inline unlock_later operator->() { return unlock_later(this); }
+//    inline operator TYPE() { return unlock_later(this); }
 //    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
 //public:
 //    static void lock() { std::cout << "lock\n" << std::flush; }
@@ -542,6 +546,12 @@ int main(int argc, const char* argv[])
     bare.inc();
     bare.print();
 
+    WithMutex<TestObj> prot("protected");
+//    ((TestObj)prot).inc();
+//    ((TestObj)prot).print();
+    prot->inc();
+    prot->print();
+    
 #if 0
 //    ProxyWrapper<Person> person(new Person("testy"));
 #if 0
