@@ -342,28 +342,33 @@ public: //ctors
 
 //equivalencies:
 //tell stl which allocators are compatible
+//NOTE: since ShmAllocator does not actually deallocate memory, all allocators can be considered ==
 
 //allocators != unless specialization says so:
 template <typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
 bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
 {
-    return false;
+//    return false;
+    return true;
 }
 template <typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OTHER_TYPE, typename PolicyOTHER, typename TraitsOTHER>
 bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, PolicyOTHER, TraitsOTHER> const& rhs)
 {
-    return !(lhs == rhs);
+//    return !(lhs == rhs);
+    return false;
 }
 //allocator != anything else:
 template <typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
 bool operator==(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
 {
-    return false;
+//    return false;
+    return true;
 }
 template <typename TYPE, typename PolicyTYPE, typename TraitsTYPE, typename OtherAllocator>
 bool operator!=(ShmAllocator<TYPE, PolicyTYPE, TraitsTYPE> const& lhs, OtherAllocator const& rhs)
 {
-    return !(lhs == rhs);
+//    return !(lhs == rhs);
+    return false;
 }
 //Specialize for heap policy:
 template <typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
@@ -374,7 +379,8 @@ bool operator==(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAll
 template <typename TYPE, typename TraitsTYPE, typename OTHER_TYPE, typename TraitsOTHER>
 bool operator!=(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAllocator<OTHER_TYPE, ShmHeap<OTHER_TYPE>, TraitsOTHER> const& rhs)
 {
-    return !(lhs == rhs);
+//    return !(lhs == rhs);
+    return false;
 }
 #endif
 
@@ -514,6 +520,7 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 
 #if 1 //proxy example
 #include "vectorex.h"
+#include <unistd.h> //fork()
 class TestObj
 {
     std::string m_name;
@@ -529,18 +536,20 @@ public:
 template <> const char* ShmHeap<TestObj>::TYPENAME = "TestObj";
 template <> const char* ShmHeap<std::vector<TestObj, ShmAllocator<TestObj, ShmHeap<TestObj>, ShmobjTraits<TestObj>>>>::TYPENAME = "std::vector<TestObj>";
 
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h> //fork(), getpid()
 int main(int argc, const char* argv[])
 {
-#if 0
-#if 1
-    ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
-#endif
+//#if 0
+//    ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
     bool owner = fork();
     if (!owner) sleep(1); //give parent head start
     ATOMIC(std::cout << (owner? "parent": "child") << " start\n" << std::flush);
 //    std::vector<std::string> args;
 //    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
-#endif
+//#endif
 
     TestObj bare("berry");
     bare.inc();
@@ -552,24 +561,20 @@ int main(int argc, const char* argv[])
     prot->inc();
     prot->print();
     
-#if 0
 //    ProxyWrapper<Person> person(new Person("testy"));
-#if 0
-    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
-#endif
+//    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
 //    ShmHeap<TestObj> shm_heap(shm_seg);
-    ShmAllocator<TestObj> shm_alloc(: public PolicyTYPE, public TraitsTYPE
-
-    ATOMIC("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n" << std::flush);
+//    ATOMIC("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n" << std::flush);
 //    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
-    shm_ptr<TestObj> testobj("testy", shm_alloc);
-    testobj->inc();
-    testobj->inc();
-    testobj->print();
-#endif
     typedef ShmAllocator<TestObj, ShmHeap<TestObj>> item_allocator_type;
     item_allocator_type item_alloc; //explicitly create so it can be reused in other places (carries state)
-    TestObj* optr = item_alloc.allocate(1);
+    TestObj testobj = *new (item_alloc.allocate(1)) TestObj("testy");
+//    shm_ptr<TestObj> testobj("testy", shm_alloc);
+    testobj.inc();
+    testobj.inc();
+    testobj.print();
+    ATOMIC(std::cout << FMT("&testobj %p") << &testobj << "\n" << std::flush);
+
     typedef std::vector<TestObj, item_allocator_type> list_type;
 //    ShmAllocator<list_type, ShmHeap<list_type>>& list_alloc = item_alloc.rebind<list_type>.other;
 //    item_allocator_type::rebind<list_type> list_alloc;
@@ -578,22 +583,27 @@ int main(int argc, const char* argv[])
     list_allocator_type list_alloc;
 //    list_type testobj(item_alloc); //stack variable
 //    list_type* ptr = list_alloc.allocate(1);
-    list_type& testobj = *new (list_alloc.allocate(1)) list_type(item_alloc); //custom heap variable
-    ATOMIC(std::cout << FMT("&list %p") << &testobj << "\n" << std::flush);
+    list_type& testlist = *new (list_alloc.allocate(1)) list_type(item_alloc); //custom heap variable
+    ATOMIC(std::cout << FMT("&list %p") << &testlist << "\n" << std::flush);
 
-    testobj.emplace_back("list1");
-    testobj.emplace_back("list2");
-    testobj[0].inc();
-    testobj[0].inc();
-    testobj[1].inc();
-    testobj[0].print();
-    testobj[1].print();
+    testlist.emplace_back("list1");
+    testlist.emplace_back("list2");
+    testlist[0].inc();
+    testlist[0].inc();
+    testlist[1].inc();
+    testlist[0].print();
+    testlist[1].print();
 
     std::cout
         << "sizeof(berry) = " << sizeof(bare)
-        << ", sizeof(test) = " << sizeof(testobj)
+        << ", sizeof(prot) = " << sizeof(prot)
+        << ", sizeof(test obj) = " << sizeof(testobj)
+        << ", sizeof(test list) = " << sizeof(testlist)
 //        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
         << "\n" << std::flush;
+
+    ATOMIC(std::cout << (owner? "parent (waiting to)": "child") << " exit\n" << std::flush);
+    if (owner) waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
     return 0;
 }
 #endif
