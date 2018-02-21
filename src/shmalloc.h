@@ -197,8 +197,8 @@ private:
 public:
     bool islocked() { return m_locked; } //if (m_mutex.try_lock()) { m_mutex.unlock(); return false; }
 //private:
-    void lock() { ATOMIC(std::cout << "lock\n" << std::flush); m_mutex.lock(); m_locked = true; }
-    void unlock() { ATOMIC(std::cout << "unlock\n" << std::flush); m_locked = false; m_mutex.unlock(); }
+    void lock() { ATOMIC(std::cout << YELLOW_MSG << "lock" << ENDCOLOR << std::flush); m_mutex.lock(); m_locked = true; }
+    void unlock() { ATOMIC(std::cout << YELLOW_MSG << "unlock" << ENDCOLOR << std::flush); m_locked = false; m_mutex.unlock(); }
 private:
 //helper class to ensure unlock() occurs after member function returns
     class unlock_later
@@ -275,10 +275,11 @@ public:
     template <typename OTHER_TYPE>
     struct rebind { typedef ShmHeap<OTHER_TYPE> other; };
 public: //ctors
-    ShmHeap(void) {} //default ctor
+    ShmHeap(void): m_shmseg(*new ShmSeg()) {} //default ctor; create new storage
+    ShmHeap(ShmSeg& shmseg): m_shmseg(shmseg) {} //reuse existing storage
 //    ShmHeap(/*void*/ ShmSeg& shmseg = ShmSeg()): m_shmseg(shmseg) {} //default ctor
     template <typename OTHER_TYPE>
-    ShmHeap(ShmHeap<OTHER_TYPE> const& other) {} //copy ctor
+    ShmHeap(ShmHeap<OTHER_TYPE> const& other): m_shmseg(other.m_shmseg) {} //copy ctor; reuse existing storage
 //    ShmHeap(ShmHeap<OTHER_TYPE> const& other): m_shmseg(other.m_shmseg) {} //copy ctor
 public: //memory mgmt
 //allocate memory:
@@ -303,6 +304,7 @@ public: //memory mgmt
 //private: //data
 //    typedef struct { size_t used; std::mutex mutex; } ShmHdr;
 //    ShmSeg& m_shmseg;
+    std::unique_ptr<ShmSeg> m_shmseg;
     static const char* TYPENAME;
 };
 //TODO: https://stackoverflow.com/questions/81870/is-it-possible-to-print-a-variables-type-in-standard-c
@@ -526,11 +528,11 @@ class TestObj
     std::string m_name;
     int m_count;
 public:
-    explicit TestObj(const char* name): m_name(name), m_count(0) { ATOMIC(std::cout << FMT("TestObj@%p") << this << " '" << name << "' ctor\n" << std::flush); }
-    TestObj(const TestObj& that): m_name(that.m_name), m_count(that.m_count) { ATOMIC(std::cout << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << "\n" << std::flush); }
-    ~TestObj() { ATOMIC(std::cout << FMT("TestObj@%p") << this << " '" << m_name << "' dtor\n" << std::flush); } //only used for debug
+    explicit TestObj(const char* name): m_name(name), m_count(0) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR << std::flush); }
+    TestObj(const TestObj& that): m_name(that.m_name), m_count(that.m_count) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR << std::flush); }
+    ~TestObj() { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR << std::flush); } //only used for debug
 public:
-    void print() { ATOMIC(std::cout << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name.c_str() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")\n" << std::flush); }
+    void print() { ATOMIC(std::cout << BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name.c_str() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR << std::flush); }
     int& inc() { return ++m_count; }
 };
 template <> const char* ShmHeap<TestObj>::TYPENAME = "TestObj";
@@ -546,7 +548,7 @@ int main(int argc, const char* argv[])
 //    ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
     bool owner = fork();
     if (!owner) sleep(1); //give parent head start
-    ATOMIC(std::cout << (owner? "parent": "child") << " start\n" << std::flush);
+    ATOMIC(std::cout << PINK_MSG << (owner? "parent": "child") << " start" << ENDCOLOR << std::flush);
 //    std::vector<std::string> args;
 //    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
 //#endif
@@ -562,29 +564,29 @@ int main(int argc, const char* argv[])
     prot->print();
     
 //    ProxyWrapper<Person> person(new Person("testy"));
-//    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
+    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
 //    ShmHeap<TestObj> shm_heap(shm_seg);
 //    ATOMIC("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n" << std::flush);
 //    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
     typedef ShmAllocator<TestObj, ShmHeap<TestObj>> item_allocator_type;
-    item_allocator_type item_alloc; //explicitly create so it can be reused in other places (carries state)
-    TestObj testobj = *new (item_alloc.allocate(1)) TestObj("testy");
+    item_allocator_type item_alloc(shm); //explicitly create so it can be reused in other places (shares state with other allocators)
+    TestObj& testobj = *new (item_alloc.allocate(1)) TestObj("testy"); //NOTE: ref avoids copy ctor
 //    shm_ptr<TestObj> testobj("testy", shm_alloc);
     testobj.inc();
     testobj.inc();
     testobj.print();
-    ATOMIC(std::cout << FMT("&testobj %p") << &testobj << "\n" << std::flush);
+    ATOMIC(std::cout << BLUE_MSG << FMT("&testobj %p") << &testobj << ENDCOLOR << std::flush);
 
     typedef std::vector<TestObj, item_allocator_type> list_type;
 //    ShmAllocator<list_type, ShmHeap<list_type>>& list_alloc = item_alloc.rebind<list_type>.other;
 //    item_allocator_type::rebind<list_type> list_alloc;
     typedef typename item_allocator_type::template rebind<list_type>::other list_allocator_type; //http://www.cplusplus.com/forum/general/161946/
 //    SmhAllocator<list_type, ShmHeap<list_type>> shmalloc;
-    list_allocator_type list_alloc;
+    list_allocator_type list_alloc(item_alloc); //share state with item allocator
 //    list_type testobj(item_alloc); //stack variable
 //    list_type* ptr = list_alloc.allocate(1);
     list_type& testlist = *new (list_alloc.allocate(1)) list_type(item_alloc); //custom heap variable
-    ATOMIC(std::cout << FMT("&list %p") << &testlist << "\n" << std::flush);
+    ATOMIC(std::cout << BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR << std::flush);
 
     testlist.emplace_back("list1");
     testlist.emplace_back("list2");
@@ -602,7 +604,7 @@ int main(int argc, const char* argv[])
 //        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
         << "\n" << std::flush;
 
-    ATOMIC(std::cout << (owner? "parent (waiting to)": "child") << " exit\n" << std::flush);
+    ATOMIC(std::cout << PINK_MSG << (owner? "parent (waiting to)": "child") << " exit" << ENDCOLOR << std::flush);
     if (owner) waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
     return 0;
 }
