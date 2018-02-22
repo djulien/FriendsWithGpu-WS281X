@@ -65,25 +65,31 @@
 //#define VOID  uintptr_t //void //kludge: avoid compiler warnings with pointer arithmetic
 
 
+#if 0
 //shmem key:
 //define unique type for function signatures
+//to look at shm:
+// ipcs -m 
 class ShmKey
 {
+public: //debug only
     key_t m_key;
 public: //ctor/dtor
 //    explicit ShmKey(key_t key = 0): key(key? key: crekey()) {}
-    /*explicit*/ ShmKey(const int& key = 0): m_key(key? key: crekey()) {}
+    /*explicit*/ ShmKey(const int& key = 0): m_key(key? key: crekey()) { std::cout << "ShmKey ctor " << FMT("0x%lx\n") << m_key; }
 //    explicit ShmKey(const ShmKey&& other): m_key((int)other) {} //copy ctor
 //    ShmKey(const ShmKey& that) { *this = that; } //copy ctor
     ~ShmKey() {}
 public: //operators
-    ShmKey& operator=(const int& key) { m_key = key? key: crekey(); return *this; } //conv operator
-    inline operator int() { return (int)m_key; }
+    ShmKey& operator=(const int& key) { m_key = key? key: crekey(); return *this; } //conv op; //std::cout << "key assgn " << FMT("0x%lx") << key << FMT(" => 0x%lx") << m_key << "\n"; return *this; } //conv operator
+    inline operator int() { return /*(int)*/m_key; }
 //    bool operator!() { return key != 0; }
 //    inline key_t 
+//??    std::ostream& operator<<(const ShmKey& value)
 public: //static helpers
-    static inline key_t crekey() { return (rand() << 16) | 0xfeed; }
+    static inline key_t crekey() { int r = (rand() << 16) | 0xfeed; /*std::cout << FMT("rnd key 0x%lx\n") << r*/; return r; }
 };
+#endif
 
 
 //shared memory segment:
@@ -94,8 +100,9 @@ class ShmSeg
 public: //ctor/dtor
     enum class persist: int {Reuse = 0, NewTemp = -1, NewPerm = +1};
 //    ShmSeg(persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
-    explicit ShmSeg(ShmKey key = ShmKey(0), persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
+    explicit ShmSeg(key_t key = 0, persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
     {
+        ATOMIC(std::cout << CYAN_MSG << "ShmSeg.ctor: key " << FMT("0x%lx") << key << ", persist " << (int)cre << ", size " << size << ENDCOLOR << std::flush);
         if (cre != persist::Reuse) destroy(key); //start fresh
         m_keep = (cre != persist::NewTemp);        
         create(key, size, cre != persist::Reuse);
@@ -107,7 +114,7 @@ public: //ctor/dtor
         if (!m_keep) destroy(m_key);
     }
 public: //getters
-    inline ShmKey shmkey() const { return m_key; }
+    inline key_t shmkey() const { return m_key; }
     inline void* shmptr() const { return m_ptr; }
 //    inline size32_t shmofs(void* ptr) const { return (VOID*)ptr - (VOID*)m_ptr; } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
 //    inline size32_t shmofs(void* ptr) const { return (uintptr_t)ptr - (uintptr_t)m_ptr; } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
@@ -117,21 +124,21 @@ public: //getters
 //    inline size_t shmused() const { return m_used; }
 //    inline size_t shmavail() const { return m_size - m_used; }
 private: //data
-    ShmKey m_key;
+    key_t m_key;
     void* m_ptr;
     size_t m_size; //, m_used;
     bool m_keep;
 private: //helpers
-    void create(ShmKey key, size_t size, bool want_new)
+    void create(key_t key, size_t size, bool want_new)
     {
-        if (!key) key = key.crekey(); //(rand() << 16) | 0xfeed;
+        if (!key) key = crekey(); //(rand() << 16) | 0xfeed;
 //#define  SHMKEY  ((key_t) 7890) /* base value for shmem key */
 //#define  PERMS 0666
 //        if (cre != persist::PreExist) destroy(key); //delete first (parent wants clean start)
 //        if (!key) key = (rand() << 16) | 0xfeed;
         if ((size < 1) || (size >= 10000000)) throw std::runtime_error("ShmSeg: bad size"); //set reasonable limits
         int shmid = shmget(key, size, 0666 | (want_new? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
-        ATOMIC(std::cout << CYAN_MSG << "ShmSeg: cre shmget key " << FMT("0x%lx") << key << ", size " << size << " => " << FMT("0x%lx") << shmid << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << CYAN_MSG << "ShmSeg: cre shmget key " << FMT("0x%lx") << key << ", size " << size << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR << std::flush);
         if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
         struct shmid_ds info;
         if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
@@ -158,24 +165,24 @@ private: //helpers
         m_ptr = 0; //can't use m_shmptr after this point
         ATOMIC(std::cout << CYAN_MSG << "ShmSeg: dettached " << ENDCOLOR << std::flush); //desc();
     }
-    static void destroy(ShmKey key)
+    static void destroy(key_t key)
     {
         if (!key) return; //!owner or !exist
         int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
-        ATOMIC(std::cout << CYAN_MSG << "ShmSeg: destroy " << FMT("0x%lx") << key << " => " << FMT("0x%lx") << shmid << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << CYAN_MSG << "ShmSeg: destroy " << FMT("key 0x%lx") << key << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR << std::flush);
         if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
         if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
         throw std::runtime_error(strerror(errno));
     }
-//public: //custom helpers
-//    static key_t crekey() { return (rand() << 16) | 0xfeed; }
+public: //custom helpers
+    static key_t crekey() { return (rand() << 16) | 0xfeed; }
 };
 
 
 class ShmHeap: public ShmSeg
 {
 public:
-    PERFECT_FWD2BASE_CTOR(ShmHeap, ShmSeg): m_used(sizeof(m_used)) {}
+    PERFECT_FWD2BASE_CTOR(ShmHeap, ShmSeg), m_used(sizeof(m_used)) {}
 public:
     inline size_t used() { return m_used; }
     inline size_t avail() { return shmsize() - m_used; }
@@ -191,6 +198,7 @@ public:
     }
     void dealloc(void* ptr)
     {
+        int count = 1;
         ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: deallocate " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR << std::flush);
 //        ::operator delete(ptr);
     }
@@ -249,13 +257,14 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 };
 
 
-#if 1 //C++11 minimal allocator
+#if 1 //minimal stl allocator (C++11)
 //based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
 template <class TYPE>
 struct ShmAllocator  
 {  
     typedef TYPE value_type;
     ShmAllocator() noexcept {} //default ctor; not required by STL
+    ShmAllocator(ShmHeap* heap): m_heap(heap) {}
     template<class OTHER>
     ShmAllocator(const ShmAllocator<OTHER>& other) noexcept: m_heap(other.m_heap) {} //converting copy ctor (more efficient than C++03)
     template<class OTHER>
@@ -267,21 +276,161 @@ struct ShmAllocator
         if (!count) return nullptr;
         if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
         void* const ptr = malloc(count * sizeof(TYPE));
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME << "(s) * size " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
         if (!ptr) throw std::bad_alloc();
         return static_cast<TYPE*>(ptr);
     }  
     void deallocate(TYPE* const ptr, size_t count = 1) const noexcept
     {
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME << "(s) * size " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
         free(ptr);
     }
-    std::shared_ptr<ShmSeg> m_heap;
+    std::shared_ptr<ShmSeg> m_heap; //allow heap to be shared between allocators
     static const char* TYPENAME;
 };
 #endif
 
-#if 0 //C++03 allocator
+
+#if 1 //proxy example
+#include "vectorex.h"
+#include <unistd.h> //fork()
+class TestObj
+{
+    std::string m_name;
+    int m_count;
+public:
+    explicit TestObj(const char* name): m_name(name), m_count(0) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR << std::flush); }
+    TestObj(const TestObj& that): m_name(that.m_name), m_count(that.m_count) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR << std::flush); }
+    ~TestObj() { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR << std::flush); } //only used for debug
+public:
+    void print() { ATOMIC(std::cout << BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name.c_str() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR << std::flush); }
+    int& inc() { return ++m_count; }
+};
+template <> const char* ShmAllocator<TestObj>::TYPENAME = "TestObj";
+template <> const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME = "std::vector<TestObj>";
+
+
+void send(int fd[2], int value)
+{
+    close(fd[0]);
+    write(fd[1], &value, sizeof(value));
+    ATOMIC(std::cout << BLUE_MSG << "parent '" << getpid() << FMT("' send 0x%x") << value << " to child" << ENDCOLOR << std::flush);
+    close(fd[1]);
+}
+int rcv(int fd[2])
+{
+    int retval;
+    close(fd[1]); //close write side of pipe; child is read-only
+    read(fd[0], &retval, sizeof(retval)); //NOTE: blocks until data received
+    ATOMIC(std::cout << BLUE_MSG << "child '" << getpid() << FMT("' rcv 0x%x") << retval << " from parent" << ENDCOLOR << std::flush);
+    close(fd[0]);
+    return retval;
+}
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h> //fork(), getpid()
+//#include <memory> //unique_ptr<>
+int main(int argc, const char* argv[])
+{
+//    ShmKey key(12);
+//    std::cout << FMT("0x%lx\n") << key.m_key;
+//    key = 0x123;
+//    std::cout << FMT("0x%lx\n") << key.m_key;
+
+#if 0 //best way, but doesn't match Node.js fork()
+    ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
+#else //use pipes to simulate Node.js pass env to child; for example see: https://bytefreaks.net/programming-2/c-programming-2/cc-pass-value-from-parent-to-child-after-fork-via-a-pipe
+    int fd[2];
+	pipe(fd); //create pipe descriptors < fork()
+#endif
+    bool owner = fork();
+    if (!owner) sleep(1); //give parent head start
+    ATOMIC(std::cout << PINK_MSG << (owner? "parent": "child") << " start" << ENDCOLOR << std::flush);
+#if 1 //simulate Node.js fork()
+//    ShmSeg& shm = *std::allocator<ShmSeg>(1); //alloc space but don't init
+//    ShmAllocator<ShmSeg> heap_alloc;
+    std::shared_ptr<ShmSeg> shmptr; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
+//    ShmSeg* shmptr = heap_alloc.allocate(1); //alloc space but don't init yet
+//    std::unique_ptr<ShmSeg> shm = shmptr;
+    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmSeg(0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
+    if (owner) send(fd, shmptr->shmkey());
+    else shmptr.reset(new /*(shmptr.get())*/ ShmSeg(rcv(fd), ShmSeg::persist::Reuse, 1));
+//    std::vector<std::string> args;
+//    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
+//    if (!owner) new (&shm) ShmSeg(shm.shmkey(), ShmSeg::persist::Reuse, 1); //attach to same shmem seg (child only)
+#endif
+
+    TestObj bare("berry");
+    bare.inc();
+    bare.print();
+
+    WithMutex<TestObj> prot("protected");
+//    ((TestObj)prot).inc();
+//    ((TestObj)prot).print();
+    prot->inc();
+    prot->print();
+    
+//    ProxyWrapper<Person> person(new Person("testy"));
+//can't set ref to rvalue :(    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
+//    if (owner) new (&shm) ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300);
+//    else new (&shm) ShmSeg(0x1234beef, ShmSeg::persist::Reuse); //key, persistence, size
+
+//    ShmHeap<TestObj> shm_heap(shm_seg);
+//    ATOMIC("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n" << std::flush);
+//    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
+//    typedef ShmAllocator<TestObj> item_allocator_type;
+//    item_allocator_type item_alloc; item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
+    ShmAllocator<TestObj> item_alloc(shmptr.get()); //item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
+    TestObj& testobj = *new (item_alloc.allocate(1)) TestObj("testy"); //NOTE: ref avoids copy ctor
+//    shm_ptr<TestObj> testobj("testy", shm_alloc);
+    testobj.inc();
+    testobj.inc();
+    testobj.print();
+    ATOMIC(std::cout << BLUE_MSG << FMT("&testobj %p") << &testobj << ENDCOLOR << std::flush);
+
+//    typedef std::vector<TestObj, item_allocator_type> list_type;
+    typedef std::vector<TestObj, ShmAllocator<TestObj>> list_type;
+#if 0
+    list_type testlist;
+#else //TODO
+//    ShmAllocator<list_type, ShmHeap<list_type>>& list_alloc = item_alloc.rebind<list_type>.other;
+//    item_allocator_type::rebind<list_type> list_alloc;
+//    typedef typename item_allocator_type::template rebind<list_type>::other list_allocator_type; //http://www.cplusplus.com/forum/general/161946/
+//    typedef ShmAllocator<list_type> list_allocator_type;
+//    SmhAllocator<list_type, ShmHeap<list_type>> shmalloc;
+//    list_allocator_type list_alloc(item_alloc); //list_alloc.m_heap = shmptr; //(item_alloc); //share state with item allocator
+    ShmAllocator<list_type> list_alloc(item_alloc); //list_alloc.m_heap = shmptr; //(item_alloc); //share state with item allocator
+//    list_type testobj(item_alloc); //stack variable
+//    list_type* ptr = list_alloc.allocate(1);
+    list_type& testlist = *new (list_alloc.allocate(1)) list_type(item_alloc); //(item_alloc); //custom heap variable
+#endif
+    ATOMIC(std::cout << BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR << std::flush);
+
+    testlist.emplace_back("list1");
+    testlist.emplace_back("list2");
+    testlist[0].inc();
+    testlist[0].inc();
+    testlist[1].inc();
+    testlist[0].print();
+    testlist[1].print();
+
+    std::cout
+        << "sizeof(berry) = " << sizeof(bare)
+        << ", sizeof(prot) = " << sizeof(prot)
+        << ", sizeof(test obj) = " << sizeof(testobj)
+        << ", sizeof(test list) = " << sizeof(testlist)
+//        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
+        << "\n" << std::flush;
+
+    ATOMIC(std::cout << PINK_MSG << (owner? "parent (waiting to)": "child") << " exit" << ENDCOLOR << std::flush);
+    if (owner) waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+    return 0;
+}
+#endif
+
+
+#if 0 //stl allocator (C++03)
 #if 1 //stl-compatible allocator
 //shm traits:
 //responsible for creating and destroying shm objects (no memory allocate/dealloc)
@@ -578,136 +727,6 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 //    static void lock() { std::cout << "lock\n" << std::flush; }
 //    static void unlock() { std::cout << "unlock\n" << std::flush; }
 };
-#endif
-
-
-#if 1 //proxy example
-#include "vectorex.h"
-#include <unistd.h> //fork()
-class TestObj
-{
-    std::string m_name;
-    int m_count;
-public:
-    explicit TestObj(const char* name): m_name(name), m_count(0) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR << std::flush); }
-    TestObj(const TestObj& that): m_name(that.m_name), m_count(that.m_count) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR << std::flush); }
-    ~TestObj() { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR << std::flush); } //only used for debug
-public:
-    void print() { ATOMIC(std::cout << BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name.c_str() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR << std::flush); }
-    int& inc() { return ++m_count; }
-};
-template <> const char* ShmAllocator<TestObj>::TYPENAME = "TestObj";
-template <> const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME = "std::vector<TestObj>";
-
-
-void send(int fd[2], int value)
-{
-    close(fd[0]);
-    write(fd[1], &value, sizeof(value));
-    ATOMIC(std::cout << BLUE_MSG << "parent '" << getpid() << "' send " << value << " to child" << ENDCOLOR << std::flush);
-    close(fd[1]);
-}
-int rcv(int fd[2])
-{
-    int retval;
-    close(fd[1]); //close write side of pipe; child is read-only
-    read(fd[0], &retval, sizeof(retval)); //NOTE: blocks until data received
-    ATOMIC(std::cout << BLUE_MSG << "child '" << getpid() << "' rcv " << retval << " from parent" << ENDCOLOR << std::flush);
-    close(fd[0]);
-    return retval;
-}
-
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h> //fork(), getpid()
-//#include <memory> //unique_ptr<>
-int main(int argc, const char* argv[])
-{
-#if 0 //best way, but doesn't fit with Node.js fork()
-    ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
-#else //use pipes to simulate Node.js pass env to child; based on C++ example at: https://bytefreaks.net/programming-2/c-programming-2/cc-pass-value-from-parent-to-child-after-fork-via-a-pipe
-    int fd[2];
-	pipe(fd); //create pipe descriptors < fork()
-#endif
-    bool owner = fork();
-    if (!owner) sleep(1); //give parent head start
-    ATOMIC(std::cout << PINK_MSG << (owner? "parent": "child") << " start" << ENDCOLOR << std::flush);
-#if 1 //simulate Node.js fork()
-//    ShmSeg& shm = *std::allocator<ShmSeg>(1); //alloc space but don't init
-//    ShmAllocator<ShmSeg> heap_alloc;
-    std::shared_ptr<ShmSeg> shmptr; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
-//    ShmSeg* shmptr = heap_alloc.allocate(1); //alloc space but don't init yet
-//    std::unique_ptr<ShmSeg> shm = shmptr;
-    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmSeg(0, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
-    if (owner) send(fd, shmptr->shmkey());
-    else shmptr.reset(new /*(shmptr.get())*/ ShmSeg(rcv(fd), ShmSeg::persist::Reuse, 1));
-//    std::vector<std::string> args;
-//    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
-//    if (!owner) new (&shm) ShmSeg(shm.shmkey(), ShmSeg::persist::Reuse, 1); //attach to same shmem seg (child only)
-#endif
-
-    TestObj bare("berry");
-    bare.inc();
-    bare.print();
-
-    WithMutex<TestObj> prot("protected");
-//    ((TestObj)prot).inc();
-//    ((TestObj)prot).print();
-    prot->inc();
-    prot->print();
-    
-//    ProxyWrapper<Person> person(new Person("testy"));
-//can't set ref to rvalue :(    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
-//    if (owner) new (&shm) ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300);
-//    else new (&shm) ShmSeg(0x1234beef, ShmSeg::persist::Reuse); //key, persistence, size
-
-//    ShmHeap<TestObj> shm_heap(shm_seg);
-//    ATOMIC("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n" << std::flush);
-//    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
-    typedef ShmAllocator<TestObj> item_allocator_type;
-    item_allocator_type item_alloc; item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
-    TestObj& testobj = *new (item_alloc.allocate(1)) TestObj("testy"); //NOTE: ref avoids copy ctor
-//    shm_ptr<TestObj> testobj("testy", shm_alloc);
-    testobj.inc();
-    testobj.inc();
-    testobj.print();
-    ATOMIC(std::cout << BLUE_MSG << FMT("&testobj %p") << &testobj << ENDCOLOR << std::flush);
-
-    typedef std::vector<TestObj, item_allocator_type> list_type;
-#if 1
-    list_type testlist;
-#else //TODO
-//    ShmAllocator<list_type, ShmHeap<list_type>>& list_alloc = item_alloc.rebind<list_type>.other;
-//    item_allocator_type::rebind<list_type> list_alloc;
-    typedef typename item_allocator_type::template rebind<list_type>::other list_allocator_type; //http://www.cplusplus.com/forum/general/161946/
-//    SmhAllocator<list_type, ShmHeap<list_type>> shmalloc;
-    list_allocator_type list_alloc(item_alloc); //share state with item allocator
-//    list_type testobj(item_alloc); //stack variable
-//    list_type* ptr = list_alloc.allocate(1);
-    list_type& testlist = *new (list_alloc.allocate(1)) list_type; //(item_alloc); //custom heap variable
-#endif
-    ATOMIC(std::cout << BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR << std::flush);
-
-    testlist.emplace_back("list1");
-    testlist.emplace_back("list2");
-    testlist[0].inc();
-    testlist[0].inc();
-    testlist[1].inc();
-    testlist[0].print();
-    testlist[1].print();
-
-    std::cout
-        << "sizeof(berry) = " << sizeof(bare)
-        << ", sizeof(prot) = " << sizeof(prot)
-        << ", sizeof(test obj) = " << sizeof(testobj)
-        << ", sizeof(test list) = " << sizeof(testlist)
-//        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
-        << "\n" << std::flush;
-
-    ATOMIC(std::cout << PINK_MSG << (owner? "parent (waiting to)": "child") << " exit" << ENDCOLOR << std::flush);
-    if (owner) waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
-    return 0;
-}
 #endif
 
 

@@ -39,6 +39,11 @@
         "tuple": "cpp",
         "type_traits": "cpp",
         "typeinfo": "cpp",
-        "cstddef": "cpp"
+        "cstddef": "cpp",
+        "csignal": "cpp",
+        "cstdarg": "cpp",
+        "codecvt": "cpp",
+        "optional": "cpp",
+        "future": "cpp"
     }
 }
