@@ -172,6 +172,33 @@ private: //helpers
 };
 
 
+class ShmHeap: public ShmSeg
+{
+public:
+    PERFECT_FWD2BASE_CTOR(ShmHeap, ShmSeg): m_used(sizeof(m_used)) {}
+public:
+    inline size_t used() { return m_used; }
+    inline size_t avail() { return shmsize() - m_used; }
+    void* alloc(size_t count)
+    {
+//        if (count > max_size()) { throw std::bad_alloc(); }
+//        pointer ptr = static_cast<pointer>(::operator new(count * sizeof(type), ::std::nothrow));
+        if (m_used + count > shmsize()) throw std::bad_alloc();
+        void* ptr = shmptr() + m_used;
+        m_used += count;
+        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: allocated " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR << std::flush);
+        return ptr;
+    }
+    void dealloc(void* ptr)
+    {
+        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: deallocate " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR << std::flush);
+//        ::operator delete(ptr);
+    }
+private:
+    size_t& m_used;
+};
+
+
 //mutex mixin class:
 //used to attach mutex directly to another object type (same memory space)
 //optional auto lock/unlock around access to methods
@@ -222,6 +249,39 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 };
 
 
+#if 1 //C++11 minimal allocator
+//based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
+template <class TYPE>
+struct ShmAllocator  
+{  
+    typedef TYPE value_type;
+    ShmAllocator() noexcept {} //default ctor; not required by STL
+    template<class OTHER>
+    ShmAllocator(const ShmAllocator<OTHER>& other) noexcept: m_heap(other.m_heap) {} //converting copy ctor (more efficient than C++03)
+    template<class OTHER>
+    bool operator==(const ShmAllocator<OTHER>& other) const noexcept { return m_heap.get() == other.m_heap.get(); } //true; }
+    template<class OTHER>
+    bool operator!=(const ShmAllocator<OTHER>& other) const noexcept { return m_heap.get() != other.m_heap.get(); } //false; }
+    TYPE* allocate(const size_t count = 1) const
+    {
+        if (!count) return nullptr;
+        if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
+        void* const ptr = malloc(count * sizeof(TYPE));
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME << "(s) * size " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+        if (!ptr) throw std::bad_alloc();
+        return static_cast<TYPE*>(ptr);
+    }  
+    void deallocate(TYPE* const ptr, size_t count = 1) const noexcept
+    {
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME << "(s) * size " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
+        free(ptr);
+    }
+    std::shared_ptr<ShmSeg> m_heap;
+    static const char* TYPENAME;
+};
+#endif
+
+#if 0 //C++03 allocator
 #if 1 //stl-compatible allocator
 //shm traits:
 //responsible for creating and destroying shm objects (no memory allocate/dealloc)
@@ -385,6 +445,7 @@ bool operator!=(ShmAllocator<TYPE, ShmHeap<TYPE>, TraitsTYPE> const& lhs, ShmAll
     return false;
 }
 #endif
+#endif
 
 
 #if 0 //example usage
@@ -535,23 +596,55 @@ public:
     void print() { ATOMIC(std::cout << BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name.c_str() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR << std::flush); }
     int& inc() { return ++m_count; }
 };
-template <> const char* ShmHeap<TestObj>::TYPENAME = "TestObj";
-template <> const char* ShmHeap<std::vector<TestObj, ShmAllocator<TestObj, ShmHeap<TestObj>, ShmobjTraits<TestObj>>>>::TYPENAME = "std::vector<TestObj>";
+template <> const char* ShmAllocator<TestObj>::TYPENAME = "TestObj";
+template <> const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME = "std::vector<TestObj>";
 
+
+void send(int fd[2], int value)
+{
+    close(fd[0]);
+    write(fd[1], &value, sizeof(value));
+    ATOMIC(std::cout << BLUE_MSG << "parent '" << getpid() << "' send " << value << " to child" << ENDCOLOR << std::flush);
+    close(fd[1]);
+}
+int rcv(int fd[2])
+{
+    int retval;
+    close(fd[1]); //close write side of pipe; child is read-only
+    read(fd[0], &retval, sizeof(retval)); //NOTE: blocks until data received
+    ATOMIC(std::cout << BLUE_MSG << "child '" << getpid() << "' rcv " << retval << " from parent" << ENDCOLOR << std::flush);
+    close(fd[0]);
+    return retval;
+}
 
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h> //fork(), getpid()
+//#include <memory> //unique_ptr<>
 int main(int argc, const char* argv[])
 {
-//#if 0
-//    ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
+#if 0 //best way, but doesn't fit with Node.js fork()
+    ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
+#else //use pipes to simulate Node.js pass env to child; based on C++ example at: https://bytefreaks.net/programming-2/c-programming-2/cc-pass-value-from-parent-to-child-after-fork-via-a-pipe
+    int fd[2];
+	pipe(fd); //create pipe descriptors < fork()
+#endif
     bool owner = fork();
     if (!owner) sleep(1); //give parent head start
     ATOMIC(std::cout << PINK_MSG << (owner? "parent": "child") << " start" << ENDCOLOR << std::flush);
+#if 1 //simulate Node.js fork()
+//    ShmSeg& shm = *std::allocator<ShmSeg>(1); //alloc space but don't init
+//    ShmAllocator<ShmSeg> heap_alloc;
+    std::shared_ptr<ShmSeg> shmptr; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
+//    ShmSeg* shmptr = heap_alloc.allocate(1); //alloc space but don't init yet
+//    std::unique_ptr<ShmSeg> shm = shmptr;
+    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmSeg(0, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
+    if (owner) send(fd, shmptr->shmkey());
+    else shmptr.reset(new /*(shmptr.get())*/ ShmSeg(rcv(fd), ShmSeg::persist::Reuse, 1));
 //    std::vector<std::string> args;
 //    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
-//#endif
+//    if (!owner) new (&shm) ShmSeg(shm.shmkey(), ShmSeg::persist::Reuse, 1); //attach to same shmem seg (child only)
+#endif
 
     TestObj bare("berry");
     bare.inc();
@@ -564,12 +657,15 @@ int main(int argc, const char* argv[])
     prot->print();
     
 //    ProxyWrapper<Person> person(new Person("testy"));
-    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
+//can't set ref to rvalue :(    ShmSeg& shm = owner? ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300): ShmSeg(0x1234beef, ShmSeg::persist::Reuse, 300); //key, persistence, size
+//    if (owner) new (&shm) ShmSeg(0x1234beef, ShmSeg::persist::NewTemp, 300);
+//    else new (&shm) ShmSeg(0x1234beef, ShmSeg::persist::Reuse); //key, persistence, size
+
 //    ShmHeap<TestObj> shm_heap(shm_seg);
 //    ATOMIC("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n" << std::flush);
 //    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
-    typedef ShmAllocator<TestObj, ShmHeap<TestObj>> item_allocator_type;
-    item_allocator_type item_alloc(shm); //explicitly create so it can be reused in other places (shares state with other allocators)
+    typedef ShmAllocator<TestObj> item_allocator_type;
+    item_allocator_type item_alloc; item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
     TestObj& testobj = *new (item_alloc.allocate(1)) TestObj("testy"); //NOTE: ref avoids copy ctor
 //    shm_ptr<TestObj> testobj("testy", shm_alloc);
     testobj.inc();
@@ -578,6 +674,9 @@ int main(int argc, const char* argv[])
     ATOMIC(std::cout << BLUE_MSG << FMT("&testobj %p") << &testobj << ENDCOLOR << std::flush);
 
     typedef std::vector<TestObj, item_allocator_type> list_type;
+#if 1
+    list_type testlist;
+#else //TODO
 //    ShmAllocator<list_type, ShmHeap<list_type>>& list_alloc = item_alloc.rebind<list_type>.other;
 //    item_allocator_type::rebind<list_type> list_alloc;
     typedef typename item_allocator_type::template rebind<list_type>::other list_allocator_type; //http://www.cplusplus.com/forum/general/161946/
@@ -585,7 +684,8 @@ int main(int argc, const char* argv[])
     list_allocator_type list_alloc(item_alloc); //share state with item allocator
 //    list_type testobj(item_alloc); //stack variable
 //    list_type* ptr = list_alloc.allocate(1);
-    list_type& testlist = *new (list_alloc.allocate(1)) list_type(item_alloc); //custom heap variable
+    list_type& testlist = *new (list_alloc.allocate(1)) list_type; //(item_alloc); //custom heap variable
+#endif
     ATOMIC(std::cout << BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR << std::flush);
 
     testlist.emplace_back("list1");
