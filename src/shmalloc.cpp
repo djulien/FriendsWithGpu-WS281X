@@ -12,7 +12,7 @@ g++ -D__FILENAME__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-un
 // x/80xw 0x7ffff7ff7000
 
 
-#include "shmalloc.h"
+#include "shmallocator.h"
 
 #ifdef JUNK
 //#define ShmHeap  ShmHeapAlloc::ShmHeap
