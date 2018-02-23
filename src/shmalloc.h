@@ -36,7 +36,9 @@
 #include "elapsed.h"
 #include "atomic.h"
 
-#define rdup(num, den)  (((num) + (den) - 1) / (den) * (den))
+#define SIZEOF(thing)  (sizeof(thing) / sizeof(thing[0]))
+#define divup(num, den)  (((num) + (den) - 1) / (den))
+#define rdup(num, den)  (divup(num, den) * (den))
 //#define size32_t  uint32_t //don't need huge sizes in shared memory; cut down on wasted bytes
 
 //"perfect forwarding" (typesafe args) to ctor:
@@ -179,10 +181,58 @@ public: //custom helpers
 };
 
 
-class ShmHeap: public ShmSeg
+template <int SIZE, int PAGESIZE = 0x1000>
+class MemPool
 {
 public:
-    PERFECT_FWD2BASE_CTOR(ShmHeap, ShmSeg), m_used(sizeof(m_used)) {}
+    MemPool(): m_storage{1} { debug(); } // { m_storage[0] = 1; } //: m_used(m_storage[0]) { m_used = 0; }
+public:
+    inline size_t used(size_t req = 0) { return (m_storage[0] + req) * sizeof(m_storage[0]); }
+    inline size_t avail() { return (SIZEOF(m_storage) - m_storage[0]) * sizeof(m_storage[0]); }
+    /*virtual*/ void* alloc(size_t count)
+    {
+        if (count < 1) return nullptr;
+        count = divup(count, sizeof(m_storage[0])); //for alignment
+        ATOMIC(std::cout << BLUE_MSG << "MemPool: count " << count << ", used(req) " << used(count + 1) << " vs size " << sizeof(m_storage) << ENDCOLOR << std::flush);
+        if (used(count + 1) > sizeof(m_storage)) enlarge(used(count + 1));
+        m_storage[m_storage[0]++] = count;
+        void* ptr = &m_storage[m_storage[0]];
+        m_storage[0] += count;
+        ATOMIC(std::cout << YELLOW_MSG << "MemPool: allocated " << count << " octobytes at " << FMT("%p") << ptr << ", used " << used() << ", avail " << avail() << ENDCOLOR << std::flush);
+        return ptr; //malloc(count);
+    }
+    /*virtual*/ void free(void* addr)
+    {
+//        free(ptr);
+        size_t inx = ((intptr_t)addr - (intptr_t)m_storage) / sizeof(m_storage[0]);
+        if ((inx < 1) || (inx >= SIZE)) throw std::bad_alloc();
+        size_t count = m_storage[--inx] + 1;
+        ATOMIC(std::cout << BLUE_MSG << "MemPool: deallocate " << count << " octobytes at " << FMT("%p") << addr << ", reclaim " << m_storage[0] << " == " << inx << " + " << count << "? " << (m_storage[0] == inx + count) << ENDCOLOR << std::flush);
+        if (m_storage[0] == inx + count) m_storage[0] -= count; //only reclaim at end of pool (no other addresses will change)
+        ATOMIC(std::cout << YELLOW_MSG << "MemPool: deallocated " << count << " octobytes at " << FMT("%p") << addr << ", used " << used() << ", avail " << avail() << ENDCOLOR << std::flush);
+    }
+    /*virtual*/ void enlarge(size_t count)
+    {
+        count = rdup(count, PAGESIZE / sizeof(m_storage[0]));
+        ATOMIC(std::cout << RED_MSG << "MemPool: want to enlarge " << count << " octobytes" << ENDCOLOR << std::flush);
+        throw std::bad_alloc();
+    }
+private:
+    void debug()
+    {
+        ATOMIC(std::cout << BLUE_MSG << "MemPool: size " << SIZE << " = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(storage elements) " << sizeof(m_storage[0]) << ENDCOLOR << std::flush);
+    }
+//    typedef struct { size_t count[1]; uint32_t data[0]; } entry;
+    size_t m_storage[1 + divup(SIZE, sizeof(size_t))]; //first element = used count
+//    size_t& m_used;
+};
+
+
+#if 0
+class ShmHeap //: public ShmSeg
+{
+public:
+//    PERFECT_FWD2BASE_CTOR(ShmHeap, ShmSeg), m_used(sizeof(m_used)) {}
 public:
     inline size_t used() { return m_used; }
     inline size_t avail() { return shmsize() - m_used; }
@@ -203,8 +253,9 @@ public:
 //        ::operator delete(ptr);
     }
 private:
-    size_t& m_used;
+    size_t m_used;
 };
+#endif
 
 
 //mutex mixin class:
@@ -257,6 +308,25 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 };
 
 
+#if 1
+WithMutex<MemPool<rdup(10, 8)+8 + rdup(4, 8)+8>> pool20;
+int main(int argc, const char* argv[])
+{
+    void* ptr1 = pool20->alloc(10);
+    void* ptr2 = pool20->alloc(4);
+    pool20->free(ptr2);
+    void* ptr3 = pool20->alloc(1);
+
+    WithMutex<MemPool<rdup(1, 8)+8 + rdup(1, 8)+8>> pool10;
+    void* ptr4 = pool10->alloc(1);
+    void* ptr5 = pool10->alloc(1);
+    void* ptr6 = pool10->alloc(0);
+    return 0;
+}
+#endif
+
+
+#define ShmHeap  int
 #if 1 //minimal stl allocator (C++11)
 //based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
 template <class TYPE>
@@ -285,7 +355,7 @@ struct ShmAllocator
         ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR << std::flush);
         free(ptr);
     }
-    std::shared_ptr<ShmSeg> m_heap; //allow heap to be shared between allocators
+    std::shared_ptr<ShmHeap> m_heap; //allow heap to be shared between allocators
     static const char* TYPENAME;
 };
 #endif
@@ -327,6 +397,7 @@ int rcv(int fd[2])
     return retval;
 }
 
+#if 0
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h> //fork(), getpid()
@@ -427,6 +498,7 @@ int main(int argc, const char* argv[])
     if (owner) waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
     return 0;
 }
+#endif
 #endif
 
 
