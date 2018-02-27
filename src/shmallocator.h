@@ -71,6 +71,7 @@
 
 //minimal memory pool:
 //NOTE: will only reclaim dealloc space at highest used address
+//NOTE: do not store pointers; addresses can vary between processes
 //use shmalloc + placement new to put this in shared memory
 template <int SIZE, int PAGESIZE = 0x1000>
 class MemPool
@@ -96,6 +97,7 @@ public:
     {
 //        free(ptr);
         size_t inx = ((intptr_t)addr - (intptr_t)m_storage) / sizeof(m_storage[0]);
+        if ((inx < 1) || (inx >= SIZE)) ATOMIC(std::cout << RED_MSG << "inx " << inx <<ENDCOLOR << std::flush);
         if ((inx < 1) || (inx >= SIZE)) throw std::bad_alloc();
         size_t count = m_storage[--inx] + 1;
         ATOMIC(std::cout << BLUE_MSG << "MemPool: deallocate " << count << " octobytes at " << FMT("%p") << addr << ", reclaim " << m_storage[0] << " == " << inx << " + " << count << "? " << (m_storage[0] == inx + count) << ENDCOLOR);
@@ -106,15 +108,17 @@ public:
     {
         count = rdup(count, PAGESIZE / sizeof(m_storage[0]));
         ATOMIC(std::cout << RED_MSG << "MemPool: want to enlarge " << count << " octobytes" << ENDCOLOR);
-        throw std::bad_alloc();
+        throw std::bad_alloc(); //TODO
     }
-    /*static*/ const char* TYPENAME();
+    static const char* TYPENAME();
 //private:
     void debug() { ATOMIC(std::cout << BLUE_MSG << "MemPool: size " << SIZE << " (" << sizeof(*this) << ") = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(storage elements) " << sizeof(m_storage[0]) << ENDCOLOR); }
 //    typedef struct { size_t count[1]; uint32_t data[0]; } entry;
     size_t m_storage[1 + divup(SIZE, sizeof(size_t))]; //first element = used count
 //    size_t& m_used;
 };
+template<>
+const char* MemPool<40, 4096>::TYPENAME() { return "MemPool<40, 4K>"; }
 
 
 #include <mutex>
@@ -123,19 +127,19 @@ public:
 
 //mutex with lock indicator:
 //lock flag is atomic to avoid extra locks
-class FlaggedMutex: public std::mutex
+class MutexWithFlag: public std::mutex
 {
 public:
 //use atomic data member rather than a getter so caller doesn't need to lock/unlock each time just to check locked flag
     std::atomic<bool> islocked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
 public: //ctor/dtor
-    FlaggedMutex(): islocked(false) {}
-    ~FlaggedMutex() { if (islocked) unlock(); }
+    MutexWithFlag(): islocked(false) {}
+    ~MutexWithFlag() { if (islocked) unlock(); }
 public: //member functions
     void lock() { debug("lock"); std::mutex::lock(); islocked = true; }
     void unlock() { debug("unlock"); islocked = false; std::mutex::unlock(); }
-//    static void unlock(FlaggedMutex* ptr) { ptr->unlock(); } //custom deleter for use with std::unique_ptr
-    /*static*/ const char* TYPENAME();
+//    static void unlock(MutexWithFlag* ptr) { ptr->unlock(); } //custom deleter for use with std::unique_ptr
+    static const char* TYPENAME();
 private:
     void debug(const char* func) { ATOMIC(std::cout << YELLOW_MSG << func << ENDCOLOR); }
 };
@@ -172,7 +176,7 @@ private:
 //protected:
 //    TYPE m_wrapped;
 public:
-    FlaggedMutex /*std::mutex*/ m_mutex;
+    MutexWithFlag /*std::mutex*/ m_mutex;
 //    std::atomic<bool> m_locked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
 public:
 //    bool islocked() { return m_locked; } //if (m_mutex.try_lock()) { m_mutex.unlock(); return false; }
@@ -208,8 +212,8 @@ private:
 #endif
 public: //pointer operator; allows safe multi-process access to shared object's member functions
 //nope    TYPE* /*ProxyCaller*/ operator->() { typename WithMutex<TYPE>::scoped_lock lock(m_inner.ptr); return m_inner.ptr; } //ProxyCaller(m_ps.ptr); } //https://stackoverflow.com/questions/22874535/dependent-scope-need-typename-in-front
-//    typedef std::unique_ptr<this_type, void(*)(this_type*)> unlock_later; //decltype(&FlaggedMutex::unlock)> unlock_later;
-//    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> unlock_later; //decltype(&FlaggedMutex::unlock)> unlock_later;
+//    typedef std::unique_ptr<this_type, void(*)(this_type*)> unlock_later; //decltype(&MutexWithFlag::unlock)> unlock_later;
+//    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> unlock_later; //decltype(&MutexWithFlag::unlock)> unlock_later;
 #if 0
     template<bool NEED_LOCK = AUTO_LOCK>
     inline typename std::enable_if<!NEED_LOCK, TYPE*>::type operator->() { return this; }
@@ -219,7 +223,7 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 #endif
     inline unlock_later operator->() { return unlock_later(this); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 //    inline unlock_later/*&&*/ operator->() { m_mutex.lock(); return unlock_later(this, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-    /*static*/ const char* TYPENAME();
+    static const char* TYPENAME();
 #if 0
     inline unlock_later/*&&*/ operator->() { return unlock_later(this); }
 //    inline operator TYPE() { return unlock_later(this); }
@@ -232,6 +236,8 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 //    static void lock() { std::cout << "lock\n" << std::flush; }
 //    static void unlock() { std::cout << "unlock\n" << std::flush; }
 };
+template<>
+const char* WithMutex<MemPool<40, 4096>, true>::TYPENAME() { return "WithMutex<MemPool<40, 4K>, true>"; }
 
 
 #if 1
@@ -255,21 +261,29 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 //#define shm_ptr(type)  std::unique_ptr<type> (new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 #if 1 //operator->() broken
 template <typename TYPE> //, typename BASE_TYPE = std::unique_ptr<TYPE, void(*)(TYPE*)>>
-class shm_ptr: public std::unique_ptr<TYPE, void(*)(TYPE*)> //use smart ptr to clean up afterward
+class shm_obj//: public TYPE& //: public std::unique_ptr<TYPE, void(*)(TYPE*)> //use smart ptr to clean up afterward
 {
-    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> base_type;
-//    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> base_type; //decltype(&FlaggedMutex::unlock)> unlock_later;
+//    typedef std::shared_ptr<TYPE /*, shmdeleter<TYPE>*/> base_type; //clup(&this, shmdeleter<TYPE());
+//    typedef std::unique_ptr<TYPE, shmdeleter<TYPE>> base_type; //clup(&thisl, shmdeleter<TYPE>());
+//    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> base_type;
+//    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> base_type; //decltype(&MutexWithFlag::unlock)> unlock_later;
+//    base_type m_ptr; //clean up shmem automatically
+    std::shared_ptr<TYPE /*, shmdeleter<TYPE>*/> m_ptr; //clean up shmem automtically
 public: //ctor/dtor
-#define INNER_CREATE(args)  base_type(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-    PERFECT_FWD2BASE_CTOR(shm_ptr, INNER_CREATE) {} //debug(); }
+//equiv to:    pool_type& shmpool = *new (shmalloc(sizeof(pool_type))) pool_type();
+#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+    PERFECT_FWD2BASE_CTOR(shm_obj, INNER_CREATE) {} //, m_clup(this, TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) {} //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 #undef INNER_CREATE
-//public: //operators
-
+public: //operators
 //    inline TYPE* operator->() { return base_type::get(); } //allow access to wrapped members; based on http://www.stroustrup.com/wrapper.pdf
+//    inline operator TYPE&() { return *m_ptr.get(); }
+    inline TYPE& operator->() { return *m_ptr.get(); }
     /*static*/ const char* TYPENAME();
 //private:
 //    void debug() { ATOMIC(std::cout << (*this)->TYPENAME << ENDCOLOR); }
 };
+template<>
+const char* shm_obj<WithMutex<MemPool<40, 4096>, true>>::TYPENAME() { return "shm_obj<WithMutex<MemPool<40, 4K>, true>>"; }
 #endif
 #if 0
 template <typename TYPE>
@@ -298,10 +312,7 @@ private:
 //    std::shared_ptr<TYPE> m_clup; //(&var, shmdeleter<TYPE>())
 //};
 
-template<>
-const char* WithMutex<MemPool<40, 4096>, true>::TYPENAME() { return "WithMutex<MemPool<40, 4K>, true>"; }
-template<>
-const char* MemPool<40, 4096>::TYPENAME() { return "MemPool<40, 4K>"; }
+#if 0
 //#define MEMSIZE  rdup(10, 8)+8 + rdup(4, 8)+8
 //WithMutex<MemPool<MEMSIZE>> pool20;
 WithMutex<MemPool<rdup(10, 8)+8 + rdup(4, 8)+8>> pool20;
@@ -313,7 +324,7 @@ int main(int argc, const char* argv[])
     void* ptr1 = pool20->alloc(10);
 //    void* ptr1 = pool20()()->alloc(10);
 //    void* ptr1 = pool20.base().base().alloc(10);
-    void* ptr2 = pool20->alloc(4);
+    void* ptr2 = pool20.alloc(4);
     pool20->free(ptr2);
     void* ptr3 = pool20->alloc(1);
 
@@ -330,17 +341,20 @@ int main(int argc, const char* argv[])
 //    pool_type& shmpool = *new (shmalloc(sizeof(pool_type))) pool_type();
 //    pool_type shmpool = *shmpool_ptr; //.get();
 //#define SHM_DECL(type, var)  type& var = *new (shmalloc(sizeof(type))) type(); std::shared_ptr<type> var##_clup(&var, shmdeleter<type>())
+#if 0
     pool_type& shmpool = *new (shmalloc(sizeof(pool_type))) pool_type();
     std::shared_ptr<pool_type /*, shmdeleter<pool_type>*/> clup(&shmpool, shmdeleter<pool_type>());
+//OR
+    std::unique_ptr<pool_type, shmdeleter<pool_type>> clup(&shmpool, shmdeleter<pool_type>());
+#endif
 //    SHM_DECL(pool_type, shmpool); //equiv to "pool_type shmpool", but allocates in shmem
-//    shm_ptr<pool_type> shmpool; //put it in shared memory instead of stack
-//    shm_ptr(pool_type) shmpool;
-    ATOMIC(std::cout << BLUE_MSG << shmpool->TYPENAME() << ENDCOLOR);
+    shm_obj<pool_type> shmpool; //put it in shared memory instead of stack
+//    ATOMIC(std::cout << BLUE_MSG << shmpool.TYPENAME() << ENDCOLOR); //NOTE: don't use -> here (causes recursive lock)
 //    shmpool->m_mutex.lock();
 //    shmpool->debug();
 //    shmpool->m_mutex.unlock();
     void* ptr7 = shmpool->alloc(10);
-    void* ptr8 = shmpool->alloc(4);
+    void* ptr8 = shmpool->alloc(4); //.alloc(4);
     shmpool->free(ptr8);
     void* ptr9 = shmpool->alloc(1);
 //    shmfree(&shmpool);
@@ -348,10 +362,10 @@ int main(int argc, const char* argv[])
     return 0;
 }
 #endif
+#endif
 
 
-#define ShmHeap  int
-#if 1 //minimal stl allocator (C++11)
+//minimal stl allocator (C++11)
 //based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
 template <class TYPE>
 struct ShmAllocator  
@@ -382,7 +396,6 @@ struct ShmAllocator
     std::shared_ptr<ShmHeap> m_heap; //allow heap to be shared between allocators
     static const char* TYPENAME;
 };
-#endif
 
 
 #ifdef WANT_TEST //1 //proxy example
