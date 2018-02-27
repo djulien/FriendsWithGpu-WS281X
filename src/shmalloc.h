@@ -78,6 +78,7 @@ void shmfree(void* addr)
 
 
 //std::Deleter wrapper for shmfree:
+//based on example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 template <typename TYPE>
 struct shmdeleter
 { 
