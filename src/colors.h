@@ -24,4 +24,24 @@
 #define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%d) //NOTE: requires extra param
 #define ENDCOLOR  ENDCOLOR_ATLINE(__LINE__)
 
+//typedef struct { int line; } SRCLINE; //allow compiler to distinguish param types, prevent implicit conversion
+//typedef int SRCLINE;
+#if 1
+class SRCLINE
+{
+    int m_line;
+public: //ctor/dtor
+    explicit SRCLINE(int line): m_line(line) {}
+//public:
+//    static SRCLINE FromInt(int line)
+//    {
+//        SRCLINE retval;
+//        retval.m_line = line;
+//        return retval;
+//    }
+};
+#endif
+#define ENDCOLOR_LINE(line)  FMT(ENDCOLOR_MYLINE) << (line? line: __LINE__) //show caller line# if available
+
+
 #endif //ndef _COLORS_H

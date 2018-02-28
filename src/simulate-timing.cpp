@@ -1,6 +1,6 @@
 #!/bin/bash -x
-cat <</EOF | g++ -D__FILENAME__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o shmalloc -x c++ -
-#line 4 __FILENAME__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
+echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "\"${BASH_SOURCE%.*}\"" -x c++ - <<//EOF; echo -e '\e[0m'
+#line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 
 //simulate multi-threaded (multi-process) timing
 //self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
