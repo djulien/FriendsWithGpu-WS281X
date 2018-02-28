@@ -48,10 +48,24 @@
     template<typename ... ARGS> \
     type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
 
-
 //make a unique key based on source code location:
 //std::string srckey;
 #define SRCKEY  ShmHeap::crekey(__FILE__, __LINE__)
+
+#include <unistd.h> //sysconf()
+#define PAGE_SIZE  4096 //NOTE: no Userland #define for this, so set it here and then check it at run time; https://stackoverflow.com/questions/37897645/page-size-undeclared-c
+//void check_page_size()
+int main_other(int argc, const char* argv[]);
+//template <typename... ARGS >
+//int main_other(ARGS&&... args)
+//{ if( a<b ) std::bind( std::forward<FN>(fn), std::forward<ARGS>(args)... )() ; }
+int main(int argc, const char* argv[])
+#define main  main_other
+{
+    int pagesize = sysconf(_SC_PAGESIZE);
+    if (pagesize != PAGE_SIZE) ATOMIC(std::cout << RED_MSG << "PAGE_SIZE incorrect: is " << pagesize << ", expected " << PAGE_SIZE << ENDCOLOR);
+    return main(argc, argv);
+}
 
 //shared memory lookup + alloc
 //template<type TYPE>
@@ -73,7 +87,7 @@
 //NOTE: will only reclaim dealloc space at highest used address
 //NOTE: do not store pointers; addresses can vary between processes
 //use shmalloc + placement new to put this in shared memory
-template <int SIZE, int PAGESIZE = 0x1000>
+template <int SIZE> //, int PAGESIZE = 0x1000>
 class MemPool
 {
 public:
@@ -106,7 +120,7 @@ public:
     }
     /*virtual*/ void enlarge(size_t count)
     {
-        count = rdup(count, PAGESIZE / sizeof(m_storage[0]));
+        count = rdup(count, PAGE_SIZE / sizeof(m_storage[0]));
         ATOMIC(std::cout << RED_MSG << "MemPool: want to enlarge " << count << " octobytes" << ENDCOLOR);
         throw std::bad_alloc(); //TODO
     }
@@ -118,7 +132,7 @@ public:
 //    size_t& m_used;
 };
 template<>
-const char* MemPool<40, 4096>::TYPENAME() { return "MemPool<40, 4K>"; }
+const char* MemPool<40>::TYPENAME() { return "MemPool<40>"; }
 
 
 #include <mutex>
@@ -237,7 +251,7 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 //    static void unlock() { std::cout << "unlock\n" << std::flush; }
 };
 template<>
-const char* WithMutex<MemPool<40, 4096>, true>::TYPENAME() { return "WithMutex<MemPool<40, 4K>, true>"; }
+const char* WithMutex<MemPool<40>, true>::TYPENAME() { return "WithMutex<MemPool<40>, true>"; }
 
 
 #if 1
@@ -283,7 +297,7 @@ public: //operators
 //    void debug() { ATOMIC(std::cout << (*this)->TYPENAME << ENDCOLOR); }
 };
 template<>
-const char* shm_obj<WithMutex<MemPool<40, 4096>, true>>::TYPENAME() { return "shm_obj<WithMutex<MemPool<40, 4K>, true>>"; }
+const char* shm_obj<WithMutex<MemPool<40>, true>>::TYPENAME() { return "shm_obj<WithMutex<MemPool<40>, true>>"; }
 #endif
 #if 0
 template <typename TYPE>
@@ -312,7 +326,7 @@ private:
 //    std::shared_ptr<TYPE> m_clup; //(&var, shmdeleter<TYPE>())
 //};
 
-#if 0
+#ifdef TEST1_GOOD //shm_obj test
 //#define MEMSIZE  rdup(10, 8)+8 + rdup(4, 8)+8
 //WithMutex<MemPool<MEMSIZE>> pool20;
 WithMutex<MemPool<rdup(10, 8)+8 + rdup(4, 8)+8>> pool20;
@@ -365,6 +379,9 @@ int main(int argc, const char* argv[])
 #endif
 
 
+//typedef shm_obj<WithMutex<MemPool<PAGE_SIZE>>> ShmHeap;
+class ShmHeap;
+
 //minimal stl allocator (C++11)
 //based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
 template <class TYPE>
@@ -383,7 +400,7 @@ struct ShmAllocator
     {
         if (!count) return nullptr;
         if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
-        void* const ptr = malloc(count * sizeof(TYPE));
+        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE)): alloc(count * sizeof(TYPE));
         ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
         if (!ptr) throw std::bad_alloc();
         return static_cast<TYPE*>(ptr);
@@ -391,14 +408,15 @@ struct ShmAllocator
     void deallocate(TYPE* const ptr, size_t count = 1) const noexcept
     {
         ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
-        free(ptr);
+        if (m_heap) m_heap->free(ptr);
+        else free(ptr);
     }
     std::shared_ptr<ShmHeap> m_heap; //allow heap to be shared between allocators
     static const char* TYPENAME;
 };
 
 
-#ifdef WANT_TEST //1 //proxy example
+#if 1//def WANT_TEST //1 //proxy example
 #include "vectorex.h"
 #include <unistd.h> //fork()
 class TestObj
@@ -413,8 +431,8 @@ public:
     void print() { ATOMIC(std::cout << BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name.c_str() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
     int& inc() { return ++m_count; }
 };
-template <> const char* ShmAllocator<TestObj>::TYPENAME = "TestObj";
-template <> const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME = "std::vector<TestObj>";
+//template <> const char* ShmAllocator<TestObj>::TYPENAME = "TestObj";
+//template <> const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME = "std::vector<TestObj>";
 
 
 void send(int fd[2], int value)
@@ -445,6 +463,7 @@ int main(int argc, const char* argv[])
 //    std::cout << FMT("0x%lx\n") << key.m_key;
 //    key = 0x123;
 //    std::cout << FMT("0x%lx\n") << key.m_key;
+    typedef WithMutex<MemPool<200>> ShmHeap; //bare sttr here, not smart_ptr
 
 #if 0 //best way, but doesn't match Node.js fork()
     ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
@@ -458,12 +477,16 @@ int main(int argc, const char* argv[])
 #if 1 //simulate Node.js fork()
 //    ShmSeg& shm = *std::allocator<ShmSeg>(1); //alloc space but don't init
 //    ShmAllocator<ShmSeg> heap_alloc;
-    std::shared_ptr<ShmSeg> shmptr; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
+    std::shared_ptr<ShmHeap> shmheaptr; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
+//    ShmHeap shmheap; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
 //    ShmSeg* shmptr = heap_alloc.allocate(1); //alloc space but don't init yet
 //    std::unique_ptr<ShmSeg> shm = shmptr;
-    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmSeg(0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
-    if (owner) send(fd, shmptr->shmkey());
-    else shmptr.reset(new /*(shmptr.get())*/ ShmSeg(rcv(fd), ShmSeg::persist::Reuse, 1));
+//    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmHeap(0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
+    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap))) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
+//#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+    if (owner) send(fd, shmheaptr->shmkey());
+//    else shmptr.reset(new /*(shmptr.get())*/ ShmHeap(rcv(fd), ShmSeg::persist::Reuse, 1));
+    else shmheaptr.reset(shmalloc(sizeof(ShmHeap), rcv(fd)), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
 //    std::vector<std::string> args;
 //    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
 //    if (!owner) new (&shm) ShmSeg(shm.shmkey(), ShmSeg::persist::Reuse, 1); //attach to same shmem seg (child only)
@@ -489,7 +512,7 @@ int main(int argc, const char* argv[])
 //    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
 //    typedef ShmAllocator<TestObj> item_allocator_type;
 //    item_allocator_type item_alloc; item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
-    ShmAllocator<TestObj> item_alloc(shmptr.get()); //item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
+    ShmAllocator<TestObj> item_alloc(shmheaptr.get()); //item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
     TestObj& testobj = *new (item_alloc.allocate(1)) TestObj("testy"); //NOTE: ref avoids copy ctor
 //    shm_ptr<TestObj> testobj("testy", shm_alloc);
     testobj.inc();
