@@ -1,3 +1,8 @@
+#!/bin/bash -x
+echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -DUNIT_TEST -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
+#line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
+
+
 //console colors
 
 #ifndef _COLORS_H
@@ -21,20 +26,33 @@
 //#define ENDCOLOR  ANSI_COLOR("0")
 //append the src line# to make debug easier:
 //#define ENDCOLOR_ATLINE(srcline)  " &" TOSTR(srcline) ANSI_COLOR("0") "\n"
-#define ENDCOLOR_ATLINE(srcline)  " &" << shortname(srcline? srcline: SRCLINE) << ANSI_COLOR("0") "\n"
+#define ENDCOLOR_ATLINE(srcline)  "  &" << shortsrc(srcline? srcline: SRCLINE) << ANSI_COLOR("0") "\n"
 //#define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%s) //%d) //NOTE: requires extra param
 #define ENDCOLOR  ENDCOLOR_ATLINE(SRCLINE) //__LINE__)
 
 //typedef struct { int line; } SRCLINE; //allow compiler to distinguish param types, prevent implicit conversion
 //typedef int SRCLINE;
 //#define _GNU_SOURCE //select GNU version of basename()
-//#include <string.h>
+#include <stdio.h> //snprintf()
+#include <stdlib.h> //atoi()
+#include <string.h>
 
 #define SRCLINE  __FILE__ ":" TOSTR(__LINE__)
-typedef const char* SrcLine;
-const char* shortname(const char* srcline)
+typedef const char* SrcLine; //allow compiler to distinguish param types, catch implicit conv
+SrcLine shortsrc(SrcLine srcline, int line = 0)
 {
-    strchr, strrchr, etc
+    static char buf[60]; //static to preserve after return to caller
+    const char* bp = strrchr(srcline, '/');
+    if (bp) srcline = bp + 1; //drop parent folder name
+    const char* endp = strrchr(srcline, '.'); //drop extension
+    if (!endp) endp = srcline + strlen(srcline);
+    if (!line)
+    {
+        bp = strrchr(endp, ':');
+        if (bp) line = atoi(bp+1);
+    }
+    snprintf(buf, sizeof(buf), "%.*s:%d", (int)(endp - srcline), srcline, line);
+    return buf;
 }
 #if 0
 class SRCLINE
@@ -54,5 +72,27 @@ public: //opeartors
 #endif
 //#define ENDCOLOR_LINE(line)  FMT(ENDCOLOR_MYLINE) << (line? line: __LINE__) //show caller line# if available
 
-
 #endif //ndef _COLORS_H
+
+
+#ifdef UNIT_TEST
+//echo -e '\e[1;36m'; g++ -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${1%.*}"; echo -e '\e[0m'
+
+#include <iostream>
+#include "colors.h"
+
+void func(int a, SrcLine srcline = 0)
+{
+    std::cout << BLUE_MSG << "hello " << a << " from" << ENDCOLOR;
+    std::cout << CYAN_MSG << "hello " << a << " from" << ENDCOLOR_ATLINE(srcline);
+}
+
+
+int main(int argc, const char* argv[])
+{
+    std::cout << BLUE_MSG << "start" << ENDCOLOR;
+    func(1);
+    func(2, SRCLINE);
+    return 0;
+}
+#endif //def UNIT_TEST
