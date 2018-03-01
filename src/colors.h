@@ -20,19 +20,30 @@
 #define GRAY_MSG  ANSI_COLOR("0;37")
 //#define ENDCOLOR  ANSI_COLOR("0")
 //append the src line# to make debug easier:
-#define ENDCOLOR_ATLINE(n)  " &" TOSTR(n) ANSI_COLOR("0") "\n"
-#define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%d) //NOTE: requires extra param
-#define ENDCOLOR  ENDCOLOR_ATLINE(__LINE__)
+//#define ENDCOLOR_ATLINE(srcline)  " &" TOSTR(srcline) ANSI_COLOR("0") "\n"
+#define ENDCOLOR_ATLINE(srcline)  " &" << shortname(srcline? srcline: SRCLINE) << ANSI_COLOR("0") "\n"
+//#define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%s) //%d) //NOTE: requires extra param
+#define ENDCOLOR  ENDCOLOR_ATLINE(SRCLINE) //__LINE__)
 
 //typedef struct { int line; } SRCLINE; //allow compiler to distinguish param types, prevent implicit conversion
 //typedef int SRCLINE;
-#if 1
+//#define _GNU_SOURCE //select GNU version of basename()
+//#include <string.h>
+
+#define SRCLINE  __FILE__ ":" TOSTR(__LINE__)
+typedef const char* SrcLine;
+const char* shortname(const char* srcline)
+{
+    strchr, strrchr, etc
+}
+#if 0
 class SRCLINE
 {
     int m_line;
 public: //ctor/dtor
     explicit SRCLINE(int line): m_line(line) {}
-//public:
+public: //opeartors
+    inline operator bool() { return m_line != 0; }
 //    static SRCLINE FromInt(int line)
 //    {
 //        SRCLINE retval;
@@ -41,7 +52,7 @@ public: //ctor/dtor
 //    }
 };
 #endif
-#define ENDCOLOR_LINE(line)  FMT(ENDCOLOR_MYLINE) << (line? line: __LINE__) //show caller line# if available
+//#define ENDCOLOR_LINE(line)  FMT(ENDCOLOR_MYLINE) << (line? line: __LINE__) //show caller line# if available
 
 
 #endif //ndef _COLORS_H
