@@ -78,16 +78,18 @@ int main(int argc, const char* argv[])
 template <int SIZE> //, int PAGESIZE = 0x1000>
 class MemPool
 {
+//    SrcLine m_srcline;
 public:
-    MemPool(): m_storage{1} { debug(); } // { m_storage[0] = 1; } //: m_used(m_storage[0]) { m_used = 0; }
+    MemPool(SrcLine srcline = 0): m_storage{1} { debug(srcline); } // { m_storage[0] = 1; } //: m_used(m_storage[0]) { m_used = 0; }
 public:
     inline size_t used(size_t req = 0) { return (m_storage[0] + req) * sizeof(m_storage[0]); }
     inline size_t avail() { return (SIZEOF(m_storage) - m_storage[0]) * sizeof(m_storage[0]); }
-    /*virtual*/ void* alloc(size_t count, SRCLINE srcline = 0)
+    /*virtual*/ void* alloc(size_t count, SrcLine srcline = 0)
     {
+TODO: key lkup using std::vector<key_t>
         if (count < 1) return nullptr;
         count = divup(count, sizeof(m_storage[0])); //for alignment
-        ATOMIC(std::cout << BLUE_MSG << "MemPool: count " << count << ", used(req) " << used(count + 1) << " vs size " << sizeof(m_storage) << ENDCOLOR_LINE(srcline));
+        ATOMIC(std::cout << BLUE_MSG << "MemPool: alloc count " << count << ", used(req) " << used(count + 1) << " vs size " << sizeof(m_storage) << ENDCOLOR_ATLINE(srcline));
         if (used(count + 1) > sizeof(m_storage)) enlarge(used(count + 1));
         m_storage[m_storage[0]++] = count;
         void* ptr = &m_storage[m_storage[0]];
@@ -95,26 +97,26 @@ public:
         ATOMIC(std::cout << YELLOW_MSG << "MemPool: allocated " << count << " octobytes at " << FMT("%p") << ptr << ", used " << used() << ", avail " << avail() << ENDCOLOR);
         return ptr; //malloc(count);
     }
-    /*virtual*/ void free(void* addr, SRCLINE srcline = 0)
+    /*virtual*/ void free(void* addr, SrcLine srcline = 0)
     {
 //        free(ptr);
         size_t inx = ((intptr_t)addr - (intptr_t)m_storage) / sizeof(m_storage[0]);
         if ((inx < 1) || (inx >= SIZE)) ATOMIC(std::cout << RED_MSG << "inx " << inx <<ENDCOLOR);
         if ((inx < 1) || (inx >= SIZE)) throw std::bad_alloc();
         size_t count = m_storage[--inx] + 1;
-        ATOMIC(std::cout << BLUE_MSG << "MemPool: deallocate " << count << " octobytes at " << FMT("%p") << addr << ", reclaim " << m_storage[0] << " == " << inx << " + " << count << "? " << (m_storage[0] == inx + count) << ENDCOLOR_LINE(srcline));
+        ATOMIC(std::cout << BLUE_MSG << "MemPool: deallocate count " << count << " at " << FMT("%p") << addr << ", reclaim " << m_storage[0] << " == " << inx << " + " << count << "? " << (m_storage[0] == inx + count) << ENDCOLOR_ATLINE(srcline));
         if (m_storage[0] == inx + count) m_storage[0] -= count; //only reclaim at end of pool (no other addresses will change)
         ATOMIC(std::cout << YELLOW_MSG << "MemPool: deallocated " << count << " octobytes at " << FMT("%p") << addr << ", used " << used() << ", avail " << avail() << ENDCOLOR);
     }
-    /*virtual*/ void enlarge(size_t count, SRCLINE srcline = 0)
+    /*virtual*/ void enlarge(size_t count, SrcLine srcline = 0)
     {
         count = rdup(count, PAGE_SIZE / sizeof(m_storage[0]));
-        ATOMIC(std::cout << RED_MSG << "MemPool: want to enlarge " << count << " octobytes" << ENDCOLOR_LINE(srcline));
+        ATOMIC(std::cout << RED_MSG << "MemPool: want to enlarge " << count << " octobytes" << ENDCOLOR_ATLINE(srcline));
         throw std::bad_alloc(); //TODO
     }
     static const char* TYPENAME();
 //private:
-    void debug() { ATOMIC(std::cout << BLUE_MSG << "MemPool: size " << SIZE << " (" << sizeof(*this) << ") = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(storage elements) " << sizeof(m_storage[0]) << ENDCOLOR); }
+    void debug(SrcLine srcline = 0) { ATOMIC(std::cout << BLUE_MSG << "MemPool: size " << SIZE << " (" << sizeof(*this) << ") = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(storage elements) " << sizeof(m_storage[0]) << ENDCOLOR_ATLINE(srcline)); }
 //    typedef struct { size_t count[1]; uint32_t data[0]; } entry;
     size_t m_storage[1 + divup(SIZE, sizeof(size_t))]; //first element = used count
 //    size_t& m_used;
@@ -273,7 +275,7 @@ class shm_obj//: public TYPE& //: public std::unique_ptr<TYPE, void(*)(TYPE*)> /
     std::shared_ptr<TYPE /*, shmdeleter<TYPE>*/> m_ptr; //clean up shmem automtically
 public: //ctor/dtor
 //equiv to:    pool_type& shmpool = *new (shmalloc(sizeof(pool_type))) pool_type();
-#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE)), 0, __LINE__) TYPE(args), [](TYPE* ptr) { shmfree(ptr, __LINE__); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE)), 0, SRCLINE) TYPE(args), [](TYPE* ptr) { shmfree(ptr, SRCLINE); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
     PERFECT_FWD2BASE_CTOR(shm_obj, INNER_CREATE) {} //, m_clup(this, TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) {} //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 #undef INNER_CREATE
 public: //operators
@@ -360,18 +362,18 @@ struct ShmAllocator
     bool operator==(const ShmAllocator<OTHER>& other) const noexcept { return m_heap.get() == other.m_heap.get(); } //true; }
     template<class OTHER>
     bool operator!=(const ShmAllocator<OTHER>& other) const noexcept { return m_heap.get() != other.m_heap.get(); } //false; }
-    TYPE* allocate(const size_t count = 1, SRCLINE srcline = 0) const
+    TYPE* allocate(const size_t count = 1, key_t key = 0, SrcLine srcline = 0) const
     {
         if (!count) return nullptr;
         if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
-        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE)): shmalloc(count * sizeof(TYPE), 0, srcline);
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR_LINE(srcline));
+        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes for key " << FMT("0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
         if (!ptr) throw std::bad_alloc();
         return static_cast<TYPE*>(ptr);
     }  
-    void deallocate(TYPE* const ptr, size_t count = 1, SRCLINE srcline = 0) const noexcept
+    void deallocate(TYPE* const ptr, size_t count = 1, SrcLine srcline = 0) const noexcept
     {
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR_LINE(srcline));
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
         if (m_heap) m_heap->free(ptr);
         else shmfree(ptr);
     }
@@ -386,9 +388,10 @@ struct ShmAllocator
 class TestObj
 {
     std::string m_name;
+//    SrcLine m_srcline;
     int m_count;
 public:
-    explicit TestObj(const char* name): m_name(name), m_count(0) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR); }
+    explicit TestObj(const char* name, SrcLine srcline = 0): m_name(name), m_count(0) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
     TestObj(const TestObj& that): m_name(that.m_name), m_count(that.m_count) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
     ~TestObj() { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR); } //only used for debug
 public:
@@ -401,19 +404,19 @@ template <>
 const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME() { return "std::vector<TestObj>"; }
 
 
-void send(int fd[2], int value)
+void send(int fd[2], int value, SrcLine srcline = 0)
 {
     close(fd[0]);
     write(fd[1], &value, sizeof(value));
-    ATOMIC(std::cout << BLUE_MSG << "parent '" << getpid() << FMT("' send 0x%x") << value << " to child" << ENDCOLOR);
+    ATOMIC(std::cout << BLUE_MSG << "parent '" << getpid() << FMT("' send 0x%x") << value << " to child" << ENDCOLOR_ATLINE(srcline));
     close(fd[1]);
 }
-int rcv(int fd[2])
+int rcv(int fd[2], SrcLine srcline = 0)
 {
     int retval;
     close(fd[1]); //close write side of pipe; child is read-only
     read(fd[0], &retval, sizeof(retval)); //NOTE: blocks until data received
-    ATOMIC(std::cout << BLUE_MSG << "child '" << getpid() << FMT("' rcv 0x%x") << retval << " from parent" << ENDCOLOR);
+    ATOMIC(std::cout << BLUE_MSG << "child '" << getpid() << FMT("' rcv 0x%x") << retval << " from parent" << ENDCOLOR_ATLINE(srcline));
     close(fd[0]);
     return retval;
 }
@@ -446,21 +449,21 @@ int main(int argc, const char* argv[])
 //    ShmSeg* shmptr = heap_alloc.allocate(1); //alloc space but don't init yet
 //    std::unique_ptr<ShmSeg> shm = shmptr;
 //    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmHeap(0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
-    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), 0, __LINE__)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
+    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), 0, SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
 //#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-    if (owner) send(fd, shmkey(shmheaptr.get()));
+    if (owner) send(fd, shmkey(shmheaptr.get()), SRCLINE);
 //    else shmptr.reset(new /*(shmptr.get())*/ ShmHeap(rcv(fd), ShmSeg::persist::Reuse, 1));
-    else shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd), __LINE__), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
+    else shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
 //    std::vector<std::string> args;
 //    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
 //    if (!owner) new (&shm) ShmSeg(shm.shmkey(), ShmSeg::persist::Reuse, 1); //attach to same shmem seg (child only)
 #endif
 
-    TestObj bare("berry");
+    TestObj bare("berry", SRCLINE);
     bare.inc();
     bare.print();
 
-    WithMutex<TestObj> prot("protected");
+    WithMutex<TestObj> prot("protected", SRCLINE);
 //    ((TestObj)prot).inc();
 //    ((TestObj)prot).print();
     prot->inc();
@@ -477,7 +480,7 @@ int main(int argc, const char* argv[])
 //    typedef ShmAllocator<TestObj> item_allocator_type;
 //    item_allocator_type item_alloc; item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
     ShmAllocator<TestObj> item_alloc(shmheaptr.get()); //item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
-    TestObj& testobj = *new (item_alloc.allocate(1, __LINE__)) TestObj("testy"); //NOTE: ref avoids copy ctor
+    TestObj& testobj = owner? *new (item_alloc.allocate(1, SRCLINE)) TestObj("testy", SRCLINE): *(TestObj*)item_alloc.allocate(1, SRCLINE); //NOTE: ref avoids copy ctor
 //    shm_ptr<TestObj> testobj("testy", shm_alloc);
     testobj.inc();
     testobj.inc();
@@ -498,7 +501,7 @@ int main(int argc, const char* argv[])
     ShmAllocator<list_type> list_alloc(item_alloc); //list_alloc.m_heap = shmptr; //(item_alloc); //share state with item allocator
 //    list_type testobj(item_alloc); //stack variable
 //    list_type* ptr = list_alloc.allocate(1);
-    list_type& testlist = *new (list_alloc.allocate(1, __LINE__)) list_type(item_alloc); //(item_alloc); //custom heap variable
+    list_type& testlist = *new (list_alloc.allocate(1, SRCLINE)) list_type(item_alloc); //(item_alloc); //custom heap variable
 #endif
     ATOMIC(std::cout << BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR);
 

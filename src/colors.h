@@ -1,13 +1,12 @@
-#!/bin/bash -x
-echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -DUNIT_TEST -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
-#line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
+//#!/bin/bash -x
+//echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -DUNIT_TEST -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
+//#line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 
 
 //console colors
 
 #ifndef _COLORS_H
 #define _COLORS_H
-
 
 #define TOSTR(str)  TOSTR_NESTED(str)
 #define TOSTR_NESTED(str)  #str
@@ -20,13 +19,13 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -DUNIT_TEST -fPIC
 #define YELLOW_MSG  ANSI_COLOR("1;33")
 #define BLUE_MSG  ANSI_COLOR("1;34")
 #define MAGENTA_MSG  ANSI_COLOR("1;35")
-#define PINK_MSG  MAGENTA_MSG
+#define PINK_MSG  MAGENTA_MSG //easier to spell :)
 #define CYAN_MSG  ANSI_COLOR("1;36")
 #define GRAY_MSG  ANSI_COLOR("0;37")
 //#define ENDCOLOR  ANSI_COLOR("0")
 //append the src line# to make debug easier:
 //#define ENDCOLOR_ATLINE(srcline)  " &" TOSTR(srcline) ANSI_COLOR("0") "\n"
-#define ENDCOLOR_ATLINE(srcline)  "  &" << shortsrc(srcline? srcline: SRCLINE) << ANSI_COLOR("0") "\n"
+#define ENDCOLOR_ATLINE(srcline)  "  &" << shortsrc(srcline, SRCLINE) << ANSI_COLOR("0") "\n"
 //#define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%s) //%d) //NOTE: requires extra param
 #define ENDCOLOR  ENDCOLOR_ATLINE(SRCLINE) //__LINE__)
 
@@ -34,24 +33,27 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -DUNIT_TEST -fPIC
 //typedef int SRCLINE;
 //#define _GNU_SOURCE //select GNU version of basename()
 #include <stdio.h> //snprintf()
-#include <stdlib.h> //atoi()
+//#include <stdlib.h> //atoi()
 #include <string.h>
 
 #define SRCLINE  __FILE__ ":" TOSTR(__LINE__)
 typedef const char* SrcLine; //allow compiler to distinguish param types, catch implicit conv
-SrcLine shortsrc(SrcLine srcline, int line = 0)
+SrcLine shortsrc(SrcLine srcline, SrcLine defline) //int line = 0)
 {
     static char buf[60]; //static to preserve after return to caller
+    if (!srcline) srcline = defline;
+    if (!srcline) srcline = SRCLINE;
     const char* bp = strrchr(srcline, '/');
     if (bp) srcline = bp + 1; //drop parent folder name
     const char* endp = strrchr(srcline, '.'); //drop extension
     if (!endp) endp = srcline + strlen(srcline);
-    if (!line)
-    {
+//    if (!line)
+//    {
         bp = strrchr(endp, ':');
-        if (bp) line = atoi(bp+1);
-    }
-    snprintf(buf, sizeof(buf), "%.*s:%d", (int)(endp - srcline), srcline, line);
+        if (!bp) bp = endp + strlen(endp);
+//        if (bp) line = atoi(bp+1);
+//    }
+    snprintf(buf, sizeof(buf), "%.*s%s", (int)(endp - srcline), srcline, bp); //line);
     return buf;
 }
 #if 0
@@ -76,8 +78,6 @@ public: //opeartors
 
 
 #ifdef UNIT_TEST
-//echo -e '\e[1;36m'; g++ -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O0 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${1%.*}"; echo -e '\e[0m'
-
 #include <iostream>
 #include "colors.h"
 
