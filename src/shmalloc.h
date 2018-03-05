@@ -54,6 +54,7 @@ void* shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
     ptr->marker = SHM_MAGIC;
     return ++ptr;
 }
+void* shmalloc(size_t size, SrcLine srcline = 0) { return shmalloc(size, 0, srcline); }
 
 
 //get shmem key:

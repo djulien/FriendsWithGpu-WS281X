@@ -45,9 +45,17 @@
 
 
 //"perfect forwarding" (typesafe args) to ctor:
+//proxy/perfect forwarding info:
+// http://www.stroustrup.com/wrapper.pdf
+// https://stackoverflow.com/questions/24915818/c-forward-method-calls-to-embed-object-without-inheritance
+// https://stackoverflow.com/questions/13800449/c11-how-to-proxy-class-function-having-only-its-name-and-parent-class/13885092#13885092
 #define PERFECT_FWD2BASE_CTOR(type, base)  \
     template<typename ... ARGS> \
     type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
+//special handling for last param:
+#define NEAR_PERFECT_FWD2BASE_CTOR(type, base)  \
+    template<typename ... ARGS> \
+    type(ARGS&& ... args, key_t key = 0): base(std::forward<ARGS>(args) ..., key)
 
 //make a unique key based on source code location:
 //std::string srckey;
@@ -72,21 +80,32 @@ int main(int argc, const char* argv[])
 
 
 //minimal memory pool:
-//NOTE: will only reclaim dealloc space at highest used address
+//can be used with stl containers, but will only reclaim/dealloc space at highest used address
 //NOTE: do not store pointers; addresses can vary between processes
 //use shmalloc + placement new to put this in shared memory
+//NOTE: no key/symbol mgmt here; use a separate lkup sttr or container
 template <int SIZE> //, int PAGESIZE = 0x1000>
 class MemPool
 {
 //    SrcLine m_srcline;
 public:
-    MemPool(SrcLine srcline = 0): m_storage{1} { debug(srcline); } // { m_storage[0] = 1; } //: m_used(m_storage[0]) { m_used = 0; }
+    MemPool(SrcLine srcline = 0): m_storage{2} { debug(srcline); } // { m_storage[0] = 1; } //: m_used(m_storage[0]) { m_used = 0; }
 public:
     inline size_t used(size_t req = 0) { return (m_storage[0] + req) * sizeof(m_storage[0]); }
     inline size_t avail() { return (SIZEOF(m_storage) - m_storage[0]) * sizeof(m_storage[0]); }
+//    inline void save() { m_storage[1] = m_storage[0]; }
+//    inline void restore() { m_storage[0] = m_storage[1]; }
+    inline size_t nextkey() { return m_storage[0]; }
+    void* alloc(size_t count, size_t key, SrcLine srcline = 0) //repeat a previous alloc()
+    {
+        size_t saved = m_storage[0];
+        m_storage[0] = key;
+        void* retval = alloc(count, srcline);
+        m_storage[0] = saved;
+        return retval;
+    }
     /*virtual*/ void* alloc(size_t count, SrcLine srcline = 0)
     {
-TODO: key lkup using std::vector<key_t>
         if (count < 1) return nullptr;
         count = divup(count, sizeof(m_storage[0])); //for alignment
         ATOMIC(std::cout << BLUE_MSG << "MemPool: alloc count " << count << ", used(req) " << used(count + 1) << " vs size " << sizeof(m_storage) << ENDCOLOR_ATLINE(srcline));
@@ -118,7 +137,7 @@ TODO: key lkup using std::vector<key_t>
 //private:
     void debug(SrcLine srcline = 0) { ATOMIC(std::cout << BLUE_MSG << "MemPool: size " << SIZE << " (" << sizeof(*this) << ") = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(storage elements) " << sizeof(m_storage[0]) << ENDCOLOR_ATLINE(srcline)); }
 //    typedef struct { size_t count[1]; uint32_t data[0]; } entry;
-    size_t m_storage[1 + divup(SIZE, sizeof(size_t))]; //first element = used count
+    size_t m_storage[2 + divup(SIZE, sizeof(size_t))]; //first element = used count
 //    size_t& m_used;
 };
 template<>
@@ -161,6 +180,7 @@ private:
 
 //used to attach mutex directly to another object type (same memory space)
 //optional auto lock/unlock around access to methods
+//also wraps all method calls via operator-> with mutex lock/unlock
 template <class TYPE, bool AUTO_LOCK = true> //derivation
 //class WithMutex //mixin/wrapper
 class WithMutex: public TYPE //derivation
@@ -190,6 +210,7 @@ public:
 private:
 #if 1
 //helper class to ensure unlock() occurs after member function returns
+//TODO: derive from unique_ptr<>
     class unlock_later
     {
         this_type* m_ptr;
@@ -245,25 +266,10 @@ const char* WithMutex<MemPool<40>, true>::TYPENAME() { return "WithMutex<MemPool
 
 
 #if 1
-//proxy/perfect forwarding info:
-// http://www.stroustrup.com/wrapper.pdf
-// https://stackoverflow.com/questions/24915818/c-forward-method-calls-to-embed-object-without-inheritance
-// https://stackoverflow.com/questions/13800449/c11-how-to-proxy-class-function-having-only-its-name-and-parent-class/13885092#13885092
-
-
-//#define SHM_DECL(type, var)  type& var = *new (shmalloc(sizeof(type))) type(); std::shared_ptr<type> var##_clup(&var, shmdeleter<type>())
-//template <typename TYPE>
-//class shm_ptr: std::shared_ptr<TYPE> //use smart ptr to clean up afterward
-//{
-//public: //ctor/dtor
-//#define INNER_CREATE(args)  std::shared_ptr<TYPE>(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-//    PERFECT_FWD2BASE_CTOR(shm_ptr, INNER_CREATE) {}
-//#undef INNER_CREATE
-//public: //operators
-//    inline TYPE* operator->() { return std::shared_ptr<TYPE>::get(); } //allow access to wrapped members
-//};
-//#define shm_ptr(type)  std::unique_ptr<type> (new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-#if 1 //operator->() broken
+//shm object wrapper:
+//use operator-> to access wrapped object's methods
+//std::shared_ptr<> used to clean up shmem afterwards
+//NOTE: use key to share objects across processes
 template <typename TYPE> //, typename BASE_TYPE = std::unique_ptr<TYPE, void(*)(TYPE*)>>
 class shm_obj//: public TYPE& //: public std::unique_ptr<TYPE, void(*)(TYPE*)> //use smart ptr to clean up afterward
 {
@@ -275,8 +281,8 @@ class shm_obj//: public TYPE& //: public std::unique_ptr<TYPE, void(*)(TYPE*)> /
     std::shared_ptr<TYPE /*, shmdeleter<TYPE>*/> m_ptr; //clean up shmem automtically
 public: //ctor/dtor
 //equiv to:    pool_type& shmpool = *new (shmalloc(sizeof(pool_type))) pool_type();
-#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE)), 0, SRCLINE) TYPE(args), [](TYPE* ptr) { shmfree(ptr, SRCLINE); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-    PERFECT_FWD2BASE_CTOR(shm_obj, INNER_CREATE) {} //, m_clup(this, TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) {} //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+#define INNER_CREATE(args, key)  m_ptr(new (shmalloc(sizeof(TYPE), key, SRCLINE)) TYPE(args), [](TYPE* ptr) { shmfree(ptr, SRCLINE); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+    NEAR_PERFECT_FWD2BASE_CTOR(shm_obj, INNER_CREATE) {} //, m_clup(this, TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) {} //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 #undef INNER_CREATE
 public: //operators
 //    inline TYPE* operator->() { return base_type::get(); } //allow access to wrapped members; based on http://www.stroustrup.com/wrapper.pdf
@@ -291,7 +297,7 @@ const char* shm_obj<WithMutex<MemPool<40>, true>>::TYPENAME() { return "shm_obj<
 #endif
 
 
-#ifdef TEST1_GOOD //shm_obj test
+#ifdef TEST1_GOOD //shm_obj test, single proc
 //#define MEMSIZE  rdup(10, 8)+8 + rdup(4, 8)+8
 //WithMutex<MemPool<MEMSIZE>> pool20;
 WithMutex<MemPool<rdup(10, 8)+8 + rdup(4, 8)+8>> pool20;
@@ -341,7 +347,6 @@ int main(int argc, const char* argv[])
     return 0;
 }
 #endif
-#endif
 
 
 //typedef shm_obj<WithMutex<MemPool<PAGE_SIZE>>> ShmHeap;
@@ -350,6 +355,7 @@ typedef WithMutex<MemPool<300>> ShmHeap; //bare sttr here, not smart_ptr
 
 //minimal stl allocator (C++11)
 //based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
+//NOTE: use a separate sttr for shm key/symbol mgmt
 template <class TYPE>
 struct ShmAllocator  
 {  
@@ -362,12 +368,13 @@ struct ShmAllocator
     bool operator==(const ShmAllocator<OTHER>& other) const noexcept { return m_heap.get() == other.m_heap.get(); } //true; }
     template<class OTHER>
     bool operator!=(const ShmAllocator<OTHER>& other) const noexcept { return m_heap.get() != other.m_heap.get(); } //false; }
-    TYPE* allocate(const size_t count = 1, key_t key = 0, SrcLine srcline = 0) const
+    TYPE* allocate(const size_t count = 1, SrcLine srcline = 0) const { return allocate(count, 0, srcline); }
+    TYPE* allocate(const size_t count, key_t key, SrcLine srcline) const
     {
         if (!count) return nullptr;
         if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
         void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes for key " << FMT("0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
+        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << FMT(" bytes for key 0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
         if (!ptr) throw std::bad_alloc();
         return static_cast<TYPE*>(ptr);
     }  
@@ -382,20 +389,21 @@ struct ShmAllocator
 };
 
 
-#if 1 //def WANT_TEST //1 //proxy example
+#if 1 //def WANT_TEST //1 //proxy example, multi-proc
 #include "vectorex.h"
 #include <unistd.h> //fork()
 class TestObj
 {
-    std::string m_name;
+//    std::string m_name;
+    char m_name[20]; //store name directly in object so shm object doesn't use char pointer
 //    SrcLine m_srcline;
     int m_count;
 public:
-    explicit TestObj(const char* name, SrcLine srcline = 0): m_name(name), m_count(0) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
-    TestObj(const TestObj& that): m_name(that.m_name), m_count(that.m_count) { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
+    explicit TestObj(const char* name, SrcLine srcline = 0): /*m_name(name),*/ m_count(0) { strncpy(m_name, name, sizeof(m_name)); ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
+    TestObj(const TestObj& that): /*m_name(that.m_name),*/ m_count(that.m_count) { strcpy(m_name, that.m_name); ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
     ~TestObj() { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR); } //only used for debug
 public:
-    void print() { ATOMIC(std::cout << BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name.c_str() << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
+    void print() { ATOMIC(std::cout << BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name/*.c_str()*/ << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
     int& inc() { return ++m_count; }
 };
 template <>
@@ -444,12 +452,13 @@ int main(int argc, const char* argv[])
 #if 1 //simulate Node.js fork()
 //    ShmSeg& shm = *std::allocator<ShmSeg>(1); //alloc space but don't init
 //    ShmAllocator<ShmSeg> heap_alloc;
+//used shared_ptr<> for ref counting *and* to allow skipping ctor in child procs:
     std::shared_ptr<ShmHeap> shmheaptr; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
 //    ShmHeap shmheap; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
 //    ShmSeg* shmptr = heap_alloc.allocate(1); //alloc space but don't init yet
 //    std::unique_ptr<ShmSeg> shm = shmptr;
 //    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmHeap(0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
-    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), 0, SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
+    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
 //#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
     if (owner) send(fd, shmkey(shmheaptr.get()), SRCLINE);
 //    else shmptr.reset(new /*(shmptr.get())*/ ShmHeap(rcv(fd), ShmSeg::persist::Reuse, 1));
@@ -480,7 +489,17 @@ int main(int argc, const char* argv[])
 //    typedef ShmAllocator<TestObj> item_allocator_type;
 //    item_allocator_type item_alloc; item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
     ShmAllocator<TestObj> item_alloc(shmheaptr.get()); //item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
-    TestObj& testobj = owner? *new (item_alloc.allocate(1, SRCLINE)) TestObj("testy", SRCLINE): *(TestObj*)item_alloc.allocate(1, SRCLINE); //NOTE: ref avoids copy ctor
+//reuse existing shm obj in child proc (bypass ctor):
+
+//    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
+//    if (owner) send(fd, shmkey(shmheaptr.get()), SRCLINE);
+//    else shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
+
+    key_t svkey = shmheaptr->nextkey();
+    TestObj& testobj = *(TestObj*)item_alloc.allocate(1, svkey, SRCLINE); //NOTE: ref avoids copy ctor
+    ATOMIC(std::cout << BLUE_MSG << "next key " << svkey << FMT(" => adrs %p") << &testobj << ENDCOLOR);
+    if (owner) new (&testobj) TestObj("testy", SRCLINE);
+//    TestObj& testobj = owner? *new (item_alloc.allocate(1, svkey, SRCLINE)) TestObj("testy", SRCLINE): *(TestObj*)item_alloc.allocate(1, svkey, SRCLINE); //NOTE: ref avoids copy ctor
 //    shm_ptr<TestObj> testobj("testy", shm_alloc);
     testobj.inc();
     testobj.inc();
@@ -541,6 +560,20 @@ int main(int argc, const char* argv[])
 //////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////
 
+
+
+//#define SHM_DECL(type, var)  type& var = *new (shmalloc(sizeof(type))) type(); std::shared_ptr<type> var##_clup(&var, shmdeleter<type>())
+//template <typename TYPE>
+//class shm_ptr: std::shared_ptr<TYPE> //use smart ptr to clean up afterward
+//{
+//public: //ctor/dtor
+//#define INNER_CREATE(args)  std::shared_ptr<TYPE>(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+//    PERFECT_FWD2BASE_CTOR(shm_ptr, INNER_CREATE) {}
+//#undef INNER_CREATE
+//public: //operators
+//    inline TYPE* operator->() { return std::shared_ptr<TYPE>::get(); } //allow access to wrapped members
+//};
+//#define shm_ptr(type)  std::unique_ptr<type> (new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 
 
 //shared memory lookup + alloc
