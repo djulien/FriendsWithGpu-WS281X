@@ -520,7 +520,10 @@ int main(int argc, const char* argv[])
     ShmAllocator<list_type> list_alloc(item_alloc); //list_alloc.m_heap = shmptr; //(item_alloc); //share state with item allocator
 //    list_type testobj(item_alloc); //stack variable
 //    list_type* ptr = list_alloc.allocate(1);
-    list_type& testlist = *new (list_alloc.allocate(1, SRCLINE)) list_type(item_alloc); //(item_alloc); //custom heap variable
+    svkey = shmheaptr->nextkey();
+//    list_type& testlist = *new (list_alloc.allocate(1, SRCLINE)) list_type(item_alloc); //(item_alloc); //custom heap variable
+    list_type& testlist = *(list_type*)list_alloc.allocate(1, svkey, SRCLINE);
+    if (owner) new (&testlist) list_type(item_alloc); //(item_alloc); //custom heap variable
 #endif
     ATOMIC(std::cout << BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR);
 
