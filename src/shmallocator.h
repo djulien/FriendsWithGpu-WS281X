@@ -458,15 +458,17 @@ int main(int argc, const char* argv[])
 //    ShmSeg* shmptr = heap_alloc.allocate(1); //alloc space but don't init yet
 //    std::unique_ptr<ShmSeg> shm = shmptr;
 //    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmHeap(0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
-    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
+//    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
 //#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+    shmheaptr.reset(owner? new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(): (ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
     if (owner) send(fd, shmkey(shmheaptr.get()), SRCLINE);
 //    else shmptr.reset(new /*(shmptr.get())*/ ShmHeap(rcv(fd), ShmSeg::persist::Reuse, 1));
-    else shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
+//    else shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
 //    std::vector<std::string> args;
 //    for (int i = 0; i < argc; ++i) args.push_back(argv[i]);
 //    if (!owner) new (&shm) ShmSeg(shm.shmkey(), ShmSeg::persist::Reuse, 1); //attach to same shmem seg (child only)
 #endif
+//parent + child have ref; parent init; parent + child use it; parent + child detach; parent frees
 
     TestObj bare("berry", SRCLINE);
     bare.inc();
@@ -506,11 +508,10 @@ int main(int argc, const char* argv[])
     testobj.print();
     ATOMIC(std::cout << BLUE_MSG << FMT("&testobj %p") << &testobj << ENDCOLOR);
 
+#if 0
 //    typedef std::vector<TestObj, item_allocator_type> list_type;
     typedef std::vector<TestObj, ShmAllocator<TestObj>> list_type;
-#if 0
-    list_type testlist;
-#else //TODO
+//    list_type testlist;
 //    ShmAllocator<list_type, ShmHeap<list_type>>& list_alloc = item_alloc.rebind<list_type>.other;
 //    item_allocator_type::rebind<list_type> list_alloc;
 //    typedef typename item_allocator_type::template rebind<list_type>::other list_allocator_type; //http://www.cplusplus.com/forum/general/161946/
@@ -524,7 +525,6 @@ int main(int argc, const char* argv[])
 //    list_type& testlist = *new (list_alloc.allocate(1, SRCLINE)) list_type(item_alloc); //(item_alloc); //custom heap variable
     list_type& testlist = *(list_type*)list_alloc.allocate(1, svkey, SRCLINE);
     if (owner) new (&testlist) list_type(item_alloc); //(item_alloc); //custom heap variable
-#endif
     ATOMIC(std::cout << BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR);
 
     testlist.emplace_back("list1");
@@ -534,12 +534,13 @@ int main(int argc, const char* argv[])
     testlist[1].inc();
     testlist[0].print();
     testlist[1].print();
+#endif
 
     std::cout
         << "sizeof(berry) = " << sizeof(bare)
         << ", sizeof(prot) = " << sizeof(prot)
         << ", sizeof(test obj) = " << sizeof(testobj)
-        << ", sizeof(test list) = " << sizeof(testlist)
+//        << ", sizeof(test list) = " << sizeof(testlist)
 //        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
         << "\n" << std::flush;
 
