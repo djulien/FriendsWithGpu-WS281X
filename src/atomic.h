@@ -10,4 +10,6 @@ std::mutex atomic_mut;
 //use macro so stmt can be nested within scoped lock:
 #define ATOMIC(stmt)  { std::unique_lock<std::mutex> lock(atomic_mut); stmt; }
 
+#define ATOMIC_MSG(msg)  ATOMIC(std::cout << msg << std::flush)
+
 #endif //ndef _ATOMIC_H

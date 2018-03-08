@@ -64,6 +64,7 @@
 
 #include <unistd.h> //sysconf()
 #define PAGE_SIZE  4096 //NOTE: no Userland #define for this, so set it here and then check it at run time; https://stackoverflow.com/questions/37897645/page-size-undeclared-c
+#if 0
 //void check_page_size()
 int main_other(int argc, const char* argv[]);
 //template <typename... ARGS >
@@ -73,10 +74,11 @@ int main(int argc, const char* argv[])
 #define main  main_other
 {
     int pagesize = sysconf(_SC_PAGESIZE);
-    if (pagesize != PAGE_SIZE) ATOMIC(std::cout << RED_MSG << "PAGE_SIZE incorrect: is " << pagesize << ", expected " << PAGE_SIZE << ENDCOLOR)
-    else ATOMIC(std::cout << GREEN_MSG << "PAGE_SIZE correct: " << pagesize << ENDCOLOR);
+    if (pagesize != PAGE_SIZE) ATOMIC_MSG(RED_MSG << "PAGE_SIZE incorrect: is " << pagesize << ", expected " << PAGE_SIZE << ENDCOLOR)
+    else ATOMIC_MSG(GREEN_MSG << "PAGE_SIZE correct: " << pagesize << ENDCOLOR);
     return main(argc, argv);
 }
+#endif
 
 
 //minimal memory pool:
@@ -108,34 +110,34 @@ public:
     {
         if (count < 1) return nullptr;
         count = divup(count, sizeof(m_storage[0])); //for alignment
-        ATOMIC(std::cout << BLUE_MSG << "MemPool: alloc count " << count << ", used(req) " << used(count + 1) << " vs size " << sizeof(m_storage) << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(BLUE_MSG << "MemPool: alloc count " << count << ", used(req) " << used(count + 1) << " vs size " << sizeof(m_storage) << ENDCOLOR_ATLINE(srcline));
         if (used(count + 1) > sizeof(m_storage)) enlarge(used(count + 1));
         m_storage[m_storage[0]++] = count;
         void* ptr = &m_storage[m_storage[0]];
         m_storage[0] += count;
-        ATOMIC(std::cout << YELLOW_MSG << "MemPool: allocated " << count << " octobytes at " << FMT("%p") << ptr << ", used " << used() << ", avail " << avail() << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "MemPool: allocated " << count << " octobytes at " << FMT("%p") << ptr << ", used " << used() << ", avail " << avail() << ENDCOLOR);
         return ptr; //malloc(count);
     }
     /*virtual*/ void free(void* addr, SrcLine srcline = 0)
     {
 //        free(ptr);
         size_t inx = ((intptr_t)addr - (intptr_t)m_storage) / sizeof(m_storage[0]);
-        if ((inx < 1) || (inx >= SIZE)) ATOMIC(std::cout << RED_MSG << "inx " << inx <<ENDCOLOR);
+        if ((inx < 1) || (inx >= SIZE)) ATOMIC_MSG(RED_MSG << "inx " << inx << ENDCOLOR);
         if ((inx < 1) || (inx >= SIZE)) throw std::bad_alloc();
         size_t count = m_storage[--inx] + 1;
-        ATOMIC(std::cout << BLUE_MSG << "MemPool: deallocate count " << count << " at " << FMT("%p") << addr << ", reclaim " << m_storage[0] << " == " << inx << " + " << count << "? " << (m_storage[0] == inx + count) << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(BLUE_MSG << "MemPool: deallocate count " << count << " at " << FMT("%p") << addr << ", reclaim " << m_storage[0] << " == " << inx << " + " << count << "? " << (m_storage[0] == inx + count) << ENDCOLOR_ATLINE(srcline));
         if (m_storage[0] == inx + count) m_storage[0] -= count; //only reclaim at end of pool (no other addresses will change)
-        ATOMIC(std::cout << YELLOW_MSG << "MemPool: deallocated " << count << " octobytes at " << FMT("%p") << addr << ", used " << used() << ", avail " << avail() << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "MemPool: deallocated " << count << " octobytes at " << FMT("%p") << addr << ", used " << used() << ", avail " << avail() << ENDCOLOR);
     }
     /*virtual*/ void enlarge(size_t count, SrcLine srcline = 0)
     {
         count = rdup(count, PAGE_SIZE / sizeof(m_storage[0]));
-        ATOMIC(std::cout << RED_MSG << "MemPool: want to enlarge " << count << " octobytes" << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(RED_MSG << "MemPool: want to enlarge " << count << " octobytes" << ENDCOLOR_ATLINE(srcline));
         throw std::bad_alloc(); //TODO
     }
     static const char* TYPENAME();
 //private:
-    void debug(SrcLine srcline = 0) { ATOMIC(std::cout << BLUE_MSG << "MemPool: size " << SIZE << " (" << sizeof(*this) << ") = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(storage elements) " << sizeof(m_storage[0]) << ENDCOLOR_ATLINE(srcline)); }
+    void debug(SrcLine srcline = 0) { ATOMIC_MSG(BLUE_MSG << "MemPool: size " << SIZE << " (" << sizeof(*this) << ") = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(storage elements) " << sizeof(m_storage[0]) << ENDCOLOR_ATLINE(srcline)); }
 //    typedef struct { size_t count[1]; uint32_t data[0]; } entry;
     size_t m_storage[2 + divup(SIZE, sizeof(size_t))]; //first element = used count
 //    size_t& m_used;
@@ -164,7 +166,7 @@ public: //member functions
 //    static void unlock(MutexWithFlag* ptr) { ptr->unlock(); } //custom deleter for use with std::unique_ptr
     static const char* TYPENAME();
 private:
-    void debug(const char* func) { ATOMIC(std::cout << YELLOW_MSG << func << ENDCOLOR); }
+    void debug(const char* func) { ATOMIC_MSG(YELLOW_MSG << func << ENDCOLOR); }
 };
 
 
@@ -205,8 +207,8 @@ public:
 public:
 //    bool islocked() { return m_locked; } //if (m_mutex.try_lock()) { m_mutex.unlock(); return false; }
 //private:
-//    void lock() { ATOMIC(std::cout << YELLOW_MSG << "lock" << ENDCOLOR); m_mutex.lock(); /*islocked = true*/; }
-//    void unlock() { ATOMIC(std::cout << YELLOW_MSG << "unlock" << ENDCOLOR); /*islocked = false*/; m_mutex.unlock(); }
+//    void lock() { ATOMIC_MSG(YELLOW_MSG << "lock" << ENDCOLOR); m_mutex.lock(); /*islocked = true*/; }
+//    void unlock() { ATOMIC_MSG(YELLOW_MSG << "unlock" << ENDCOLOR); /*islocked = false*/; m_mutex.unlock(); }
 private:
 #if 1
 //helper class to ensure unlock() occurs after member function returns
@@ -290,7 +292,7 @@ public: //operators
     inline TYPE& operator->() { return *m_ptr.get(); }
     static const char* TYPENAME();
 //private:
-//    void debug() { ATOMIC(std::cout << (*this)->TYPENAME << ENDCOLOR); }
+//    void debug() { ATOMIC_MSG((*this)->TYPENAME << ENDCOLOR); }
 };
 template<>
 const char* shm_obj<WithMutex<MemPool<40>, true>>::TYPENAME() { return "shm_obj<WithMutex<MemPool<40>, true>>"; }
@@ -305,7 +307,7 @@ WithMutex<MemPool<rdup(10, 8)+8 + rdup(4, 8)+8>> pool20;
 //pool_type pool20;
 int main(int argc, const char* argv[])
 {
-    ATOMIC(std::cout << PINK_MSG << "data space:" <<ENDCOLOR);
+    ATOMIC_MSG(PINK_MSG << "data space:" <<ENDCOLOR);
     void* ptr1 = pool20->alloc(10);
 //    void* ptr1 = pool20()()->alloc(10);
 //    void* ptr1 = pool20.base().base().alloc(10);
@@ -313,14 +315,14 @@ int main(int argc, const char* argv[])
     pool20->free(ptr2);
     void* ptr3 = pool20->alloc(1);
 
-    ATOMIC(std::cout << PINK_MSG << "stack:" <<ENDCOLOR);
+    ATOMIC_MSG(PINK_MSG << "stack:" <<ENDCOLOR);
     MemPool<rdup(1, 8)+8 + rdup(1, 8)+8> pool10; //don't need mutex on stack mem (not safe to share it)
     void* ptr4 = pool10.alloc(1);
     void* ptr5 = pool10.alloc(1);
     void* ptr6 = pool10.alloc(0);
 
     typedef decltype(pool20) pool_type; //use same type as pool20
-    ATOMIC(std::cout << PINK_MSG << "shmem: actual size " << sizeof(pool_type) << ENDCOLOR);
+    ATOMIC_MSG(PINK_MSG << "shmem: actual size " << sizeof(pool_type) << ENDCOLOR);
 //    std::shared_ptr<pool_type /*, shmdeleter<pool_type>*/> shmpool(new (shmalloc(sizeof(pool_type))) pool_type(), shmdeleter<pool_type>());
 //    std::shared_ptr<pool_type /*, shmdeleter<pool_type>*/> shmpool(new (shmalloc(sizeof(pool_type))) pool_type(), shmdeleter<pool_type>());
 //    pool_type& shmpool = *new (shmalloc(sizeof(pool_type))) pool_type();
@@ -334,7 +336,7 @@ int main(int argc, const char* argv[])
 #endif
 //    SHM_DECL(pool_type, shmpool); //equiv to "pool_type shmpool", but allocates in shmem
     shm_obj<pool_type> shmpool; //put it in shared memory instead of stack
-//    ATOMIC(std::cout << BLUE_MSG << shmpool.TYPENAME() << ENDCOLOR); //NOTE: don't use -> here (causes recursive lock)
+//    ATOMIC_MSG(BLUE_MSG << shmpool.TYPENAME() << ENDCOLOR); //NOTE: don't use -> here (causes recursive lock)
 //    shmpool->m_mutex.lock();
 //    shmpool->debug();
 //    shmpool->m_mutex.unlock();
@@ -374,13 +376,13 @@ struct ShmAllocator
         if (!count) return nullptr;
         if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
         void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << FMT(" bytes for key 0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << FMT(" bytes for key 0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
         if (!ptr) throw std::bad_alloc();
         return static_cast<TYPE*>(ptr);
     }  
     void deallocate(TYPE* const ptr, size_t count = 1, SrcLine srcline = 0) const noexcept
     {
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(YELLOW_MSG << "ShmAllocator: deallocate " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
         if (m_heap) m_heap->free(ptr);
         else shmfree(ptr);
     }
@@ -389,7 +391,7 @@ struct ShmAllocator
 };
 
 
-#if 1 //def WANT_TEST //1 //proxy example, multi-proc
+#if 1 //def TEST2_MOSTLY //proxy example, multi-proc
 #include "vectorex.h"
 #include <unistd.h> //fork()
 class TestObj
@@ -399,11 +401,11 @@ class TestObj
 //    SrcLine m_srcline;
     int m_count;
 public:
-    explicit TestObj(const char* name, SrcLine srcline = 0): /*m_name(name),*/ m_count(0) { strncpy(m_name, name, sizeof(m_name)); ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
-    TestObj(const TestObj& that): /*m_name(that.m_name),*/ m_count(that.m_count) { strcpy(m_name, that.m_name); ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
-    ~TestObj() { ATOMIC(std::cout << CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR); } //only used for debug
+    explicit TestObj(const char* name, SrcLine srcline = 0): /*m_name(name),*/ m_count(0) { strncpy(m_name, name, sizeof(m_name)); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
+    TestObj(const TestObj& that): /*m_name(that.m_name),*/ m_count(that.m_count) { strcpy(m_name, that.m_name); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
+    ~TestObj() { ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR); } //only used for debug
 public:
-    void print() { ATOMIC(std::cout << BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name/*.c_str()*/ << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
+    void print() { ATOMIC_MSG(BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name/*.c_str()*/ << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
     int& inc() { return ++m_count; }
 };
 template <>
@@ -412,27 +414,11 @@ template <>
 const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME() { return "std::vector<TestObj>"; }
 
 
-void send(int fd[2], int value, SrcLine srcline = 0)
-{
-    close(fd[0]);
-    write(fd[1], &value, sizeof(value));
-    ATOMIC(std::cout << BLUE_MSG << "parent '" << getpid() << FMT("' send 0x%x") << value << " to child" << ENDCOLOR_ATLINE(srcline));
-    close(fd[1]);
-}
-int rcv(int fd[2], SrcLine srcline = 0)
-{
-    int retval;
-    close(fd[1]); //close write side of pipe; child is read-only
-    read(fd[0], &retval, sizeof(retval)); //NOTE: blocks until data received
-    ATOMIC(std::cout << BLUE_MSG << "child '" << getpid() << FMT("' rcv 0x%x") << retval << " from parent" << ENDCOLOR_ATLINE(srcline));
-    close(fd[0]);
-    return retval;
-}
-
-
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h> //fork(), getpid()
+#include "ipc.h" //IpcThread(), IpcPipe()
+#include "elapsed.h" //timestamp()
 //#include <memory> //unique_ptr<>
 int main(int argc, const char* argv[])
 {
@@ -443,12 +429,15 @@ int main(int argc, const char* argv[])
 #if 0 //best way, but doesn't match Node.js fork()
     ShmSeg shm(0, ShmSeg::persist::NewTemp, 300); //key, persistence, size
 #else //use pipes to simulate Node.js pass env to child; for example see: https://bytefreaks.net/programming-2/c-programming-2/cc-pass-value-from-parent-to-child-after-fork-via-a-pipe
-    int fd[2];
-	pipe(fd); //create pipe descriptors < fork()
+//    int fd[2];
+//	pipe(fd); //create pipe descriptors < fork()
+    IpcPipe pipe;
 #endif
-    bool owner = fork();
-    if (!owner) sleep(1); //give parent head start
-    ATOMIC(std::cout << PINK_MSG << (owner? "parent": "child") << " start" << ENDCOLOR);
+//    bool owner = fork();
+    IpcThread thread(SRCLINE);
+//    pipe.direction(owner? 1: 0);
+    if (thread.isChild()) sleep(1); //give parent head start
+    ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent": "child") << " start" << ENDCOLOR);
 #if 1 //simulate Node.js fork()
 //    ShmSeg& shm = *std::allocator<ShmSeg>(1); //alloc space but don't init
 //    ShmAllocator<ShmSeg> heap_alloc;
@@ -460,8 +449,8 @@ int main(int argc, const char* argv[])
 //    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmHeap(0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
 //    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
 //#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-    shmheaptr.reset(owner? new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(): (ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
-    if (owner) send(fd, shmkey(shmheaptr.get()), SRCLINE);
+    shmheaptr.reset(thread.isParent()? new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(): (ShmHeap*)shmalloc(sizeof(ShmHeap), pipe.child_rcv(SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
+    if (thread.isParent()) pipe.parent_send(shmkey(shmheaptr.get()), SRCLINE);
 //    else shmptr.reset(new /*(shmptr.get())*/ ShmHeap(rcv(fd), ShmSeg::persist::Reuse, 1));
 //    else shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
 //    std::vector<std::string> args;
@@ -486,7 +475,7 @@ int main(int argc, const char* argv[])
 //    else new (&shm) ShmSeg(0x1234beef, ShmSeg::persist::Reuse); //key, persistence, size
 
 //    ShmHeap<TestObj> shm_heap(shm_seg);
-//    ATOMIC("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n" << std::flush);
+//    ATOMIC_MSG("shm key " << FMT("0x%lx") << shm.shmkey() << ", size " << shm.shmsize() << ", adrs " << FMT("%p") << shm.shmptr() << "\n");
 //    std::set<Example, std::less<Example>, allocator<Example, heap<Example> > > foo;
 //    typedef ShmAllocator<TestObj> item_allocator_type;
 //    item_allocator_type item_alloc; item_alloc.m_heap = shmptr; //explicitly create so it can be reused in other places (shares state with other allocators)
@@ -499,14 +488,14 @@ int main(int argc, const char* argv[])
 
     key_t svkey = shmheaptr->nextkey();
     TestObj& testobj = *(TestObj*)item_alloc.allocate(1, svkey, SRCLINE); //NOTE: ref avoids copy ctor
-    ATOMIC(std::cout << BLUE_MSG << "next key " << svkey << FMT(" => adrs %p") << &testobj << ENDCOLOR);
-    if (owner) new (&testobj) TestObj("testy", SRCLINE);
+    ATOMIC_MSG(BLUE_MSG << "next key " << svkey << FMT(" => adrs %p") << &testobj << ENDCOLOR);
+    if (thread.isParent()) new (&testobj) TestObj("testy", SRCLINE);
 //    TestObj& testobj = owner? *new (item_alloc.allocate(1, svkey, SRCLINE)) TestObj("testy", SRCLINE): *(TestObj*)item_alloc.allocate(1, svkey, SRCLINE); //NOTE: ref avoids copy ctor
 //    shm_ptr<TestObj> testobj("testy", shm_alloc);
     testobj.inc();
     testobj.inc();
     testobj.print();
-    ATOMIC(std::cout << BLUE_MSG << FMT("&testobj %p") << &testobj << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << FMT("&testobj %p") << &testobj << ENDCOLOR);
 
 #if 0
 //    typedef std::vector<TestObj, item_allocator_type> list_type;
@@ -525,7 +514,7 @@ int main(int argc, const char* argv[])
 //    list_type& testlist = *new (list_alloc.allocate(1, SRCLINE)) list_type(item_alloc); //(item_alloc); //custom heap variable
     list_type& testlist = *(list_type*)list_alloc.allocate(1, svkey, SRCLINE);
     if (owner) new (&testlist) list_type(item_alloc); //(item_alloc); //custom heap variable
-    ATOMIC(std::cout << BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << FMT("&list %p") << &testlist << ENDCOLOR);
 
     testlist.emplace_back("list1");
     testlist.emplace_back("list2");
@@ -544,8 +533,9 @@ int main(int argc, const char* argv[])
 //        << ", sizeof(shm_ptr<int>) = " << sizeof(shm_ptr<int>)
         << "\n" << std::flush;
 
-    ATOMIC(std::cout << PINK_MSG << (owner? "parent (waiting to)": "child") << " exit" << ENDCOLOR);
-    if (owner) waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+    ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent (waiting to)": "child") << " exit" << ENDCOLOR);
+    if (thread.isParent()) thread.join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+    shmheaptr.reset((ShmHeap*)0);
     return 0;
 }
 #endif
@@ -639,13 +629,13 @@ public:
         if (m_used + count > shmsize()) throw std::bad_alloc();
         void* ptr = shmptr() + m_used;
         m_used += count;
-        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: allocated " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "ShmHeap: allocated " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR);
         return ptr;
     }
     void dealloc(void* ptr)
     {
         int count = 1;
-        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: deallocate " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "ShmHeap: deallocate " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR);
 //        ::operator delete(ptr);
     }
 private:
@@ -692,7 +682,7 @@ public: //ctor/dtor
 //    ShmSeg(persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
     explicit ShmSeg(key_t key = 0, persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
     {
-        ATOMIC(std::cout << CYAN_MSG << "ShmSeg.ctor: key " << FMT("0x%lx") << key << ", persist " << (int)cre << ", size " << size << ENDCOLOR);
+        ATOMIC_MSG(CYAN_MSG << "ShmSeg.ctor: key " << FMT("0x%lx") << key << ", persist " << (int)cre << ", size " << size << ENDCOLOR);
         if (cre != persist::Reuse) destroy(key); //start fresh
         m_keep = (cre != persist::NewTemp);        
         create(key, size, cre != persist::Reuse);
@@ -728,12 +718,12 @@ private: //helpers
 //        if (!key) key = (rand() << 16) | 0xfeed;
         if ((size < 1) || (size >= 10000000)) throw std::runtime_error("ShmSeg: bad size"); //set reasonable limits
         int shmid = shmget(key, size, 0666 | (want_new? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
-        ATOMIC(std::cout << CYAN_MSG << "ShmSeg: cre shmget key " << FMT("0x%lx") << key << ", size " << size << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR);
+        ATOMIC_MSG(CYAN_MSG << "ShmSeg: cre shmget key " << FMT("0x%lx") << key << ", size " << size << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR);
         if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
         struct shmid_ds info;
         if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
         void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
-        ATOMIC(std::cout << BLUE_MSG << "ShmSeg: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ENDCOLOR);
+        ATOMIC_MSG(BLUE_MSG << "ShmSeg: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ENDCOLOR);
         if (ptr == (void*)-1) throw std::runtime_error(std::string(strerror(errno)));
         m_key = key;
         m_ptr = ptr;
@@ -753,13 +743,13 @@ private: //helpers
 //  int shmctl(int shmid, int cmd, struct shmid_ds *buf);
         if (shmdt(m_ptr) == -1) throw std::runtime_error(strerror(errno));
         m_ptr = 0; //can't use m_shmptr after this point
-        ATOMIC(std::cout << CYAN_MSG << "ShmSeg: dettached " << ENDCOLOR); //desc();
+        ATOMIC_MSG(CYAN_MSG << "ShmSeg: dettached " << ENDCOLOR); //desc();
     }
     static void destroy(key_t key)
     {
         if (!key) return; //!owner or !exist
         int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
-        ATOMIC(std::cout << CYAN_MSG << "ShmSeg: destroy " << FMT("key 0x%lx") << key << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR);
+        ATOMIC_MSG(CYAN_MSG << "ShmSeg: destroy " << FMT("key 0x%lx") << key << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR);
         if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
         if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
         throw std::runtime_error(strerror(errno));
@@ -836,13 +826,13 @@ public: //memory mgmt
     {
         if (count > max_size()) { throw std::bad_alloc(); }
         pointer ptr = static_cast<pointer>(::operator new(count * sizeof(type), ::std::nothrow));
-        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: allocated " << count << " " << TYPENAME << "(s) * size " << sizeof(type) << " bytes at " << FMT("%p") << ptr << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "ShmHeap: allocated " << count << " " << TYPENAME << "(s) * size " << sizeof(type) << " bytes at " << FMT("%p") << ptr << ENDCOLOR);
         return ptr;
     }
 //Delete memory:
     void deallocate(pointer ptr, size_type count)
     {
-        ATOMIC(std::cout << YELLOW_MSG << "ShmHeap: deallocate " << count << " " << TYPENAME << "(s) * size " << sizeof(type) << " bytes at " << FMT("%p") << ptr << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "ShmHeap: deallocate " << count << " " << TYPENAME << "(s) * size " << sizeof(type) << " bytes at " << FMT("%p") << ptr << ENDCOLOR);
         ::operator delete(ptr);
     }
 //max #objects that can be allocated in one call:
@@ -986,9 +976,9 @@ public: //operators; NOTE: these are static members
     void* operator new(size_t size, Allocator& alloc = Allocator()) //, const char* filename, int line, int adjust = 0)
     {
         const char* color = (size != sizeof(TYPE))? RED_MSG: YELLOW_MSG;
-        ATOMIC(std::cout << color << "ShmObj.new: size " << size << " vs. sizeof(" TOSTR(TYPE) << ") " << sizeof(TYPE) << ENDCOLOR);
+        ATOMIC_MSG(color << "ShmObj.new: size " << size << " vs. sizeof(" TOSTR(TYPE) << ") " << sizeof(TYPE) << ENDCOLOR);
         TYPE* ptr = alloc.allocate(size);
-        ATOMIC(std::cout << color << "ShmObj.new: ptr " << FMT("%p") << ptr << ", data ofs " << ((intptr_t)(TYPE*)this - (intptr_t)this) << ", alloc ofs " << ((intptr_t)&m_alloc - (intptr_t)this) << ENDCOLOR);
+        ATOMIC_MSG(color << "ShmObj.new: ptr " << FMT("%p") << ptr << ", data ofs " << ((intptr_t)(TYPE*)this - (intptr_t)this) << ", alloc ofs " << ((intptr_t)&m_alloc - (intptr_t)this) << ENDCOLOR);
 //        new ((TYPE*)ptr) TYPE() // const { new (ptr) type(ref); } //In-place copy construct
         alloc.construct(ptr, TYPE(alloc)); //call ctor
         new (ptr) (alloc); //set allocator ref
@@ -1000,7 +990,7 @@ public: //operators; NOTE: these are static members
         alloc.destroy(ptr);
 //        static_cast<ShmObj>(ptr)->m_alloc.deallocate(ptr);
 //        ((ShmObj*)ptr)->m_alloc.deallocate(ptr);
-//        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR);
+//        ATOMIC_MSG(YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR);
     }
 private:
 //protected:
@@ -1323,9 +1313,9 @@ public: //operators; NOTE: these are static members
     void* operator new(size_t size, Allocator& alloc = Allocator()) //, const char* filename, int line, int adjust = 0)
     {
         const char* color = (size != sizeof(TYPE))? RED_MSG: YELLOW_MSG;
-        ATOMIC(std::cout << color << "ShmObj.new: size " << size << " vs. sizeof(" TOSTR(TYPE) << ") " << sizeof(TYPE) << ENDCOLOR);
+        ATOMIC_MSG(color << "ShmObj.new: size " << size << " vs. sizeof(" TOSTR(TYPE) << ") " << sizeof(TYPE) << ENDCOLOR);
         TYPE* ptr = alloc.allocate(size);
-        ATOMIC(std::cout << color << "ShmObj.new: ptr " << FMT("%p") << ptr << ", data ofs " << ((intptr_t)(TYPE*)this - (intptr_t)this) << ", alloc ofs " << ((intptr_t)&m_alloc - (intptr_t)this) << ENDCOLOR);
+        ATOMIC_MSG(color << "ShmObj.new: ptr " << FMT("%p") << ptr << ", data ofs " << ((intptr_t)(TYPE*)this - (intptr_t)this) << ", alloc ofs " << ((intptr_t)&m_alloc - (intptr_t)this) << ENDCOLOR);
 //        new ((TYPE*)ptr) TYPE() // const { new (ptr) type(ref); } //In-place copy construct
         alloc.construct((TYPE*)ptr, TYPE(alloc)); //call ctor
         new (&ptr->m_alloc) (alloc); //set allocator ref
@@ -1337,7 +1327,7 @@ public: //operators; NOTE: these are static members
         alloc.destroy(ptr);
 //        static_cast<ShmObj>(ptr)->m_alloc.deallocate(ptr);
 //        ((ShmObj*)ptr)->m_alloc.deallocate(ptr);
-//        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR);
+//        ATOMIC_MSG(YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR);
     }
 //private: //data
 //    typedef struct { ALLOC& alloc; TYPE data; } wrapper;
@@ -1369,13 +1359,13 @@ public: //operators; NOTE: these are static members
 //TODO?  alignof(void*); //http://www.boost.org/doc/libs/1_59_0/doc/html/align/vocabulary.html
 //alignas(Foo) unsigned char memory[sizeof(Foo)];
 //Foo* p = ::new((void*)memory) Foo();
-        if (size != sizeof(ShmObj)) ATOMIC(std::cout << YELLOW_MSG << "ShmObj.new: [WARNING] size " << size << " != sizeof(ShmObj<" TOSTR(TYPE) << ">) " << sizeof(ShmObj) << ENDCOLOR);
+        if (size != sizeof(ShmObj)) ATOMIC_MSG(YELLOW_MSG << "ShmObj.new: [WARNING] size " << size << " != sizeof(ShmObj<" TOSTR(TYPE) << ">) " << sizeof(ShmObj) << ENDCOLOR);
         ShmObj* ptr = alloc.allocate(size);
         alloc.construct((TYPE*)ptr, TYPE()); // const { new (ptr) type(ref); } //In-place copy construct
         ptr->m_alloc = &alloc;
 //    ++Complex::nalloc;
 //    if (Complex::nalloc == 1)
-//        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key " << strlen(key) << ":'" << key << "' at adrs " << FMT("%p") << ptr << ENDCOLOR);
+//        ATOMIC_MSG(YELLOW_MSG << "alloc size " << size << ", key " << strlen(key) << ":'" << key << "' at adrs " << FMT("%p") << ptr << ENDCOLOR);
 //        if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
         return (TYPE*)ptr;
     }
@@ -1488,7 +1478,7 @@ public: //member functions
 //            TYPE* ptr = (TYPE*)malloc(count * sizeof(TYPE)); //TODO: replace
 //            std::cout << RED_MSG << "custom allocated adrs " << FMT("%p") << ptr << ENDCOLOR;
         pointer ptr = (pointer)(::operator new(count * sizeof(TYPE)));
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << count << " element(s)"
+        ATOMIC_MSG(YELLOW_MSG << "ShmAllocator: allocated " << count << " element(s)"
                     << " of size " << sizeof(TYPE) << FMT(" at %p") << (long)ptr << ENDCOLOR);
         return ptr;
     }
@@ -1578,7 +1568,7 @@ public: //methods
 //print message and allocate memory with global new:
 //        return std::allocator<TYPE>::allocate(n, hint);
         pointer ptr = (pointer)(::operator new(num * sizeof(TYPE)));
-        ATOMIC(std::cout << YELLOW_MSG << "ShmAllocator: allocated " << num << " element(s)"
+        ATOMIC_MSG(YELLOW_MSG << "ShmAllocator: allocated " << num << " element(s)"
                     << " of size " << sizeof(TYPE) << FMT(" at %p") << (long)ptr << ENDCOLOR);
         return ptr;
     }
@@ -1640,7 +1630,7 @@ public: //ctor/dtor
         new (&mutex()) std::mutex(); //make sure mutex is inited; placement new: https://stackoverflow.com/questions/2494471/c-is-it-possible-to-call-a-constructor-directly-without-new
 //                m_shmptr[1].nextofs = 0; //eof marker
         gc(true);
-        ATOMIC(std::cout << BLUE_MSG << "sizeof(mutex) = " << sizeof(std::mutex) 
+        ATOMIC_MSG(BLUE_MSG << "sizeof(mutex) = " << sizeof(std::mutex) 
             << ", sizeof(cond_var) = " << sizeof(std::condition_variable)
             << ", sizeof(size_t) = " << sizeof(size_t)
             << ", sizeof(void*) = " << sizeof(void*)
@@ -1660,7 +1650,7 @@ public: //ctor/dtor
 //            printf("desc = %d:%s\n", strlen(d), d);
 //std::cout << desc() << " here3\n" << std::flush;
         dump("initial heap:");
-        ATOMIC(std::cout << CYAN_MSG << "ShmHeap: attached " << desc() << ENDCOLOR);
+        ATOMIC_MSG(CYAN_MSG << "ShmHeap: attached " << desc() << ENDCOLOR);
     }
     ~ShmHeap() {} // (&mutex())->~std::mutex(); //not needed?
 private: //data
@@ -1747,9 +1737,9 @@ public: //allocator methods
 //alloc new storage:
                 entry* nextptr = (entry*)(symptr->name + size + extra); //alloc space for this var
                 long remaining = (uintptr_t)shmptr() + shmsize() - (uintptr_t)nextptr->name; //NOTE: must be signed
-//                ATOMIC(std::cout << FMT("ptr %p") << shmptr() << FMT(" + size %zu") << shmsize() << FMT(" - name* %p") << (uintptr_t)nextptr->name << " = remaining " << remaining << ENDCOLOR);
+//                ATOMIC_MSG(FMT("ptr %p") << shmptr() << FMT(" + size %zu") << shmsize() << FMT(" - name* %p") << (uintptr_t)nextptr->name << " = remaining " << remaining << ENDCOLOR);
                 const char* color = (remaining < 0)? RED_MSG: GREEN_MSG;
-                ATOMIC(std::cout << color << "alloc key '" << key << "', size " << size << "+" << extra << " extra +" << (shmofs(nextptr->name) - shmofs(nextptr)) << " ovhr at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR);
+                ATOMIC_MSG(color << "alloc key '" << key << "', size " << size << "+" << extra << " extra +" << (shmofs(nextptr->name) - shmofs(nextptr)) << " ovhr at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR);
                 if (remaining < 0) //not enough space
                     if (want_throw) throw std::runtime_error(RED_MSG "ShmHeap: alloc failed (insufficient space)" ENDCOLOR);
                     else return 0;
@@ -1757,7 +1747,7 @@ public: //allocator methods
                 strcpy(symptr->name, key);
                 memset(symptr->name + keylen, 0, size + extra - keylen); //clear storage for new var
                 nextptr->nextofs = 0; //new eof marker (in case space was reclaimed earlier)
-                ATOMIC(std::cout << RED_MSG << "TODO: alloc: tell object's allocator about " << extra << " extra bytes" << ENDCOLOR);
+                ATOMIC_MSG(RED_MSG << "TODO: alloc: tell object's allocator about " << extra << " extra bytes" << ENDCOLOR);
                 dump("after alloc:");
                 if (ctor) (*ctor)(symptr->name + keylen); //initialize new object
                 return symptr->name + keylen; //static_cast<void*>((long)symptr->name + keylen);
@@ -1765,7 +1755,7 @@ public: //allocator methods
             }
 //                if (!symptr->nextofs) throw std::runtime_error("ShmHeap: symbol chain broken");
 //                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
-            ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << shmofs(symptr) << ENDCOLOR);
+            ATOMIC_MSG(BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << shmofs(symptr) << ENDCOLOR);
             if (!strcmp(symptr->name, key)) return symptr->name + keylen; //static_cast<void*>((long)symptr->name + keylen); //break; //found
 //                parent = symptr;
 //                symptr = symtab(symptr->nextofs);
@@ -1791,7 +1781,7 @@ public: //allocator methods
             if (!symptr->nextofs) break; //eof
             int keylen = strlen(symptr->name) + 1; //NOTE: unknown alignment
             uintptr_t varadrs = (uintptr_t)(symptr->name + keylen); //static_cast<void*>((long)symptr->name + keylen);
-            ATOMIC(std::cout << BLUE_MSG << "check '" << symptr->name << FMT("' ofs 0x%lx") << shmofs(symptr) << " adrs " << FMT("%p") << varadrs << ".." << FMT("0x%lx") << symptr->nextofs << " ~= dealloc adrs " << FMT("%p") << ptr << ENDCOLOR);
+            ATOMIC_MSG(BLUE_MSG << "check '" << symptr->name << FMT("' ofs 0x%lx") << shmofs(symptr) << " adrs " << FMT("%p") << varadrs << ".." << FMT("0x%lx") << symptr->nextofs << " ~= dealloc adrs " << FMT("%p") << ptr << ENDCOLOR);
             if ((varadrs <= (uintptr_t)ptr) && ((uintptr_t)ptr < (uintptr_t)symtab(symptr->nextofs))) //adrs + rdup(keylen, 8))
             {
 //                    symptr->nextofs = symtab(symptr->nextofs)->nextofs; //remove from chain // = (long)&m_ptr->symtab[0] + symptr->nextofs;
@@ -1817,7 +1807,7 @@ private: //helpers; NOTE: mutex must be owned before using these
 //garbage collector:
     void gc(int line, bool init) //kludge: need extra param here for __VA_ARGS__
     {
-        ATOMIC(std::cout << YELLOW_MSG << "gc(" << init << ")" << FMT(ENDCOLOR_MYLINE) << line << std::flush);
+        ATOMIC_MSG(YELLOW_MSG << "gc(" << init << ")" << FMT(ENDCOLOR_MYLINE) << line << std::flush);
 //        if (init)
 //        {
 //            m_ptr[0].nextofs = sizeof(m_ptr[0]); //symofs(m_ptr->symtab); //[0] - (long)m_ptr;
@@ -1825,7 +1815,7 @@ private: //helpers; NOTE: mutex must be owned before using these
 //            m_shmptr->symtab[0].nextofs = 0; //eof marker
         entry* entries = symtab(0);
 //        entry* e0 = &entries[0]; entry* e1 = &entries[1];
-//        ATOMIC(std::cout << FMT("shmptr = %p") << shmptr()
+//        ATOMIC_MSG(FMT("shmptr = %p") << shmptr()
 //            << FMT(", &ent[0] = %p") << e0
 //            << FMT(" ofs 0x%lx") << shmofs(&entries[0])
 //            << FMT(", &ent[1] = %p") << e1
@@ -1863,11 +1853,11 @@ private: //helpers; NOTE: mutex must be owned before using these
     }
     void dump(int line, const char* desc, size_t val = 0)
     {
-        ATOMIC(std::cout << BLUE_MSG << "shm " << FMT(desc) << val << FMT(ENDCOLOR_MYLINE) << line << std::flush);
+        ATOMIC_MSG(BLUE_MSG << "shm " << FMT(desc) << val << FMT(ENDCOLOR_MYLINE) << line << std::flush);
 //            entry* symptr = symtab(0); //symtab(m_ptr->nextofs);
 //            entry* symptr = symtab(m_shmptr->nextofs); //symtab(0); //shmptr->symtab; //symtab(m_ptr->nextofs);
         entry* parent = symtab(0); //m_shmptr;
-//        ATOMIC(std::cout << BLUE_MSG << "parent ofs " << FMT("0x%x") << shmofs(parent) << FMT(", 0x%x") << shmofs(&parent[1]) << ENDCOLOR);
+//        ATOMIC_MSG(BLUE_MSG << "parent ofs " << FMT("0x%x") << shmofs(parent) << FMT(", 0x%x") << shmofs(&parent[1]) << ENDCOLOR);
         for (;;)
         {
             entry* symptr = symtab(parent->nextofs);
@@ -1875,11 +1865,11 @@ private: //helpers; NOTE: mutex must be owned before using these
             if (!symptr->nextofs) //eof
             {
                 size_t used = shmofs(symptr->name), remaining = shmsize() - used;
-                ATOMIC(std::cout << BLUE_MSG << FMT("[0x%lx]") << shmofs(symptr) << " eof, " << used << " used (" << remaining << " remaining)" << ENDCOLOR);
+                ATOMIC_MSG(BLUE_MSG << FMT("[0x%lx]") << shmofs(symptr) << " eof, " << used << " used (" << remaining << " remaining)" << ENDCOLOR);
                 return;
             }
             int keylen = strlen(symptr->name) + 1; //NOTE: unknown alignment
-            ATOMIC(std::cout << BLUE_MSG << FMT("[0x%lx]") << shmofs(symptr) << " next ofs " << FMT("0x%lx") << symptr->nextofs << ", name " << strlen(symptr->name) << ":'" << symptr->name << "', adrs " << FMT("0x%lx") << shmofs(symptr->name + keylen) << "..+8" << FMT(ENDCOLOR_MYLINE) << line << std::flush);
+            ATOMIC_MSG(BLUE_MSG << FMT("[0x%lx]") << shmofs(symptr) << " next ofs " << FMT("0x%lx") << symptr->nextofs << ", name " << strlen(symptr->name) << ":'" << symptr->name << "', adrs " << FMT("0x%lx") << shmofs(symptr->name + keylen) << "..+8" << FMT(ENDCOLOR_MYLINE) << line << std::flush);
 //                symptr = symtab(symptr->nextofs);
             parent = symptr;
         }
@@ -1907,14 +1897,14 @@ public:
         void* ptr = shmheap.alloc(key, size);
 //    ++Complex::nalloc;
 //    if (Complex::nalloc == 1)
-        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key " << strlen(key) << ":'" << key << "' at adrs " << FMT("%p") << ptr << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "alloc size " << size << ", key " << strlen(key) << ":'" << key << "' at adrs " << FMT("%p") << ptr << ENDCOLOR);
         if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
         return ptr;
     }
     void operator delete(void* ptr) noexcept
     {
         shmheap.dealloc(ptr);
-        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "dealloc adrs " << FMT("%p") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR);
     }
 //private:
 public:
@@ -1956,14 +1946,14 @@ public:
         void* ptr = shmheap.alloc(key.c_str(), size);
 //    ++Complex::nalloc;
 //    if (Complex::nalloc == 1)
-        ATOMIC(std::cout << YELLOW_MSG << "alloc size " << size << ", key " << key.length() << ":'" << key << "' at adrs " << FMT("0x%x") << ptr << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "alloc size " << size << ", key " << key.length() << ":'" << key << "' at adrs " << FMT("0x%x") << ptr << ENDCOLOR);
         if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
         return ptr;
     }
     void operator delete(void* ptr) noexcept
     {
         shmheap.dealloc(ptr);
-        ATOMIC(std::cout << YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR);
+        ATOMIC_MSG(YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << " (ofs " << shmheap.shmofs(ptr) << "), deleted but space not reclaimed" << ENDCOLOR);
     }
 //private: //configurable shm seg
     class ShmHeap
@@ -1986,8 +1976,8 @@ public:
             int key = init_params.key;
             size32_t size = init_params.size;
             persist cre = init_params.cre;
-            ATOMIC(std::cout << BLUE_MSG << "defered_init(key " << FMT("0x%x") << key << ", size " << size << ", cre " << (int)cre << ")" << ENDCOLOR);
-//        ATOMIC(std::cout << CYAN_MSG << "hello" << ENDCOLOR);
+            ATOMIC_MSG(BLUE_MSG << "defered_init(key " << FMT("0x%x") << key << ", size " << size << ", cre " << (int)cre << ")" << ENDCOLOR);
+//        ATOMIC_MSG(CYAN_MSG << "hello" << ENDCOLOR);
 //        if ((key = ftok("hello.txt", 'R')) == -1) /*Here the file must exist */ 
 //        int fd = shm_open(filepath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
 //        if (fd == -1) throw "shm_open failed";
@@ -2001,10 +1991,10 @@ public:
             if ((size < 1) || (size >= 10000000)) throw std::runtime_error("ShmHeap: bad size"); //set reasonable limits
 //NOTE: size will be rounded up to a multiple of PAGE_SIZE
             int shmid = shmget(key, size, 0666 | ((cre != persist::PreExist)? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
-            ATOMIC(std::cout << BLUE_MSG << "shmget key " << FMT("0x%x") << key << ", size " << size << " => " << shmid << ENDCOLOR);
+            ATOMIC_MSG(BLUE_MSG << "shmget key " << FMT("0x%x") << key << ", size " << size << " => " << shmid << ENDCOLOR);
             if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
             void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
-            ATOMIC(std::cout << BLUE_MSG << "shmat id " << FMT("0x%x") << shmid << " => " << FMT("0x%lx") << (long)ptr << ENDCOLOR);
+            ATOMIC_MSG(BLUE_MSG << "shmat id " << FMT("0x%x") << shmid << " => " << FMT("0x%lx") << (long)ptr << ENDCOLOR);
             if (ptr == (void*)-1) throw std::runtime_error(std::string(strerror(errno)));
             m_key = key;
             m_size = size;
@@ -2023,7 +2013,7 @@ public:
                 new (&m_shmptr[0].mutex) std::mutex(); //make sure mutex is inited; placement new: https://stackoverflow.com/questions/2494471/c-is-it-possible-to-call-a-constructor-directly-without-new
 //                m_shmptr[1].nextofs = 0; //eof marker
                 gc(true);
-                ATOMIC(std::cout << BLUE_MSG << "sizeof(mutex) = " << sizeof(std::mutex) << ", sizeof(size_t) = " << sizeof(size_t) << ", x/80xw (addr) to examine memory" << ENDCOLOR);
+                ATOMIC_MSG(BLUE_MSG << "sizeof(mutex) = " << sizeof(std::mutex) << ", sizeof(size_t) = " << sizeof(size_t) << ", x/80xw (addr) to examine memory" << ENDCOLOR);
             }
             init_params.init = true;
 //            std::atexit(exiting); //this happens automatically
@@ -2036,7 +2026,7 @@ public:
 //            printf("desc = %d:\n", strlen(d));
 //            printf("desc = %d:%s\n", strlen(d), d);
 //std::cout << desc() << " here3\n" << std::flush;
-            ATOMIC(std::cout << CYAN_MSG << "ShmHeap: attached " << desc() << ENDCOLOR);
+            ATOMIC_MSG(CYAN_MSG << "ShmHeap: attached " << desc() << ENDCOLOR);
         }
     public:
         ~ShmHeap() { detach(); if (!m_persist) destroy(m_key); }
@@ -2052,13 +2042,13 @@ public:
 //  int shmctl(int shmid, int cmd, struct shmid_ds *buf);
             if (shmdt(m_shmptr) == -1) throw std::runtime_error(strerror(errno));
             m_shmptr = 0; //can't use m_shmptr after this point
-            ATOMIC(std::cout << CYAN_MSG << "ShmHeap: dettached " << ENDCOLOR); //desc();
+            ATOMIC_MSG(CYAN_MSG << "ShmHeap: dettached " << ENDCOLOR); //desc();
         }
         static void destroy(int key)
         {
             if (!key) return; //!owner or !exist
             int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
-            ATOMIC(std::cout << CYAN_MSG << "ShmHeap: destroy " << FMT("0x%x") << key << " => " << FMT("0x%x") << shmid << ENDCOLOR);
+            ATOMIC_MSG(CYAN_MSG << "ShmHeap: destroy " << FMT("0x%x") << key << " => " << FMT("0x%x") << shmid << ENDCOLOR);
             if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
             if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
             throw std::runtime_error(strerror(errno));
@@ -2107,7 +2097,7 @@ public:
 //alloc new storage:
                     entry* nextptr = (entry*)&symptr->name[size]; //alloc space for this var
                     size32_t remaining = (long)m_shmptr + m_size - (long)nextptr->name;
-                    ATOMIC(std::cout << GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR);
+                    ATOMIC_MSG(GREEN_MSG << "alloc key '" << key << "', size " << size << " at ofs " << shmofs(symptr) << ", remaining " << remaining << ENDCOLOR);
                     if (remaining < 0) return 0; //not enough space
                     symptr->nextofs = shmofs(nextptr); //neweof - (long)m_ptr;
                     strcpy(symptr->name, key);
@@ -2119,7 +2109,7 @@ public:
                 }
 //                if (!symptr->nextofs) throw std::runtime_error("ShmHeap: symbol chain broken");
 //                size_t ofs = (long)symptr - (long)m_ptr; //(void*)symptr - (void*)m_ptr;
-                ATOMIC(std::cout << BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << shmofs(symptr) << ENDCOLOR);
+                ATOMIC_MSG(BLUE_MSG << "check for key '" << key << "' ==? symbol '" << symptr->name << "' at ofs " << shmofs(symptr) << ENDCOLOR);
                 if (!strcmp(symptr->name, key)) return symptr->name + keylen; //static_cast<void*>((long)symptr->name + keylen); //break; //found
 //                parent = symptr;
 //                symptr = symtab(symptr->nextofs);
@@ -2145,7 +2135,7 @@ public:
                 if (!symptr->nextofs) break; //eof
                 int keylen = strlen(symptr->name) + 1; //NOTE: unknown alignment
                 void* varadrs = (void*)symptr->name + keylen; //static_cast<void*>((long)symptr->name + keylen);
-                ATOMIC(std::cout << BLUE_MSG << "check '" << symptr->name << FMT("' ofs 0x%x") << shmofs(symptr) << " adrs " << FMT("0x%x") << varadrs << ".." << FMT("0x%x") << symptr->nextofs << " ~= dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR);
+                ATOMIC_MSG(BLUE_MSG << "check '" << symptr->name << FMT("' ofs 0x%x") << shmofs(symptr) << " adrs " << FMT("0x%x") << varadrs << ".." << FMT("0x%x") << symptr->nextofs << " ~= dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR);
                 if ((varadrs <= ptr) && (ptr < (void*)symtab(symptr->nextofs))) //adrs + rdup(keylen, 8))
                 {
 //                    symptr->nextofs = symtab(symptr->nextofs)->nextofs; //remove from chain // = (long)&m_ptr->symtab[0] + symptr->nextofs;
@@ -2204,7 +2194,7 @@ public:
 //garbage collector:
     void gc(int line, bool init) //kludge: need extra param here for __VA_ARGS__
     {
-        ATOMIC(std::cout << YELLOW_MSG << "gc(" << init << ")" << FMT(ENDCOLOR_MYLINE) << line << std::flush);
+        ATOMIC_MSG(YELLOW_MSG << "gc(" << init << ")" << FMT(ENDCOLOR_MYLINE) << line << std::flush);
 //        if (init)
 //        {
 //            m_ptr[0].nextofs = sizeof(m_ptr[0]); //symofs(m_ptr->symtab); //[0] - (long)m_ptr;
@@ -2241,7 +2231,7 @@ public:
         }
         void dump(int line, const char* desc, long val = 0)
         {
-            ATOMIC(std::cout << BLUE_MSG << "shm " << FMT(desc) << val << FMT(ENDCOLOR_MYLINE) << line << std::flush);
+            ATOMIC_MSG(BLUE_MSG << "shm " << FMT(desc) << val << FMT(ENDCOLOR_MYLINE) << line << std::flush);
 //            entry* symptr = symtab(0); //symtab(m_ptr->nextofs);
 //            entry* symptr = symtab(m_shmptr->nextofs); //symtab(0); //shmptr->symtab; //symtab(m_ptr->nextofs);
             entry* parent = symtab(0); //m_shmptr;
@@ -2251,11 +2241,11 @@ public:
 //                if (!symptr->name[0]) //eof
                 if (!symptr->nextofs) //eof
                 {
-                    ATOMIC(std::cout << BLUE_MSG << FMT("[0x%x]") << shmofs(symptr) << " eof" << ENDCOLOR);
+                    ATOMIC_MSG(BLUE_MSG << FMT("[0x%x]") << shmofs(symptr) << " eof" << ENDCOLOR);
                     return;
                 }
                 int keylen = strlen(symptr->name) + 1; //NOTE: unknown alignment
-                ATOMIC(std::cout << BLUE_MSG << FMT("[0x%x]") << shmofs(symptr) << " next ofs " << FMT("0x%x") << symptr->nextofs << ", name " << strlen(symptr->name) << ":'" << symptr->name << "', adrs " << FMT("0x%x") << shmofs(symptr->name + keylen) << "..+8" << FMT(ENDCOLOR_MYLINE) << line << std::flush);
+                ATOMIC_MSG(BLUE_MSG << FMT("[0x%x]") << shmofs(symptr) << " next ofs " << FMT("0x%x") << symptr->nextofs << ", name " << strlen(symptr->name) << ":'" << symptr->name << "', adrs " << FMT("0x%x") << shmofs(symptr->name + keylen) << "..+8" << FMT(ENDCOLOR_MYLINE) << line << std::flush);
 //                symptr = symtab(symptr->nextofs);
                 parent = symptr;
             }
