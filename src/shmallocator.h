@@ -367,9 +367,9 @@ struct ShmAllocator
     template<class OTHER>
     ShmAllocator(const ShmAllocator<OTHER>& other) noexcept: m_heap(other.m_heap) {} //converting copy ctor (more efficient than C++03)
     template<class OTHER>
-    bool operator==(const ShmAllocator<OTHER>& other) const noexcept { return m_heap.get() == other.m_heap.get(); } //true; }
+    bool operator==(const ShmAllocator<OTHER>& other) const noexcept { return m_heap/*.get()*/ == other.m_heap/*.get()*/; } //true; }
     template<class OTHER>
-    bool operator!=(const ShmAllocator<OTHER>& other) const noexcept { return m_heap.get() != other.m_heap.get(); } //false; }
+    bool operator!=(const ShmAllocator<OTHER>& other) const noexcept { return m_heap/*.get()*/ != other.m_heap/*.get()*/; } //false; }
     TYPE* allocate(const size_t count = 1, SrcLine srcline = 0) const { return allocate(count, 0, srcline); }
     TYPE* allocate(const size_t count, key_t key, SrcLine srcline) const
     {
@@ -386,7 +386,8 @@ struct ShmAllocator
         if (m_heap) m_heap->free(ptr);
         else shmfree(ptr);
     }
-    std::shared_ptr<ShmHeap> m_heap; //allow heap to be shared between allocators
+//    std::shared_ptr<ShmHeap> m_heap; //allow heap to be shared between allocators
+    ShmHeap* m_heap; //allow heap to be shared between allocators
     static const char* TYPENAME();
 };
 
@@ -437,7 +438,7 @@ int main(int argc, const char* argv[])
     IpcThread thread(SRCLINE);
 //    pipe.direction(owner? 1: 0);
     if (thread.isChild()) sleep(1); //give parent head start
-    ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent": "child") << " start" << ENDCOLOR);
+    ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent": "child") << " pid " << getpid() << " start" << ENDCOLOR);
 #if 1 //simulate Node.js fork()
 //    ShmSeg& shm = *std::allocator<ShmSeg>(1); //alloc space but don't init
 //    ShmAllocator<ShmSeg> heap_alloc;
@@ -449,8 +450,11 @@ int main(int argc, const char* argv[])
 //    if (owner) shmptr.reset(new /*(shmptr.get())*/ ShmHeap(0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
 //    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
 //#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-    shmheaptr.reset(thread.isParent()? new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(): (ShmHeap*)shmalloc(sizeof(ShmHeap), pipe.child_rcv(SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
-    if (thread.isParent()) pipe.parent_send(shmkey(shmheaptr.get()), SRCLINE);
+//    shmheaptr.reset(thread.isParent()? new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(): (ShmHeap*)shmalloc(sizeof(ShmHeap), pipe.child_rcv(SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
+    shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), thread.isParent()? 0: pipe.rcv(SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
+    if (thread.isParent()) new (shmheaptr.get()) ShmHeap(); //call ctor to init (parent only)
+    if (thread.isParent()) pipe.send(shmkey(shmheaptr.get()), SRCLINE);
+    ATOMIC_MSG(BLUE_MSG << FMT("shmheap at %p") << shmheaptr.get() << ENDCOLOR);
 //    else shmptr.reset(new /*(shmptr.get())*/ ShmHeap(rcv(fd), ShmSeg::persist::Reuse, 1));
 //    else shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
 //    std::vector<std::string> args;
@@ -535,7 +539,7 @@ int main(int argc, const char* argv[])
 
     ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent (waiting to)": "child") << " exit" << ENDCOLOR);
     if (thread.isParent()) thread.join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
-    shmheaptr.reset((ShmHeap*)0);
+    else shmheaptr.reset((ShmHeap*)0); //don't call dtor for child
     return 0;
 }
 #endif

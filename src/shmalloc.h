@@ -43,14 +43,14 @@ void* shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
     int shmid = shmget(key, size, 0666 | IPC_CREAT); //create if !exist; clears to 0 upon creation
     ATOMIC_MSG(CYAN_MSG << "shmalloc: cre shmget key " << FMT("0x%lx") << key << ", size " << size << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR_ATLINE(srcline));
     if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
-    struct shmid_ds info;
-    if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
+    struct shmid_ds shminfo;
+    if (shmctl(shmid, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
     ShmHdr* ptr = static_cast<ShmHdr*>(shmat(shmid, NULL /*system choses adrs*/, 0)); //read/write access
-    ATOMIC_MSG(BLUE_MSG << "shmalloc: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << "shmalloc: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ", cre by pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR);
     if (ptr == (ShmHdr*)-1) throw std::runtime_error(std::string(strerror(errno)));
     ptr->id = shmid;
     ptr->key = key;
-    ptr->size = info.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
+    ptr->size = shminfo.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
     ptr->marker = SHM_MAGIC;
     return ++ptr;
 }
@@ -78,8 +78,11 @@ void shmfree(void* addr, SrcLine srcline = 0)
 //    int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
 //    if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
 //    if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
-    if (shmctl(info.id, IPC_RMID, NULL /*ignored*/)) throw std::runtime_error(strerror(errno));
-    ATOMIC_MSG(CYAN_MSG << "shmfree: freed " << FMT("key 0x%lx") << info.key << FMT(", id 0x%lx") << info.id << ", size " << info.size << ENDCOLOR_ATLINE(srcline));
+    struct shmid_ds shminfo;
+    if (shmctl(info.id, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
+    if (!shminfo.shm_nattch) //no more procs attached, delete it
+        if (shmctl(info.id, IPC_RMID, NULL /*ignored*/)) throw std::runtime_error(strerror(errno));
+    ATOMIC_MSG(CYAN_MSG << "shmfree: freed " << FMT("key 0x%lx") << info.key << FMT(", id 0x%lx") << info.id << ", size " << info.size << ", cre pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR_ATLINE(srcline));
 }
 
 

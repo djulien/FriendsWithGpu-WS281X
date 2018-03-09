@@ -57,42 +57,47 @@ private: //data members
 //    bool m_open[2];
 public: //ctor
     IpcPipe(): m_fd{-1, -1} { pipe(m_fd); } //m_open[0] = m_open[1] = true; } //create pipe descriptors < fork()
-    ~IpcPipe() { pipe_close(Child2Parent); pipe_close(Parent2Child); }
+    ~IpcPipe() { pipe_close(ReadEnd); pipe_close(WriteEnd); }
 public: //methods
-    const int Parent2Child = 0, Child2Parent = 1;
+//no    const int Parent2Child = 0, Child2Parent = 1;
+    const int ReadEnd = 0, WriteEnd = 1;
 //    void direction(int which) { pipe_close(1 - which); } //which one is writer
-    void parent_send(int value, SrcLine srcline = 0) { pipe_send(Parent2Child, value, srcline); }
-    void child_send(int value, SrcLine srcline = 0) { pipe_send(Child2Parent, value, srcline); }
-    int parent_rcv(SrcLine srcline = 0) { return pipe_rcv(Child2Parent, srcline); }
-    int child_rcv(SrcLine srcline = 0) { return pipe_rcv(Parent2Child, srcline); }
+//    void parent_send(int value, SrcLine srcline = 0) { pipe_send(Parent2Child, value, srcline); }
+//    void child_send(int value, SrcLine srcline = 0) { pipe_send(Child2Parent, value, srcline); }
+//    int parent_rcv(SrcLine srcline = 0) { return pipe_rcv(Child2Parent, srcline); }
+//    int child_rcv(SrcLine srcline = 0) { return pipe_rcv(Parent2Child, srcline); }
+    void send(int value, SrcLine srcline = 0)
+    {
+        int which = WriteEnd;
+//        direction(which);
+        pipe_close(1 - which);
+//ATOMIC_MSG("pipe write[" << which << "]" << ENDCOLOR);
+        ssize_t wrlen = write(m_fd[which], &value, sizeof(value));
+        ATOMIC_MSG(((wrlen == sizeof(value))? BLUE_MSG: RED_MSG) << "parent '" << getpid() << "' send len " << wrlen << FMT(", value 0x%lx") << value << " to child" << ENDCOLOR_ATLINE(srcline));
+        if (wrlen == -1) throw std::runtime_error(strerror(errno)); //write failed
+//        close(m_fd[1]);
+    }
+    int rcv(SrcLine srcline = 0)
+    {
+        int which = ReadEnd;
+        int retval = -1;
+//        direction(1 - which); //close write side of pipe; child is read-only
+        pipe_close(1 - which);
+//ATOMIC_MSG("pipe read[" << which << "]" << ENDCOLOR);
+        ssize_t rdlen = read(m_fd[which], &retval, sizeof(retval)); //NOTE: blocks until data received
+        ATOMIC_MSG(((rdlen == sizeof(retval))? BLUE_MSG: RED_MSG) << "child '" << getpid() << "' rcv len " << rdlen << FMT(", value 0x%lx") << retval << " from parent" << ENDCOLOR_ATLINE(srcline));
+        if (rdlen == -1) throw std::runtime_error(strerror(errno)); //read failed
+//        close(m_fd[0]);
+        return retval;
+    }
 private: //helpers:
     void pipe_close(int which)
     {
 //        if (!m_open[which]) return;
-//ATOMIC_MSG("pipe close[" << which << "]" << ENDCOLOR);
         if (m_fd[which] == -1) return;
+//ATOMIC_MSG("pipe close[" << which << "]" << ENDCOLOR);
         close(m_fd[which]);
         m_fd[which] = -1;
-    }
-    void pipe_send(int which, int value, SrcLine srcline = 0)
-    {
-//        direction(which);
-        pipe_close(1 - which);
-//ATOMIC_MSG("pipe write[" << which << "]" << ENDCOLOR);
-        write(m_fd[which], &value, sizeof(value));
-        ATOMIC_MSG(BLUE_MSG << "parent '" << getpid() << FMT("' send 0x%x") << value << " to child" << ENDCOLOR_ATLINE(srcline));
-//        close(m_fd[1]);
-    }
-    int pipe_rcv(int which, SrcLine srcline = 0)
-    {
-        int retval;
-//        direction(1 - which); //close write side of pipe; child is read-only
-        pipe_close(1 - which);
-//ATOMIC_MSG("pipe read[" << which << "]" << ENDCOLOR);
-        read(m_fd[which], &retval, sizeof(retval)); //NOTE: blocks until data received
-        ATOMIC_MSG(BLUE_MSG << "child '" << getpid() << FMT("' rcv 0x%x") << retval << " from parent" << ENDCOLOR_ATLINE(srcline));
-//        close(m_fd[0]);
-        return retval;
     }
 };
 
