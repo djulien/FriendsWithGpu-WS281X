@@ -92,6 +92,7 @@ class MemPool
 //    SrcLine m_srcline;
 public:
     MemPool(SrcLine srcline = 0): m_storage{2} { debug(srcline); } // { m_storage[0] = 1; } //: m_used(m_storage[0]) { m_used = 0; }
+    ~MemPool() { ATOMIC(std::cout << YELLOW_MSG << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); }
 public:
     inline size_t used(size_t req = 0) { return (m_storage[0] + req) * sizeof(m_storage[0]); }
     inline size_t avail() { return (SIZEOF(m_storage) - m_storage[0]) * sizeof(m_storage[0]); }
@@ -137,13 +138,16 @@ public:
     }
     static const char* TYPENAME();
 //private:
+#define EXTRA  2
     void debug(SrcLine srcline = 0) { ATOMIC_MSG(BLUE_MSG << "MemPool: size " << SIZE << " (" << sizeof(*this) << ") = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(storage elements) " << sizeof(m_storage[0]) << ENDCOLOR_ATLINE(srcline)); }
 //    typedef struct { size_t count[1]; uint32_t data[0]; } entry;
-    size_t m_storage[2 + divup(SIZE, sizeof(size_t))]; //first element = used count
+    size_t m_storage[EXTRA + divup(SIZE, sizeof(size_t))]; //first element = used count
 //    size_t& m_used;
 };
 template<>
 const char* MemPool<40>::TYPENAME() { return "MemPool<40>"; }
+template<>
+const char* MemPool<300>::TYPENAME() { return "MemPool<300>"; }
 
 
 #include <mutex>
@@ -159,7 +163,8 @@ public:
     std::atomic<bool> islocked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
 public: //ctor/dtor
     MutexWithFlag(): islocked(false) {}
-    ~MutexWithFlag() { if (islocked) unlock(); }
+//    ~MutexWithFlag() { if (islocked) unlock(); }
+    ~MutexWithFlag() { ATOMIC_MSG(BLUE_MSG << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); if (islocked) unlock(); }
 public: //member functions
     void lock() { debug("lock"); std::mutex::lock(); islocked = true; }
     void unlock() { debug("unlock"); islocked = false; std::mutex::unlock(); }
@@ -168,6 +173,7 @@ public: //member functions
 private:
     void debug(const char* func) { ATOMIC_MSG(YELLOW_MSG << func << ENDCOLOR); }
 };
+const char* MutexWithFlag::TYPENAME() { return "MutexWithFlag"; }
 
 
 //mutex mixin class:
@@ -196,7 +202,7 @@ public: //ctor/dtor
     PERFECT_FWD2BASE_CTOR(WithMutex, TYPE) {} //std::cout << "with mutex\n"; } //, islocked(m_mutex.islocked /*false*/) {} //derivation
 //    PERFECT_FWD2BASE_CTOR(WithMutex, m_wrapped), m_locked(false) {} //wrapped
 //    Mutexed(TYPE* ptr):
-//    ~Mutexed() {}
+    ~WithMutex() { ATOMIC_MSG(BLUE_MSG << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); }
 //    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
 private:
 //protected:
@@ -265,6 +271,8 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 };
 template<>
 const char* WithMutex<MemPool<40>, true>::TYPENAME() { return "WithMutex<MemPool<40>, true>"; }
+template<>
+const char* WithMutex<MemPool<300>, true>::TYPENAME() { return "WithMutex<MemPool<300>, true>"; }
 
 
 #if 1
@@ -392,7 +400,7 @@ struct ShmAllocator
 };
 
 
-#if 1 //def TEST2_MOSTLY //proxy example, multi-proc
+#if 1 //def WANT_TEST //1 //proxy example, multi-proc
 #include "vectorex.h"
 #include <unistd.h> //fork()
 class TestObj
@@ -413,6 +421,8 @@ template <>
 const char* ShmAllocator<TestObj>::TYPENAME() { return "TestObj"; }
 template <>
 const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME() { return "std::vector<TestObj>"; }
+template<>
+const char* WithMutex<TestObj, true>::TYPENAME() { return "WithMutex<TestObj, true>"; }
 
 
 #include <sys/types.h>

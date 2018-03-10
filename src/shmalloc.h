@@ -69,6 +69,7 @@ size_t shmsize(void* addr) { return shmptr(addr, "shmsize")->size; }
 void shmfree(void* addr, SrcLine srcline = 0)
 {
     ShmHdr* ptr = shmptr(addr, "shmfree");
+    ATOMIC(std::cout << CYAN_MSG << FMT("shmfree: adrs %p") << addr << FMT(" = ptr %p") << ptr << ENDCOLOR_ATLINE(srcline) << std::flush);
     ShmHdr info = *ptr; //copy info before dettaching
 //    struct shmid_ds info;
 //    if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
