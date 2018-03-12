@@ -51,11 +51,11 @@
 // https://stackoverflow.com/questions/13800449/c11-how-to-proxy-class-function-having-only-its-name-and-parent-class/13885092#13885092
 #define PERFECT_FWD2BASE_CTOR(type, base)  \
     template<typename ... ARGS> \
-    type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
+    explicit type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
 //special handling for last param:
 #define NEAR_PERFECT_FWD2BASE_CTOR(type, base)  \
     template<typename ... ARGS> \
-    type(ARGS&& ... args, key_t key = 0): base(std::forward<ARGS>(args) ..., key)
+    explicit type(ARGS&& ... args, key_t key = 0): base(std::forward<ARGS>(args) ..., key)
 
 //make a unique key based on source code location:
 //std::string srckey;
@@ -174,6 +174,35 @@ private:
     void debug(const char* func) { ATOMIC_MSG(YELLOW_MSG << func << ENDCOLOR); }
 };
 const char* MutexWithFlag::TYPENAME() { return "MutexWithFlag"; }
+
+
+#if 0
+//ref count mixin class:
+template <class TYPE>
+class WithRefCount: public TYPE
+{
+    int m_count;
+public: //ctor/dtor
+    PERFECT_FWD2BASE_CTOR(WithRefCount, TYPE), m_count(0) { /*addref()*/; } //std::cout << "with mutex\n"; } //, islocked(m_mutex.islocked /*false*/) {} //derivation
+    ~WithRefCount() { /*delref()*/; }
+public: //helper class to clean up ref count
+    typedef WithRefCount<TYPE> type;
+    typedef void (*_Destructor)(type*); //void* data); //TODO: make generic?
+    class Scope
+    {
+        type& m_obj;
+        _Destructor& m_clup;
+    public: //ctor/dtor
+        Scope(type& obj, _Destructor&& clup): m_obj(obj), m_clup(clup) { m_obj.addref(); }
+        ~Scope() { if (!m_obj.delref()) m_clup(&m_obj); }
+    };
+//    std::shared_ptr<type> clup(/*!thread.isParent()? 0:*/ &testobj, [](type* ptr) { ATOMIC_MSG("bye " << ptr->numref() << "\n"); if (ptr->dec()) return; ptr->~TestObj(); shmfree(ptr, SRCLINE); });
+public:
+    int& numref() { return m_count; }
+    int& addref() { return ++m_count; }
+    int& delref() { /*ATOMIC_MSG("dec ref " << m_count - 1 << "\n")*/; return --m_count; }
+};
+#endif
 
 
 //mutex mixin class:
@@ -400,7 +429,7 @@ struct ShmAllocator
 };
 
 
-#if 1 //def WANT_TEST //1 //proxy example, multi-proc
+#ifdef WANT_TEST //proxy example, multi-proc
 #include "vectorex.h"
 #include <unistd.h> //fork()
 class TestObj
@@ -554,7 +583,102 @@ int main(int argc, const char* argv[])
 }
 #endif
 
+#if 1 //generic shm usage pattern
+//usage:
+//    ShmMsgQue& msgque = *(ShmMsgQue*)shmalloc(sizeof(ShmMsgQue), shmkey, SRCLINE);
+//    if (isParent) new (&msgque) ShmMsgQue(name, SRCLINE); //call ctor to init (parent only)
+//    ...
+//    if (isParent) { msgque.~ShmMsgQue(); shmfree(&msgque, SRCLINE); }
 
+#include "vectorex.h"
+#include <unistd.h> //fork()
+class TestObj
+{
+//    std::string m_name;
+    char m_name[20]; //store name directly in object so shm object doesn't use char pointer
+//    SrcLine m_srcline;
+    int m_count;
+public:
+    explicit TestObj(const char* name, SrcLine srcline = 0): /*m_name(name),*/ m_count(0) { strncpy(m_name, name, sizeof(m_name)); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
+    TestObj(const TestObj& that): /*m_name(that.m_name),*/ m_count(that.m_count) { strcpy(m_name, that.m_name); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
+    ~TestObj() { ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR); } //only used for debug
+public:
+    void print() { ATOMIC_MSG(BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name/*.c_str()*/ << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
+    int& inc() { return ++m_count; }
+};
+//template <>
+//const char* ShmAllocator<TestObj>::TYPENAME() { return "TestObj"; }
+//template <>
+//const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME() { return "std::vector<TestObj>"; }
+//template<>
+//const char* WithMutex<TestObj, true>::TYPENAME() { return "WithMutex<TestObj, true>"; }
+
+//template<typename TYPE>
+//TYPE& shmobj(typedef TYPE& Ref; //kludge: C++ doesn't like "&" on derivation line
+
+#if 0
+template <typename TYPE>
+class ShmObj: public sRef<TYPE>
+{
+public:
+//    TestObj& testobj = *(TestObj*)shmalloc(sizeof(TestObj), thread.isParent()? 0: pipe.rcv(SRCLINE), SRCLINE);
+//    if (thread.isParent()) new (&testobj) TestObj("testobj", SRCLINE); //call ctor to init (parent only)
+//    if (thread.isParent()) pipe.send(shmkey(&testobj), SRCLINE); //share shmkey with child
+//    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
+//    PERFECT_FWD2BASE_CTOR(shared, SHOBJ_TYPE&) {}
+    template<typename ... ARGS>
+    ShmObj(ARGS&& ... args, IpcThread& thread, SrcLine srcline = 0): Ref<TYPE>(*(TYPE*)shmalloc(sizeof(TYPE), thread.isParent()? 0: thread.rcv(srcline), srcline))
+    {
+        if (!thread.isParent()) return;
+        new (this) TYPE(std::forward<ARGS>(args) ..., srcline);
+        thread.send(shmkey(this));
+    }
+};
+#endif
+
+#include "ipc.h" //IpcThread(), IpcPipe()
+#include "elapsed.h" //timestamp()
+//#include <memory> //unique_ptr<>
+int main(int argc, const char* argv[])
+{
+//    IpcPipe pipe; //create pipe descriptors < fork()
+    IpcThread thread(SRCLINE);
+//    pipe.direction(owner? 1: 0);
+    if (thread.isChild()) sleep(1); //run child after parent
+    ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent": "child") << " pid " << getpid() << " start" << ENDCOLOR);
+
+#if 0 //private object
+    TestObj testobj("testobj", SRCLINE);
+#elif 1 //explicitly shared object
+//    typedef WithRefCount<TestObj> type;
+    typedef ParentOwned<TestObj> type;
+    type& testobj = *(type*)shmalloc(sizeof(type), thread.isParent()? 0: thread.rcv(SRCLINE), SRCLINE);
+    if (thread.isParent()) thread.send(shmkey(new (&testobj) type("testobj", SRCLINE)), SRCLINE); //call ctor to init, shared shmkey with child (parent only)
+    else testobj.inc();
+//    std::shared_ptr<type> clup(/*!thread.isParent()? 0:*/ &testobj, [](type* ptr) { ATOMIC_MSG("bye " << ptr->numref() << "\n"); if (ptr->dec()) return; ptr->~TestObj(); shmfree(ptr, SRCLINE); });
+    type::Scope clup(testobj, thread, [](type* ptr) { ATOMIC_MSG("bye\n"); ptr->~type(); shmfree(ptr, SRCLINE); });
+#else //automatically shared object
+//    thread.shared<TestObj> testobj("testobj", SRCLINE);
+//    Shmobj<TestObj> testobj("testobj", thread, SRCLINE);
+
+//call ctor to init, shared shmkey with child (parent only), destroy later:
+#define SHARED(ctor, thr)  \
+    *(TestObj*)shmalloc(sizeof(TestObj), thr.isParent()? 0: thr.rcv(SRCLINE), SRCLINE); \
+    if (thr.isParent()) thr.send(shmkey(new (&testobj) ctor), SRCLINE); \
+    std::shared_ptr<TestObj> dealloc(&testobj, [](TestObj* ptr){ ptr->~TestObj(); shmfree(ptr, SRCLINE); }
+
+    TestObj& testobj = SHARED(TestObj("shmobj", SRCLINE), thread);
+    IpcShared<TestObj> TestObj("shmobj", SRCLINE), thread);
+#endif
+    testobj.inc();
+    testobj.print();
+
+    ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent (waiting to)": "child") << " exit" << ENDCOLOR);
+//    if (thread.isParent()) thread.join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+//    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
+    return 0;
+}
+#endif
 
 
 
