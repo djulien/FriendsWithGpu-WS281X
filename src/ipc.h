@@ -94,6 +94,7 @@ public: //std::thread emulation
     static id get_id(void) { return getpid(); }
 //    IpcPipe& pipe() { return m_pipe; }
 public: //methods
+//    key_t ParentKeyGen(SrcLine srcline = 0) { return isParent()? 0: rcv(srcline); } //generate parent key
     void send(int value, SrcLine srcline = 0) { m_pipe->send(value, srcline); }
     int rcv(SrcLine srcline = 0) { return m_pipe->rcv(srcline); }
     void join(SrcLine srcline = 0)
@@ -123,10 +124,10 @@ private: //data
 };
 
 
+#if 0
 #define SEMI_PERFECT_FWD2BASE_CTOR(type, base)  \
     template<typename ... ARGS> \
     explicit type(ARGS&& ... args, IpcThread& thr, SrcLine srcline = 0): base(std::forward<ARGS>(args) ..., srcline)
-
 
 //parent-owned mixin class:
 template <class TYPE>
@@ -154,5 +155,6 @@ public:
     int& addref() { return ++m_count; }
     int& delref() { /*ATOMIC_MSG("dec ref " << m_count - 1 << "\n")*/; return --m_count; }
 };
+#endif
 
 #endif //ndef _IPC_H

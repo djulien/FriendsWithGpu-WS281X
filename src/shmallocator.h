@@ -616,27 +616,36 @@ public:
 //template<typename TYPE>
 //TYPE& shmobj(typedef TYPE& Ref; //kludge: C++ doesn't like "&" on derivation line
 
-#if 0
+#include "ipc.h" //IpcThread(), IpcPipe()
+
 template <typename TYPE>
-class ShmObj: public sRef<TYPE>
+class ShmScope
 {
-public:
+public: //ctor/dtor
 //    TestObj& testobj = *(TestObj*)shmalloc(sizeof(TestObj), thread.isParent()? 0: pipe.rcv(SRCLINE), SRCLINE);
-//    if (thread.isParent()) new (&testobj) TestObj("testobj", SRCLINE); //call ctor to init (parent only)
-//    if (thread.isParent()) pipe.send(shmkey(&testobj), SRCLINE); //share shmkey with child
 //    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
 //    PERFECT_FWD2BASE_CTOR(shared, SHOBJ_TYPE&) {}
     template<typename ... ARGS>
-    ShmObj(ARGS&& ... args, IpcThread& thread, SrcLine srcline = 0): Ref<TYPE>(*(TYPE*)shmalloc(sizeof(TYPE), thread.isParent()? 0: thread.rcv(srcline), srcline))
+    explicit ShmScope(ARGS&& ... args, IpcThread& thread, SrcLine srcline = 0): shmobj(*(TYPE*)shmalloc(sizeof(TYPE), thread.isParent()? 0: thread.rcv(SRCLINE), SRCLINE)), m_isparent(thread.isParent())
     {
-        if (!thread.isParent()) return;
-        new (this) TYPE(std::forward<ARGS>(args) ..., srcline);
-        thread.send(shmkey(this));
+        if (!m_isparent) return;
+        new (&shmobj) TYPE(std::forward<ARGS>(args) ..., srcline); //call ctor to init (parent only)
+        thread.send(shmkey(&shmobj), srcline); //send shmkey to child (parent only)
     }
+    ~ShmScope()
+    {
+        if (!m_isparent) return;
+        ATOMIC_MSG(BLUE_MSG << "shmobj dtor" << ENDCOLOR);
+        shmobj.~TYPE();
+        shmfree(&shmobj, SRCLINE);
+    }
+public: //wrapped object
+    TYPE& shmobj;
+private:
+    bool m_isparent;
 };
-#endif
 
-#include "ipc.h" //IpcThread(), IpcPipe()
+
 #include "elapsed.h" //timestamp()
 //#include <memory> //unique_ptr<>
 int main(int argc, const char* argv[])
@@ -649,26 +658,28 @@ int main(int argc, const char* argv[])
 
 #if 0 //private object
     TestObj testobj("testobj", SRCLINE);
-#elif 1 //explicitly shared object
-//    typedef WithRefCount<TestObj> type;
-    typedef ParentOwned<TestObj> type;
-    type& testobj = *(type*)shmalloc(sizeof(type), thread.isParent()? 0: thread.rcv(SRCLINE), SRCLINE);
-    if (thread.isParent()) thread.send(shmkey(new (&testobj) type("testobj", SRCLINE)), SRCLINE); //call ctor to init, shared shmkey with child (parent only)
-    else testobj.inc();
+#elif 0 //explicitly shared object
+//    typedef WithRefCount<TestObj> type; //NOTE: assumes parent + child access overlap
+//    typedef ShmObj<TestObj> type;
+    TestObj& testobj = *(TestObj*)shmalloc(sizeof(TestObj), thread.ParentKeyGen(SRCLINE), SRCLINE);
+    if (thread.isParent()) thread.send(shmkey(new (&testobj) TestObj("testobj", SRCLINE)), SRCLINE); //call ctor to init, shared shmkey with child (parent only)
+//    else testobj.inc();
 //    std::shared_ptr<type> clup(/*!thread.isParent()? 0:*/ &testobj, [](type* ptr) { ATOMIC_MSG("bye " << ptr->numref() << "\n"); if (ptr->dec()) return; ptr->~TestObj(); shmfree(ptr, SRCLINE); });
-    type::Scope clup(testobj, thread, [](type* ptr) { ATOMIC_MSG("bye\n"); ptr->~type(); shmfree(ptr, SRCLINE); });
+//    type::Scope clup(testobj, thread, [](type* ptr) { ATOMIC_MSG("bye\n"); ptr->~type(); shmfree(ptr, SRCLINE); });
+    std::shared_ptr<TestObj> clup(/*!thread.isParent()? 0:*/ &testobj, [thread](TestObj* ptr) { if (!thread.isParent()) return; ATOMIC_MSG("bye\n"); ptr->~TestObj(); shmfree(ptr, SRCLINE); });
 #else //automatically shared object
+    ShmScope<TestObj> scope("testobj", thread, SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    TestObj& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
 //    thread.shared<TestObj> testobj("testobj", SRCLINE);
 //    Shmobj<TestObj> testobj("testobj", thread, SRCLINE);
 
 //call ctor to init, shared shmkey with child (parent only), destroy later:
-#define SHARED(ctor, thr)  \
-    *(TestObj*)shmalloc(sizeof(TestObj), thr.isParent()? 0: thr.rcv(SRCLINE), SRCLINE); \
-    if (thr.isParent()) thr.send(shmkey(new (&testobj) ctor), SRCLINE); \
-    std::shared_ptr<TestObj> dealloc(&testobj, [](TestObj* ptr){ ptr->~TestObj(); shmfree(ptr, SRCLINE); }
-
-    TestObj& testobj = SHARED(TestObj("shmobj", SRCLINE), thread);
-    IpcShared<TestObj> TestObj("shmobj", SRCLINE), thread);
+//#define SHARED(ctor, thr)  \
+//    *(TestObj*)shmalloc(sizeof(TestObj), thr.isParent()? 0: thr.rcv(SRCLINE), SRCLINE); \
+//    if (thr.isParent()) thr.send(shmkey(new (&testobj) ctor), SRCLINE); \
+//    std::shared_ptr<TestObj> dealloc(&testobj, [](TestObj* ptr){ ptr->~TestObj(); shmfree(ptr, SRCLINE); }
+//    TestObj& testobj = SHARED(TestObj("shmobj", SRCLINE), thread);
+//    IpcShared<TestObj> TestObj("shmobj", SRCLINE), thread);
 #endif
     testobj.inc();
     testobj.print();
