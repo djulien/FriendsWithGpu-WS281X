@@ -49,6 +49,7 @@
 // http://www.stroustrup.com/wrapper.pdf
 // https://stackoverflow.com/questions/24915818/c-forward-method-calls-to-embed-object-without-inheritance
 // https://stackoverflow.com/questions/13800449/c11-how-to-proxy-class-function-having-only-its-name-and-parent-class/13885092#13885092
+// http://cpptruths.blogspot.com/2012/06/perfect-forwarding-of-parameter-groups.html
 #define PERFECT_FWD2BASE_CTOR(type, base)  \
     template<typename ... ARGS> \
     explicit type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
@@ -600,7 +601,7 @@ class TestObj
     int m_count;
 public:
     explicit TestObj(const char* name, SrcLine srcline = 0): /*m_name(name),*/ m_count(0) { strncpy(m_name, name, sizeof(m_name)); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
-    TestObj(const TestObj& that): /*m_name(that.m_name),*/ m_count(that.m_count) { strcpy(m_name, that.m_name); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
+    explicit TestObj(const TestObj& that): /*m_name(that.m_name),*/ m_count(that.m_count) { strcpy(m_name, that.m_name); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
     ~TestObj() { ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR); } //only used for debug
 public:
     void print() { ATOMIC_MSG(BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name/*.c_str()*/ << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
@@ -626,10 +627,10 @@ public: //ctor/dtor
 //    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
 //    PERFECT_FWD2BASE_CTOR(shared, SHOBJ_TYPE&) {}
     template<typename ... ARGS>
-    explicit ShmScope(ARGS&& ... args, IpcThread& thread, SrcLine srcline = 0): shmobj(*(TYPE*)shmalloc(sizeof(TYPE), thread.isParent()? 0: thread.rcv(SRCLINE), SRCLINE)), m_isparent(thread.isParent())
+    explicit ShmScope(IpcThread& thread, SrcLine srcline = 0, ARGS&& ... args): shmobj(*(TYPE*)shmalloc(sizeof(TYPE), thread.isParent()? 0: thread.rcv(SRCLINE), SRCLINE)), m_isparent(thread.isParent())
     {
         if (!m_isparent) return;
-        new (&shmobj) TYPE(std::forward<ARGS>(args) ..., srcline); //call ctor to init (parent only)
+        new (&shmobj) TYPE(std::forward<ARGS>(args) ...); //, srcline); //call ctor to init (parent only)
         thread.send(shmkey(&shmobj), srcline); //send shmkey to child (parent only)
     }
     ~ShmScope()
@@ -668,7 +669,7 @@ int main(int argc, const char* argv[])
 //    type::Scope clup(testobj, thread, [](type* ptr) { ATOMIC_MSG("bye\n"); ptr->~type(); shmfree(ptr, SRCLINE); });
     std::shared_ptr<TestObj> clup(/*!thread.isParent()? 0:*/ &testobj, [thread](TestObj* ptr) { if (!thread.isParent()) return; ATOMIC_MSG("bye\n"); ptr->~TestObj(); shmfree(ptr, SRCLINE); });
 #else //automatically shared object
-    ShmScope<TestObj> scope("testobj", thread, SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    ShmScope<TestObj> scope(thread, SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
     TestObj& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
 //    thread.shared<TestObj> testobj("testobj", SRCLINE);
 //    Shmobj<TestObj> testobj("testobj", thread, SRCLINE);
