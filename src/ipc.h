@@ -17,8 +17,8 @@ private: //data members
     int m_fd[2];
 //    bool m_open[2];
 public: //ctor
-    IpcPipe(SrcLine srcline = 0): m_fd{-1, -1} { ATOMIC_MSG(BLUE_MSG << "IpcPipe ctor" << ENDCOLOR_ATLINE(srcline)); pipe(m_fd); } //m_open[0] = m_open[1] = true; } //create pipe descriptors < fork()
-    ~IpcPipe() { pipe_close(ReadEnd); pipe_close(WriteEnd); ATOMIC_MSG(BLUE_MSG << "IpcPipe dtor" << ENDCOLOR); }
+    IpcPipe(SrcLine srcline = 0): m_fd{-1, -1} { ATOMIC_MSG(BLUE_MSG << timestamp() << "IpcPipe ctor" << ENDCOLOR_ATLINE(srcline)); pipe(m_fd); } //m_open[0] = m_open[1] = true; } //create pipe descriptors < fork()
+    ~IpcPipe() { pipe_close(ReadEnd); pipe_close(WriteEnd); ATOMIC_MSG(BLUE_MSG << timestamp() << "IpcPipe dtor" << ENDCOLOR); }
 public: //methods
 //no    const int Parent2Child = 0, Child2Parent = 1;
     const int ReadEnd = 0, WriteEnd = 1;
@@ -34,7 +34,7 @@ public: //methods
         pipe_close(1 - which);
 //ATOMIC_MSG("pipe write[" << which << "]" << ENDCOLOR);
         ssize_t wrlen = write(m_fd[which], &value, sizeof(value));
-        ATOMIC_MSG(((wrlen == sizeof(value))? BLUE_MSG: RED_MSG) << "parent '" << getpid() << "' send len " << wrlen << FMT(", value 0x%lx") << value << " to child" << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(((wrlen == sizeof(value))? BLUE_MSG: RED_MSG) << timestamp() << "parent '" << getpid() << "' send len " << wrlen << FMT(", value 0x%lx") << value << " to child" << ENDCOLOR_ATLINE(srcline));
         if (wrlen == -1) throw std::runtime_error(strerror(errno)); //write failed
 //        close(m_fd[1]);
     }
@@ -46,7 +46,7 @@ public: //methods
         pipe_close(1 - which);
 //ATOMIC_MSG("pipe read[" << which << "]" << ENDCOLOR);
         ssize_t rdlen = read(m_fd[which], &retval, sizeof(retval)); //NOTE: blocks until data received
-        ATOMIC_MSG(((rdlen == sizeof(retval))? BLUE_MSG: RED_MSG) << "child '" << getpid() << "' rcv len " << rdlen << FMT(", value 0x%lx") << retval << " from parent" << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(((rdlen == sizeof(retval))? BLUE_MSG: RED_MSG) << timestamp() << "child '" << getpid() << "' rcv len " << rdlen << FMT(", value 0x%lx") << retval << " from parent" << ENDCOLOR_ATLINE(srcline));
         if (rdlen == -1) throw std::runtime_error(strerror(errno)); //read failed
 //        close(m_fd[0]);
         return retval;
@@ -63,6 +63,8 @@ private: //helpers:
 };
 
 
+#include <algorithm> //std::find()
+#include <vector> //std::vector<>
 class IpcThread
 {
 public: //ctor/dtor
@@ -75,6 +77,7 @@ public: //ctor/dtor
     explicit IpcThread(SrcLine srcline = 0): IpcThread(*new IpcPipe(srcline), srcline) {}
     explicit IpcThread(IpcPipe& pipe, SrcLine srcline = 0) //: m_pipe(pipe)
     {
+        all.push_back(this); //keep track of inst; let caller use global var
         m_pid = fork();
         m_pipe.reset(&pipe); //NOTE: pipe must be cre < fork
         const char* proctype = isParent()? "parent": "child";
@@ -88,7 +91,12 @@ public: //ctor/dtor
         ATOMIC_MSG(RED_MSG << timestamp() << "child " << getpid() << " exit" << ENDCOLOR);
         exit(0); //kludge; don't want to execute remainder of caller
     }
-    ~IpcThread() { if (isParent()) join(SRCLINE); } //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+    ~IpcThread()
+    {
+        if (isParent()) join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+        auto inx = find(all.begin(), all.end(), this);
+        if (inx != all.end()) all.erase(inx);
+    }
 public: //std::thread emulation
     typedef pid_t id;
     static id get_id(void) { return getpid(); }
@@ -121,7 +129,10 @@ public: //nested class shm wrapper
 private: //data
     pid_t m_pid; //child pid (valid in parent only)
     std::shared_ptr<IpcPipe> m_pipe;
+public:
+    static std::vector<IpcThread*> all;
 };
+std::vector<IpcThread*> IpcThread::all;
 
 
 #if 0

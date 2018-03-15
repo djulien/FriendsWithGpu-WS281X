@@ -3,8 +3,11 @@
 #ifndef _ELAPSED_H
 #define _ELAPSED_H
 
+ 
 //std::chrono::duration<double> elapsed()
 #include <chrono>
+//#include <iostream> //std::ostringstream, std::ostream
+//#include <iomanip> //setfill, setw, etc
 double elapsed_msec()
 {
     static auto started = std::chrono::high_resolution_clock::now(); //std::chrono::system_clock::now();
@@ -12,6 +15,29 @@ double elapsed_msec()
 //    auto end = std::chrono::system_clock::now();
 //     std::chrono::duration<double> elapsed_seconds = end-start;    
 //    long sec = std::chrono::system_clock::now() - started;
+#if 0
+    static bool first = true;
+    if (first)
+    {
+        first = false;
+        std::ostringstream op;
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(&started);
+//convert 'struct' into 'hex string'
+//from https://www.geeksforgeeks.org/conversion-of-struct-data-type-to-hex-string-and-vice-versa/
+//void convert_to_hex_string(ostringstream &op, const unsigned char* data, int size)
+        std::ostream::fmtflags old_flags = op.flags(); //Format flags
+        char old_fill  = op.fill();
+        op << std::hex << std::setfill('0'); //Fill characters
+        for (int i = 0; i < sizeof(started); i++)
+        {
+            if (i) op << ' '; //space between two hex values
+            op << "0x" << std::setw(2) << static_cast<int>(data[i]); //force output to use hex version of ascii code
+        }
+        op.flags(old_flags);
+        op.fill(old_fill);
+        std::cout << "elapsed epoch " << std::hex << op.str() /*time_point*/ << "\n" << std::flush;
+    }
+#endif
     auto now = std::chrono::high_resolution_clock::now(); //std::chrono::system_clock::now();
 //https://stackoverflow.com/questions/14391327/how-to-get-duration-as-int-millis-and-float-seconds-from-chrono
 //http://en.cppreference.com/w/cpp/chrono

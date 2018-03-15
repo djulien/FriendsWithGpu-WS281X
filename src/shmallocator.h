@@ -32,7 +32,7 @@
 //#include <string> //https://stackoverflow.com/questions/6320995/why-i-cannot-cout-a-string
 #include <stdexcept>
 #include "ostrfmt.h"
-#include "elapsed.h"
+#include "elapsed.h" //timestamp()
 #include "atomic.h"
 #include "shmalloc.h"
 #include "colors.h"
@@ -50,6 +50,7 @@
 // https://stackoverflow.com/questions/24915818/c-forward-method-calls-to-embed-object-without-inheritance
 // https://stackoverflow.com/questions/13800449/c11-how-to-proxy-class-function-having-only-its-name-and-parent-class/13885092#13885092
 // http://cpptruths.blogspot.com/2012/06/perfect-forwarding-of-parameter-groups.html
+// http://en.cppreference.com/w/cpp/utility/functional/bind
 #define PERFECT_FWD2BASE_CTOR(type, base)  \
     template<typename ... ARGS> \
     explicit type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
@@ -165,14 +166,14 @@ public:
 public: //ctor/dtor
     MutexWithFlag(): islocked(false) {}
 //    ~MutexWithFlag() { if (islocked) unlock(); }
-    ~MutexWithFlag() { ATOMIC_MSG(BLUE_MSG << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); if (islocked) unlock(); }
+    ~MutexWithFlag() { ATOMIC_MSG(BLUE_MSG << timestamp() << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); if (islocked) unlock(); }
 public: //member functions
     void lock() { debug("lock"); std::mutex::lock(); islocked = true; }
     void unlock() { debug("unlock"); islocked = false; std::mutex::unlock(); }
 //    static void unlock(MutexWithFlag* ptr) { ptr->unlock(); } //custom deleter for use with std::unique_ptr
     static const char* TYPENAME();
 private:
-    void debug(const char* func) { ATOMIC_MSG(YELLOW_MSG << func << ENDCOLOR); }
+    void debug(const char* func) { ATOMIC_MSG(YELLOW_MSG << timestamp() << func << ENDCOLOR); }
 };
 const char* MutexWithFlag::TYPENAME() { return "MutexWithFlag"; }
 
@@ -232,7 +233,7 @@ public: //ctor/dtor
     PERFECT_FWD2BASE_CTOR(WithMutex, TYPE) {} //std::cout << "with mutex\n"; } //, islocked(m_mutex.islocked /*false*/) {} //derivation
 //    PERFECT_FWD2BASE_CTOR(WithMutex, m_wrapped), m_locked(false) {} //wrapped
 //    Mutexed(TYPE* ptr):
-    ~WithMutex() { ATOMIC_MSG(BLUE_MSG << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); }
+    ~WithMutex() { ATOMIC_MSG(BLUE_MSG << timestamp() << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); }
 //    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
 private:
 //protected:
@@ -286,6 +287,9 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 #endif
     inline unlock_later operator->() { return unlock_later(this); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 //    inline unlock_later/*&&*/ operator->() { m_mutex.lock(); return unlock_later(this, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+//alternate approach: perfect forwarding without operator->; generates more code
+//TODO?    template<typename ... ARGS> \
+//    type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
     static const char* TYPENAME();
 #if 0
     inline unlock_later/*&&*/ operator->() { return unlock_later(this); }
@@ -600,19 +604,19 @@ class TestObj
 //    SrcLine m_srcline;
     int m_count;
 public:
-    explicit TestObj(const char* name, SrcLine srcline = 0): /*m_name(name),*/ m_count(0) { strncpy(m_name, name, sizeof(m_name)); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
-    explicit TestObj(const TestObj& that): /*m_name(that.m_name),*/ m_count(that.m_count) { strcpy(m_name, that.m_name); ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
-    ~TestObj() { ATOMIC_MSG(CYAN_MSG << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR); } //only used for debug
+    explicit TestObj(const char* name, SrcLine srcline = 0): /*m_name(name),*/ m_count(0) { strncpy(m_name, name, sizeof(m_name)); ATOMIC_MSG(CYAN_MSG << timestamp() << FMT("TestObj@%p") << this << " '" << name << "' ctor" << ENDCOLOR_ATLINE(srcline)); }
+    explicit TestObj(const TestObj& that): /*m_name(that.m_name),*/ m_count(that.m_count) { strcpy(m_name, that.m_name); ATOMIC_MSG(CYAN_MSG << timestamp() << FMT("TestObj@%p") << this << " '" << m_name << FMT("' copy ctor from %p") << that << ENDCOLOR); }
+    ~TestObj() { ATOMIC_MSG(CYAN_MSG << timestamp() << FMT("TestObj@%p") << this << " '" << m_name << "' dtor" << ENDCOLOR); } //only used for debug
 public:
-    void print() { ATOMIC_MSG(BLUE_MSG << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name/*.c_str()*/ << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
+    void print() { ATOMIC_MSG(BLUE_MSG << timestamp() << "TestObj.print: (name" << FMT("@%p") << &m_name << FMT(" contents@%p") << m_name/*.c_str()*/ << " '" << m_name << "', count" << FMT("@%p") << &m_count << " " << m_count << ")" << ENDCOLOR); }
     int& inc() { return ++m_count; }
 };
 //template <>
 //const char* ShmAllocator<TestObj>::TYPENAME() { return "TestObj"; }
 //template <>
 //const char* ShmAllocator<std::vector<TestObj, ShmAllocator<TestObj>>>::TYPENAME() { return "std::vector<TestObj>"; }
-//template<>
-//const char* WithMutex<TestObj, true>::TYPENAME() { return "WithMutex<TestObj, true>"; }
+template<>
+const char* WithMutex<TestObj, true>::TYPENAME() { return "WithMutex<TestObj, true>"; }
 
 //template<typename TYPE>
 //TYPE& shmobj(typedef TYPE& Ref; //kludge: C++ doesn't like "&" on derivation line
@@ -626,17 +630,20 @@ public: //ctor/dtor
 //    TestObj& testobj = *(TestObj*)shmalloc(sizeof(TestObj), thread.isParent()? 0: pipe.rcv(SRCLINE), SRCLINE);
 //    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
 //    PERFECT_FWD2BASE_CTOR(shared, SHOBJ_TYPE&) {}
+#define thread  IpcThread::all[0]
     template<typename ... ARGS>
-    explicit ShmScope(IpcThread& thread, SrcLine srcline = 0, ARGS&& ... args): shmobj(*(TYPE*)shmalloc(sizeof(TYPE), thread.isParent()? 0: thread.rcv(SRCLINE), SRCLINE)), m_isparent(thread.isParent())
+    explicit ShmScope(/*IpcThread& thread,*/ SrcLine srcline = 0, ARGS&& ... args): shmobj(*(TYPE*)shmalloc(sizeof(TYPE), thread->isParent()? 0: thread->rcv(srcline), srcline)), m_isparent(thread->isParent())
     {
+        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope ctor" << ENDCOLOR_ATLINE(srcline));
         if (!m_isparent) return;
         new (&shmobj) TYPE(std::forward<ARGS>(args) ...); //, srcline); //call ctor to init (parent only)
-        thread.send(shmkey(&shmobj), srcline); //send shmkey to child (parent only)
+        thread->send(shmkey(&shmobj), srcline); //send shmkey to child (parent only)
     }
+#undef thread
     ~ShmScope()
     {
+        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope dtor" << ENDCOLOR);
         if (!m_isparent) return;
-        ATOMIC_MSG(BLUE_MSG << "shmobj dtor" << ENDCOLOR);
         shmobj.~TYPE();
         shmfree(&shmobj, SRCLINE);
     }
@@ -669,8 +676,10 @@ int main(int argc, const char* argv[])
 //    type::Scope clup(testobj, thread, [](type* ptr) { ATOMIC_MSG("bye\n"); ptr->~type(); shmfree(ptr, SRCLINE); });
     std::shared_ptr<TestObj> clup(/*!thread.isParent()? 0:*/ &testobj, [thread](TestObj* ptr) { if (!thread.isParent()) return; ATOMIC_MSG("bye\n"); ptr->~TestObj(); shmfree(ptr, SRCLINE); });
 #else //automatically shared object
-    ShmScope<TestObj> scope(thread, SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
-    TestObj& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+    typedef WithMutex<TestObj> type;
+//    ShmScope<type> scope(thread, SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    ShmScope<type> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    type& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
 //    thread.shared<TestObj> testobj("testobj", SRCLINE);
 //    Shmobj<TestObj> testobj("testobj", thread, SRCLINE);
 
@@ -682,11 +691,11 @@ int main(int argc, const char* argv[])
 //    TestObj& testobj = SHARED(TestObj("shmobj", SRCLINE), thread);
 //    IpcShared<TestObj> TestObj("shmobj", SRCLINE), thread);
 #endif
-    testobj.inc();
-    testobj.print();
+    testobj.inc(); //testobj->inc();
+    testobj.print(); //testobj->print();
 
     ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent (waiting to)": "child") << " exit" << ENDCOLOR);
-//    if (thread.isParent()) thread.join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+    if (thread.isParent()) thread.join(SRCLINE); //don't let parent go out of scope before child (parent calls testobj dtor, not child); NOTE: blocks until child state changes
 //    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
     return 0;
 }
