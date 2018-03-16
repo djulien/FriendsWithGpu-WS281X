@@ -13,6 +13,11 @@
 #include <mutex>
 #include <condition_variable>
 //for example see http://en.cppreference.com/w/cpp/thread/condition_variable
+#include "shmalloc.h"
+
+#ifndef WANT_DETAILS
+ #define WANT_DETAILS  0
+#endif
 
 
 #if 1 //new def; shm-compatible
@@ -22,27 +27,36 @@
 //    ...
 //    if (isParent) { msgque.~ShmMsgQue(); shmfree(&msgque, SRCLINE); }
 
+//#define SINGLE_THREADED  0
+//#define MULTI_THREADED  1
+//#define MULTI_PROCESS  -1
+//template <bool IPC>
+
+//safe for multi-threading (uses mutex):
 class MsgQue//Base
-//#endif
 {
 public: //ctor/dtor
-    explicit MsgQue(const char* name = 0, VOLATILE std::mutex& mutex = /*std::mutex()*/ shared_mutex): m_msg(0), m_mutex(mutex)
+//    explicit MsgQue(const char* name = 0, VOLATILE std::mutex& mutex = /*std::mutex()*/ shared_mutex): m_msg(0), m_mutex(mutex)
+    explicit MsgQue(const char* name = 0): m_msg(0)
     {
-        /*if (WANT_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
+//        /*if (WANT_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
+//        strncpy(m_name, "MsgQue-", sizeof(m_name));
+        strncpy(m_name, (name && *name)? name: "(unnamed)", sizeof(m_name));
     }
     ~MsgQue()
     {
-        if (m_msg /*&& WANT_DETAILS*/) ATOMIC_MSG(RED_MSG << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR) //benign, but might be caller bug so complain
-        else ATOMIC_MSG(GREEN_MSG << m_name << ".dtor: empty @exit" << ENDCOLOR);
+        if (m_msg /*&& WANT_DETAILS*/) ATOMIC_MSG(RED_MSG << timestamp() << "MsgQue-" << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR) //benign, but might be caller bug so complain
+        else ATOMIC_MSG(GREEN_MSG << timestamp() << "MsgQue-" << m_name << ".dtor: empty @exit" << ENDCOLOR);
 //        if (m_autodel) delete this;
     }
+public: //mem alloc
 #if 0
     static void* operator new(size_t size, const char* srcfile, int srcline, bool autodel = false)
     {
         void* ptr = new char[size];
         const char* bp = strrchr(srcfile, '/');
         if (bp) srcfile = bp + 1;
-        ATOMIC_MSG(YELLOW_MSG << "alloc size " << size << " at adrs " << FMT("0x%x") << ptr << ", autodef? " << autodel << " from " << srcfile << ":" << srcline << ENDCOLOR << std::flush);
+        ATOMIC_MSG(YELLOW_MSG << timestamp() << "alloc size " << size << " at adrs " << FMT("0x%x") << ptr << ", autodef? " << autodel << " from " << srcfile << ":" << srcline << ENDCOLOR << std::flush);
 //        if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
 //        m_autodel = autodel; //won't work with static method
 //        if (autodel)
@@ -55,11 +69,13 @@ public: //ctor/dtor
     {
   //      shmheap.dealloc(ptr);
         delete ptr;
-        ATOMIC_MSG(YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
+        ATOMIC_MSG(YELLOW_MSG << timestamp() << "dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
     }
 #endif
 public: //getters
     inline VOLATILE std::mutex& mutex() { return m_mutex; } //in case caller wants to share between instances
+public: //methods
+//    MsgQue& clear() { m_msg = 0; return *this; } //fluent
 public: //methods
     MsgQue& clear()
     {
@@ -77,21 +93,21 @@ public: //methods
         if (m_msg & msg) throw "MsgQue.send: msg already queued"; // + tostr(msg) + " already queued");
         m_msg |= msg; //use bitmask for multiple msgs
         if (!(m_msg & msg)) throw "MsgQue.send: msg enqueue failed"; // + tostr(msg) + " failed");
-        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << "MssgQue-" << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
         if (!broadcast) m_condvar.notify_one(); //wake main thread
         else m_condvar.notify_all(); //wake *all* wker threads
         return *this; //fluent
     }
 //rcv filters:
-    bool wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
-    bool not_wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
+    bool wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
+    bool not_wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
 //    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
     int rcv(bool (MsgQue::*filter)(int val), int operand = 0, bool remove = false)
     {
         std::unique_lock<VOLATILE std::mutex> scoped_lock(m_mutex);
 //        scoped_lock lock;
 //        m_condvar.wait(scoped_lock());
-        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << "MsgQue-" << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
         while (!(this->*filter)(operand)) m_condvar.wait(scoped_lock); //ignore spurious wakeups
         int retval = m_msg;
         if (remove) m_msg = 0;
@@ -140,10 +156,11 @@ private: //helpers
 //protected:
 private: //data
 //    static std::mutex my_mutex; //assume low usage, share across all signals
-    VOLATILE std::mutex& m_mutex;
+    VOLATILE std::mutex m_mutex;
     std::condition_variable m_condvar;
 //    int m_msg[MAXLEN], m_count;
-    std::string m_name; //for debug only
+//    std::string m_name; //for debug only
+    char m_name[20]; //store name directly in object so shm object doesn't use char pointer
     /*volatile*/ int m_msg;
 };
 #endif
@@ -162,7 +179,7 @@ private: //data
 //single process queue:
 //can be accessed by multiple threads within same process
 //class MsgQue: public MsgQueBase
-#if 1 //old def (working)
+#if 0 //old def (working)
 #define VOLATILE  //volatile //TODO: is this needed for multi-threaded app?
 static VOLATILE std::mutex shared_mutex;
 
