@@ -1,17 +1,9 @@
-//malloc emulator for shared memory
+//shared memory allocator
+//see https://www.ibm.com/developerworks/aix/tutorials/au-memorymanager/index.html
+//see also http://anki3d.org/cpp-allocators-for-games/
 
-#ifndef _SHMALLOC_H
-#define _SHMALLOC_H
-
-#include <iostream> //stsd::cout, std::flush
-#include <sys/ipc.h>
-#include <sys/shm.h>
-#include <errno.h>
-#include <stdexcept>
-#include "colors.h"
-#include "ostrfmt.h"
-#include "atomic.h"
-#include "elapsed.h" //timestamp()
+//CAUTION: “static initialization order fiasco”
+//https://isocpp.org/wiki/faq/ctors
 
 //to look at shm:
 // ipcs -m 
@@ -19,8 +11,37 @@
 // ipcrm -M <key>
 
 
+// https://stackoverflow.com/questions/5656530/how-to-use-shared-memory-with-linux-in-c
+// https://stackoverflow.com/questions/4836863/shared-memory-or-mmap-linux-c-c-ipc
+//    you identify your shared memory segment with some kind of symbolic name, something like "/myRegion"
+//    with shm_open you open a file descriptor on that region
+//    with ftruncate you enlarge the segment to the size you need
+//    with mmap you map it into your address space
+
+#ifndef _SHMALLOC_H
+#define _SHMALLOC_H
+
+//#include <iostream> //std::cout, std::flush
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <errno.h>
+#include <stdexcept>
+#include <memory> //std::deleter
+#include <atomic>
+
+#include "msgcolors.h"
+#include "ostrfmt.h"
+#include "atomic.h"
+#include "elapsed.h" //timestamp()
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Low-level shamlloc/shmfree (malloc/free emulator)
+//
+
 //stash some info within shmem block returned to caller:
-#define SHM_MAGIC  0xfeedbeef //marker to detcet valid shmem block
+#define SHM_MAGIC  0xfeedbeef //marker to detect valid shmem block
 typedef struct { int id; key_t key; size_t size; uint32_t marker; } ShmHdr;
 
 
@@ -99,6 +120,532 @@ struct shmdeleter
 //        delete p;
 //    }
 };
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Higher level utility/mixin classes
+//
+
+#define SIZEOF(thing)  (sizeof(thing) / sizeof(thing[0]))
+#define divup(num, den)  (((num) + (den) - 1) / (den))
+#define rdup(num, den)  (divup(num, den) * (den))
+//#define size32_t  uint32_t //don't need huge sizes in shared memory; cut down on wasted bytes
+
+#define MAKE_TYPENAME(type)  template<> const char* type::TYPENAME() { return #type; }
+
+
+//"perfect forwarding" (typesafe args) to ctor:
+//proxy/perfect forwarding info:
+// http://www.stroustrup.com/wrapper.pdf
+// https://stackoverflow.com/questions/24915818/c-forward-method-calls-to-embed-object-without-inheritance
+// https://stackoverflow.com/questions/13800449/c11-how-to-proxy-class-function-having-only-its-name-and-parent-class/13885092#13885092
+// http://cpptruths.blogspot.com/2012/06/perfect-forwarding-of-parameter-groups.html
+// http://en.cppreference.com/w/cpp/utility/functional/bind
+#define PERFECT_FWD2BASE_CTOR(type, base)  \
+    template<typename ... ARGS> \
+    explicit type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
+//special handling for last param:
+
+#define NEAR_PERFECT_FWD2BASE_CTOR(type, base)  \
+    template<typename ... ARGS> \
+    explicit type(ARGS&& ... args, key_t key = 0): base(std::forward<ARGS>(args) ..., key)
+
+
+#define PAGE_SIZE  4096 //NOTE: no Userland #define for this, so set it here and then check it at run time; https://stackoverflow.com/questions/37897645/page-size-undeclared-c
+#if 0
+#include <unistd.h> //sysconf()
+//void check_page_size()
+int main_other(int argc, const char* argv[]);
+//template <typename... ARGS >
+//int main_other(ARGS&&... args)
+//{ if( a<b ) std::bind( std::forward<FN>(fn), std::forward<ARGS>(args)... )() ; }
+int main(int argc, const char* argv[])
+#define main  main_other
+{
+    int pagesize = sysconf(_SC_PAGESIZE);
+    if (pagesize != PAGE_SIZE) ATOMIC_MSG(RED_MSG << "PAGE_SIZE incorrect: is " << pagesize << ", expected " << PAGE_SIZE << ENDCOLOR)
+    else ATOMIC_MSG(GREEN_MSG << "PAGE_SIZE correct: " << pagesize << ENDCOLOR);
+    return main(argc, argv);
+}
+#endif
+
+
+//minimal memory pool:
+//can be used with stl containers, but will only reclaim/dealloc space at highest used address
+//NOTE: do not store pointers; addresses can vary between processes
+//use shmalloc + placement new to put this in shared memory
+//NOTE: no key/symbol mgmt here; use a separate lkup sttr or container
+template <int SIZE> //, int PAGESIZE = 0x1000>
+class MemPool
+{
+//    SrcLine m_srcline;
+public:
+    MemPool(SrcLine srcline = 0): m_storage{2} { debug(srcline); } // { m_storage[0] = 1; } //: m_used(m_storage[0]) { m_used = 0; }
+    ~MemPool() { ATOMIC_MSG(YELLOW_MSG << timestamp() << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); }
+public:
+    inline size_t used(size_t req = 0) { return (m_storage[0] + req) * sizeof(m_storage[0]); }
+    inline size_t avail() { return (SIZEOF(m_storage) - m_storage[0]) * sizeof(m_storage[0]); }
+//    inline void save() { m_storage[1] = m_storage[0]; }
+//    inline void restore() { m_storage[0] = m_storage[1]; }
+    inline size_t nextkey() { return m_storage[0]; }
+    void* alloc(size_t count, size_t key, SrcLine srcline = 0) //repeat a previous alloc()
+    {
+        size_t saved = m_storage[0];
+        m_storage[0] = key;
+        void* retval = alloc(count, srcline);
+        m_storage[0] = saved;
+        return retval;
+    }
+    /*virtual*/ void* alloc(size_t count, SrcLine srcline = 0)
+    {
+        if (count < 1) return nullptr;
+        count = divup(count, sizeof(m_storage[0])); //for alignment
+        ATOMIC_MSG(BLUE_MSG << timestamp() << timestamp() << "MemPool: alloc count " << count << ", used(req) " << used(count + 1) << " vs size " << sizeof(m_storage) << ENDCOLOR_ATLINE(srcline));
+        if (used(count + 1) > sizeof(m_storage)) enlarge(used(count + 1));
+        m_storage[m_storage[0]++] = count;
+        void* ptr = &m_storage[m_storage[0]];
+        m_storage[0] += count;
+        ATOMIC_MSG(YELLOW_MSG << timestamp() << "MemPool: allocated " << count << " octobytes at " << FMT("%p") << ptr << ", used " << used() << ", avail " << avail() << ENDCOLOR);
+        return ptr; //malloc(count);
+    }
+    /*virtual*/ void free(void* addr, SrcLine srcline = 0)
+    {
+//        free(ptr);
+        size_t inx = ((intptr_t)addr - (intptr_t)m_storage) / sizeof(m_storage[0]);
+        if ((inx < 1) || (inx >= SIZE)) ATOMIC_MSG(RED_MSG << "inx " << inx << ENDCOLOR);
+        if ((inx < 1) || (inx >= SIZE)) throw std::bad_alloc();
+        size_t count = m_storage[--inx] + 1;
+        ATOMIC_MSG(BLUE_MSG << timestamp() << "MemPool: deallocate count " << count << " at " << FMT("%p") << addr << ", reclaim " << m_storage[0] << " == " << inx << " + " << count << "? " << (m_storage[0] == inx + count) << ENDCOLOR_ATLINE(srcline));
+        if (m_storage[0] == inx + count) m_storage[0] -= count; //only reclaim at end of pool (no other addresses will change)
+        ATOMIC_MSG(YELLOW_MSG << timestamp() << "MemPool: deallocated " << count << " octobytes at " << FMT("%p") << addr << ", used " << used() << ", avail " << avail() << ENDCOLOR);
+    }
+    /*virtual*/ void enlarge(size_t count, SrcLine srcline = 0)
+    {
+        count = rdup(count, PAGE_SIZE / sizeof(m_storage[0]));
+        ATOMIC_MSG(RED_MSG << timestamp() << "MemPool: want to enlarge " << count << " octobytes" << ENDCOLOR_ATLINE(srcline));
+        throw std::bad_alloc(); //TODO
+    }
+    static const char* TYPENAME();
+//private:
+#define EXTRA  2
+    void debug(SrcLine srcline = 0) { ATOMIC_MSG(BLUE_MSG << timestamp() << "MemPool: size " << SIZE << " (" << sizeof(*this) << " actually) = #elements " << (SIZEOF(m_storage) - 1) << "+1, sizeof(units) " << sizeof(m_storage[0]) << ENDCOLOR_ATLINE(srcline)); }
+//    typedef struct { size_t count[1]; uint32_t data[0]; } entry;
+    size_t m_storage[EXTRA + divup(SIZE, sizeof(size_t))]; //first element = used count
+//    size_t& m_used;
+};
+//NOTE: caller might need to define these:
+//template<>
+//const char* MemPool<40>::TYPENAME() { return "MemPool<40>"; }
+
+
+//mutex with lock indicator:
+//lock flag is atomic to avoid extra locks
+class MutexWithFlag: public std::mutex
+{
+public:
+//use atomic data member rather than a getter so caller doesn't need to lock/unlock each time just to check locked flag
+    std::atomic<bool> islocked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
+public: //ctor/dtor
+    MutexWithFlag(): islocked(false) {}
+//    ~MutexWithFlag() { if (islocked) unlock(); }
+    ~MutexWithFlag() { ATOMIC_MSG(BLUE_MSG << timestamp() << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); if (islocked) unlock(); }
+public: //member functions
+    void lock() { debug("lock"); std::mutex::lock(); islocked = true; }
+    void unlock() { debug("unlock"); islocked = false; std::mutex::unlock(); }
+//    static void unlock(MutexWithFlag* ptr) { ptr->unlock(); } //custom deleter for use with std::unique_ptr
+    static const char* TYPENAME();
+private:
+    void debug(const char* func) { ATOMIC_MSG(YELLOW_MSG << timestamp() << func << ENDCOLOR); }
+};
+const char* MutexWithFlag::TYPENAME() { return "MutexWithFlag"; }
+
+
+#if 0
+//ref count mixin class:
+template <class TYPE>
+class WithRefCount: public TYPE
+{
+    int m_count;
+public: //ctor/dtor
+    PERFECT_FWD2BASE_CTOR(WithRefCount, TYPE), m_count(0) { /*addref()*/; } //std::cout << "with mutex\n"; } //, islocked(m_mutex.islocked /*false*/) {} //derivation
+    ~WithRefCount() { /*delref()*/; }
+public: //helper class to clean up ref count
+    typedef WithRefCount<TYPE> type;
+    typedef void (*_Destructor)(type*); //void* data); //TODO: make generic?
+    class Scope
+    {
+        type& m_obj;
+        _Destructor& m_clup;
+    public: //ctor/dtor
+        Scope(type& obj, _Destructor&& clup): m_obj(obj), m_clup(clup) { m_obj.addref(); }
+        ~Scope() { if (!m_obj.delref()) m_clup(&m_obj); }
+    };
+//    std::shared_ptr<type> clup(/*!thread.isParent()? 0:*/ &testobj, [](type* ptr) { ATOMIC_MSG("bye " << ptr->numref() << "\n"); if (ptr->dec()) return; ptr->~TestObj(); shmfree(ptr, SRCLINE); });
+public:
+    int& numref() { return m_count; }
+    int& addref() { return ++m_count; }
+    int& delref() { /*ATOMIC_MSG("dec ref " << m_count - 1 << "\n")*/; return --m_count; }
+};
+#endif
+
+
+//mutex mixin class:
+//3 ways to wrap parent class methods:
+//    void* ptr1 = pool20->alloc(10);
+//    void* ptr2 = pool20()().alloc(4);
+//    void* ptr3 = pool20.base().base().alloc(1);
+// https://stackoverflow.com/questions/4421706/what-are-the-basic-rules-and-idioms-for-operator-overloading?rq=1
+//NOTE: operator-> is the only one that is applied recursively until a non-class is returned, and then it needs a pointer
+
+
+//used to attach mutex directly to another object type (same memory space)
+//optional auto lock/unlock around access to methods
+//also wraps all method calls via operator-> with mutex lock/unlock
+template <class TYPE, bool AUTO_LOCK = true> //derivation
+//class WithMutex //mixin/wrapper
+class WithMutex: public TYPE //derivation
+{
+public: //ctor/dtor
+//    typedef TYPE base_type;
+    typedef WithMutex<TYPE, AUTO_LOCK> this_type;
+//    typedef decltype(*this) this_type;
+//    Mutexed(): m_locked(false) {} //mixin
+//    bool& islocked;
+    PERFECT_FWD2BASE_CTOR(WithMutex, TYPE) {} //std::cout << "with mutex\n"; } //, islocked(m_mutex.islocked /*false*/) {} //derivation
+//    PERFECT_FWD2BASE_CTOR(WithMutex, m_wrapped), m_locked(false) {} //wrapped
+//    Mutexed(TYPE* ptr):
+    ~WithMutex() { ATOMIC_MSG(BLUE_MSG << timestamp() << TYPENAME() << FMT(" dtor on %p") << this << ENDCOLOR); }
+//    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
+private:
+//protected:
+//    TYPE m_wrapped;
+public:
+    MutexWithFlag /*std::mutex*/ m_mutex;
+//    std::atomic<bool> m_locked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
+public:
+//    bool islocked() { return m_locked; } //if (m_mutex.try_lock()) { m_mutex.unlock(); return false; }
+//private:
+//    void lock() { ATOMIC_MSG(YELLOW_MSG << "lock" << ENDCOLOR); m_mutex.lock(); /*islocked = true*/; }
+//    void unlock() { ATOMIC_MSG(YELLOW_MSG << "unlock" << ENDCOLOR); /*islocked = false*/; m_mutex.unlock(); }
+private:
+#if 1
+//helper class to ensure unlock() occurs after member function returns
+//TODO: derive from unique_ptr<>
+    class unlock_later
+    {
+        this_type* m_ptr;
+    public: //ctor/dtor to wrap lock/unlock
+        unlock_later(this_type* ptr): m_ptr(ptr) { /*if (AUTO_LOCK)*/ m_ptr->m_mutex.lock(); }
+        ~unlock_later() { /*if (AUTO_LOCK)*/ m_ptr->m_mutex.unlock(); }
+    public:
+        inline TYPE* operator->() { return m_ptr; } //allow access to wrapped members
+//        inline operator TYPE() { return *m_ptr; } //allow access to wrapped members
+//        inline TYPE& base() { return *m_ptr; }
+//        inline TYPE& operator()() { return *m_ptr; }
+    };
+#endif
+#if 0
+    typedef std::unique_ptr<this_type, void(*)(this_type*)> my_ptr_type;
+    class unlock_later: public my_ptr_type
+    {
+    public: //ctor/dtor to wrap lock/unlock
+//        PERFECT_FWD2BASE_CTOR(unlock_later, my_type) {} //std::cout << "with mutex\n"; } //, islocked(m_mutex.islocked /*false*/) {} //derivation
+        unlock_later(this_type* ptr): my_ptr_type(ptr) { base_type::get()->m_mutex.lock(); }
+        ~unlock_later() { base_type::get()->m_mutex.unlock(); }
+//    public:
+    };
+#endif
+public: //pointer operator; allows safe multi-process access to shared object's member functions
+//nope    TYPE* /*ProxyCaller*/ operator->() { typename WithMutex<TYPE>::scoped_lock lock(m_inner.ptr); return m_inner.ptr; } //ProxyCaller(m_ps.ptr); } //https://stackoverflow.com/questions/22874535/dependent-scope-need-typename-in-front
+//    typedef std::unique_ptr<this_type, void(*)(this_type*)> unlock_later; //decltype(&MutexWithFlag::unlock)> unlock_later;
+//    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> unlock_later; //decltype(&MutexWithFlag::unlock)> unlock_later;
+#if 0
+    template<bool NEED_LOCK = AUTO_LOCK>
+    inline typename std::enable_if<!NEED_LOCK, TYPE*>::type operator->() { return this; }
+    template<bool NEED_LOCK = AUTO_LOCK>
+//    inline typename std::enable_if<NEED_LOCK, unlock_later/*&&*/>::type operator->() { m_mutex.lock(); return unlock_later(this, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+    inline typename std::enable_if<NEED_LOCK, unlock_later/*&&*/>::type operator->() { return unlock_later(this); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+#endif
+    inline unlock_later operator->() { return unlock_later(this); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+//    inline unlock_later/*&&*/ operator->() { m_mutex.lock(); return unlock_later(this, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+//alternate approach: perfect forwarding without operator->; generates more code
+//TODO?    template<typename ... ARGS> \
+//    type(ARGS&& ... args): base(std::forward<ARGS>(args) ...)
+    static const char* TYPENAME();
+#if 0
+    inline unlock_later/*&&*/ operator->() { return unlock_later(this); }
+//    inline operator TYPE() { return unlock_later(this); }
+    inline unlock_later locked() { return unlock_later(this); }
+    inline TYPE& nested() { return locked().base(); }
+//    inline unlock_later operator()() { return unlock_later(this); }
+//    TYPE* operator->() { return this; } //allow access to parent members (auto-upcast only needed for derivation)
+#endif
+//public:
+//    static void lock() { std::cout << "lock\n" << std::flush; }
+//    static void unlock() { std::cout << "unlock\n" << std::flush; }
+};
+//NOTE: caller might need to define these:
+//template<>
+//const char* WithMutex<MemPool<40>, true>::TYPENAME() { return "WithMutex<MemPool<40>, true>"; }
+
+
+#if 1
+//shm object wrapper:
+//use operator-> to access wrapped object's methods
+//std::shared_ptr<> used to clean up shmem afterwards
+//NOTE: use key to share objects across processes
+template <typename TYPE> //, typename BASE_TYPE = std::unique_ptr<TYPE, void(*)(TYPE*)>>
+class shm_obj//: public TYPE& //: public std::unique_ptr<TYPE, void(*)(TYPE*)> //use smart ptr to clean up afterward
+{
+//    typedef std::shared_ptr<TYPE /*, shmdeleter<TYPE>*/> base_type; //clup(&this, shmdeleter<TYPE());
+//    typedef std::unique_ptr<TYPE, shmdeleter<TYPE>> base_type; //clup(&thisl, shmdeleter<TYPE>());
+//    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> base_type;
+//    typedef std::unique_ptr<TYPE, void(*)(TYPE*)> base_type; //decltype(&MutexWithFlag::unlock)> unlock_later;
+//    base_type m_ptr; //clean up shmem automatically
+    std::shared_ptr<TYPE /*, shmdeleter<TYPE>*/> m_ptr; //clean up shmem automtically
+public: //ctor/dtor
+//equiv to:    pool_type& shmpool = *new (shmalloc(sizeof(pool_type))) pool_type();
+#define INNER_CREATE(args, key)  m_ptr(new (shmalloc(sizeof(TYPE), key, SRCLINE)) TYPE(args), [](TYPE* ptr) { shmfree(ptr, SRCLINE); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+    NEAR_PERFECT_FWD2BASE_CTOR(shm_obj, INNER_CREATE) {} //, m_clup(this, TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) {} //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+#undef INNER_CREATE
+public: //operators
+//    inline TYPE* operator->() { return base_type::get(); } //allow access to wrapped members; based on http://www.stroustrup.com/wrapper.pdf
+//    inline operator TYPE&() { return *m_ptr.get(); }
+    inline TYPE& operator->() { return *m_ptr.get(); }
+    static const char* TYPENAME();
+//private:
+//    void debug() { ATOMIC_MSG((*this)->TYPENAME << ENDCOLOR); }
+};
+//NOTE: caller might need to define these:
+//template<>
+//const char* shm_obj<WithMutex<MemPool<40>, true>>::TYPENAME() { return "shm_obj<WithMutex<MemPool<40>, true>>"; }
+#endif
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// STL-compatible shm allocator
+//
+
+//typedef shm_obj<WithMutex<MemPool<PAGE_SIZE>>> ShmHeap;
+//class ShmHeap;
+typedef WithMutex<MemPool<300>> ShmHeap; //bare sttr here, not smart_ptr
+
+//minimal stl allocator (C++11)
+//based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
+//NOTE: use a separate sttr for shm key/symbol mgmt
+template <class TYPE>
+struct ShmAllocator  
+{  
+    typedef TYPE value_type;
+    ShmAllocator() noexcept {} //default ctor; not required by STL
+    ShmAllocator(ShmHeap* heap): m_heap(heap) {}
+    template<class OTHER>
+    ShmAllocator(const ShmAllocator<OTHER>& other) noexcept: m_heap(other.m_heap) {} //converting copy ctor (more efficient than C++03)
+    template<class OTHER>
+    bool operator==(const ShmAllocator<OTHER>& other) const noexcept { return m_heap/*.get()*/ == other.m_heap/*.get()*/; } //true; }
+    template<class OTHER>
+    bool operator!=(const ShmAllocator<OTHER>& other) const noexcept { return m_heap/*.get()*/ != other.m_heap/*.get()*/; } //false; }
+    TYPE* allocate(const size_t count = 1, SrcLine srcline = 0) const { return allocate(count, 0, srcline); }
+    TYPE* allocate(const size_t count, key_t key, SrcLine srcline) const
+    {
+        if (!count) return nullptr;
+        if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
+        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
+        ATOMIC_MSG(YELLOW_MSG << timestamp() << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << FMT(" bytes for key 0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
+        if (!ptr) throw std::bad_alloc();
+        return static_cast<TYPE*>(ptr);
+    }  
+    void deallocate(TYPE* const ptr, size_t count = 1, SrcLine srcline = 0) const noexcept
+    {
+        ATOMIC_MSG(YELLOW_MSG << timestamp() << "ShmAllocator: deallocate " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
+        if (m_heap) m_heap->free(ptr);
+        else shmfree(ptr);
+    }
+//    std::shared_ptr<ShmHeap> m_heap; //allow heap to be shared between allocators
+    ShmHeap* m_heap; //allow heap to be shared between allocators
+    static const char* TYPENAME();
+};
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Junk or obsolete code
+//
+
+#if 0
+//shared memory segment:
+//used to store persistent/shared data across processes
+//NO: stores persistent state between ShmAllocator instances
+class ShmSeg
+{
+public: //ctor/dtor
+    enum class persist: int {Reuse = 0, NewTemp = -1, NewPerm = +1};
+//    ShmSeg(persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
+    explicit ShmSeg(key_t key = 0, persist cre = persist::NewTemp, size_t size = 0x1000): m_ptr(0), m_keep(true)
+    {
+        ATOMIC_MSG(CYAN_MSG << "ShmSeg.ctor: key " << FMT("0x%lx") << key << ", persist " << (int)cre << ", size " << size << ENDCOLOR);
+        if (cre != persist::Reuse) destroy(key); //start fresh
+        m_keep = (cre != persist::NewTemp);        
+        create(key, size, cre != persist::Reuse);
+//            std::cout << "ctor from " << __FILE__ << ":" << __LINE__ << "\n" << std::flush;
+    }
+    ~ShmSeg()
+    {
+        detach();
+        if (!m_keep) destroy(m_key);
+    }
+public: //getters
+    inline key_t shmkey() const { return m_key; }
+    inline void* shmptr() const { return m_ptr; }
+//    inline size32_t shmofs(void* ptr) const { return (VOID*)ptr - (VOID*)m_ptr; } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
+//    inline size32_t shmofs(void* ptr) const { return (uintptr_t)ptr - (uintptr_t)m_ptr; } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
+    inline size_t shmofs(void* ptr) const { return (uintptr_t)ptr - (uintptr_t)m_ptr; } //ptr -> relative ofs; //(long)ptr - (long)m_shmptr; }
+//    inline operator uintptr_t(void* ptr) { return (uintptr_t)(*((void**) a));
+    inline size_t shmsize() const { return m_size; }
+//    inline size_t shmused() const { return m_used; }
+//    inline size_t shmavail() const { return m_size - m_used; }
+private: //data
+    key_t m_key;
+    void* m_ptr;
+    size_t m_size; //, m_used;
+    bool m_keep;
+private: //helpers
+    void create(key_t key, size_t size, bool want_new)
+    {
+        if (!key) key = crekey(); //(rand() << 16) | 0xfeed;
+//#define  SHMKEY  ((key_t) 7890) /* base value for shmem key */
+//#define  PERMS 0666
+//        if (cre != persist::PreExist) destroy(key); //delete first (parent wants clean start)
+//        if (!key) key = (rand() << 16) | 0xfeed;
+        if ((size < 1) || (size >= 10000000)) throw std::runtime_error("ShmSeg: bad size"); //set reasonable limits
+        int shmid = shmget(key, size, 0666 | (want_new? IPC_CREAT | IPC_EXCL: 0)); // | SHM_NORESERVE); //NOTE: clears to 0 upon creation
+        ATOMIC_MSG(CYAN_MSG << "ShmSeg: cre shmget key " << FMT("0x%lx") << key << ", size " << size << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR);
+        if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
+        struct shmid_ds info;
+        if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
+        void* ptr = shmat(shmid, NULL /*system choses adrs*/, 0); //read/write access
+        ATOMIC_MSG(BLUE_MSG << "ShmSeg: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ENDCOLOR);
+        if (ptr == (void*)-1) throw std::runtime_error(std::string(strerror(errno)));
+        m_key = key;
+        m_ptr = ptr;
+        m_size = info.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
+//        m_used = sizeof(size_t);
+    }
+//    void* alloc(size_t size)
+//    {
+//        if (shmavail() < size) return 0; //not enough space
+//        void* retval = (intptr_t)m_ptr + m_used;
+//        m_used += size;
+//        return retval;
+//    }
+    void detach()
+    {
+        if (!m_ptr) return; //not attached
+//  int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+        if (shmdt(m_ptr) == -1) throw std::runtime_error(strerror(errno));
+        m_ptr = 0; //can't use m_shmptr after this point
+        ATOMIC_MSG(CYAN_MSG << "ShmSeg: dettached " << ENDCOLOR); //desc();
+    }
+    static void destroy(key_t key)
+    {
+        if (!key) return; //!owner or !exist
+        int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
+        ATOMIC_MSG(CYAN_MSG << "ShmSeg: destroy " << FMT("key 0x%lx") << key << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR);
+        if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
+        if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
+        throw std::runtime_error(strerror(errno));
+    }
+public: //custom helpers
+    static key_t crekey() { return (rand() << 16) | 0xfeed; }
+};
+#endif
+
+
+#if 0
+template <typename TYPE>
+class shm_ptr
+{
+public: //ctor/dtor
+#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+    PERFECT_FWD2BASE_CTOR(shm_ptr, INNER_CREATE) {}
+#undef INNER_CREATE
+public: //operators
+    inline TYPE* operator->() { return m_ptr.get(); } //allow access to wrapped members; based on http://www.stroustrup.com/wrapper.pdf
+private:
+    std::shared_ptr<TYPE> m_ptr; //use smart ptr to clean up afterward
+};
+#endif
+//class shm_ptr
+//{
+//public: //ctor/dtor
+//#define INNER_CREATE(args)  m_var(*new (shmalloc(sizeof(TYPE))) TYPE(args)) //pass ctor args down into m_var ctor
+//    PERFECT_FWD2BASE_CTOR(shm_ptr, INNER_CREATE), m_clup(&m_var, shmdeleter<TYPE>()) {}
+//#undef INNER_CREATE
+//public: //operators
+//    inline TYPE* operator->() { return &m_var; } //allow access to wrapped members
+//private: //members
+//    TYPE& m_var; //= *new (shmalloc(sizeof(TYPE))) TYPE();
+//    std::shared_ptr<TYPE> m_clup; //(&var, shmdeleter<TYPE>())
+//};
+
+
+#if 0
+class ShmHeap //: public ShmSeg
+{
+public:
+//    PERFECT_FWD2BASE_CTOR(ShmHeap, ShmSeg), m_used(sizeof(m_used)) {}
+public:
+    inline size_t used() { return m_used; }
+    inline size_t avail() { return shmsize() - m_used; }
+    void* alloc(size_t count)
+    {
+//        if (count > max_size()) { throw std::bad_alloc(); }
+//        pointer ptr = static_cast<pointer>(::operator new(count * sizeof(type), ::std::nothrow));
+        if (m_used + count > shmsize()) throw std::bad_alloc();
+        void* ptr = shmptr() + m_used;
+        m_used += count;
+        ATOMIC_MSG(YELLOW_MSG << "ShmHeap: allocated " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR);
+        return ptr;
+    }
+    void dealloc(void* ptr)
+    {
+        int count = 1;
+        ATOMIC_MSG(YELLOW_MSG << "ShmHeap: deallocate " << count << " bytes at " << FMT("%p") << ptr << ", " << avail() << " bytes remaining" << ENDCOLOR);
+//        ::operator delete(ptr);
+    }
+private:
+    size_t m_used;
+};
+#endif
+
+
+#if 0
+//shmem key:
+//define unique type for function signatures
+//to look at shm:
+// ipcs -m 
+class ShmKey
+{
+public: //debug only
+    key_t m_key;
+public: //ctor/dtor
+//    explicit ShmKey(key_t key = 0): key(key? key: crekey()) {}
+    /*explicit*/ ShmKey(const int& key = 0): m_key(key? key: crekey()) { std::cout << "ShmKey ctor " << FMT("0x%lx\n") << m_key; }
+//    explicit ShmKey(const ShmKey&& other): m_key((int)other) {} //copy ctor
+//    ShmKey(const ShmKey& that) { *this = that; } //copy ctor
+    ~ShmKey() {}
+public: //operators
+    ShmKey& operator=(const int& key) { m_key = key? key: crekey(); return *this; } //conv op; //std::cout << "key assgn " << FMT("0x%lx") << key << FMT(" => 0x%lx") << m_key << "\n"; return *this; } //conv operator
+    inline operator int() { return /*(int)*/m_key; }
+//    bool operator!() { return key != 0; }
+//    inline key_t 
+//??    std::ostream& operator<<(const ShmKey& value)
+public: //static helpers
+    static inline key_t crekey() { int r = (rand() << 16) | 0xfeed; /*std::cout << FMT("rnd key 0x%lx\n") << r*/; return r; }
+};
+#endif
 
 
 #endif //ndef _SHMALLOC_H

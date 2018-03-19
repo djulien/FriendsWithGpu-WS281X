@@ -52,13 +52,14 @@ void busy_msec(int msec)
 }
 
 
-#define NUM_WKERs  4 //8
-#define SHM_KEY  0x4567feed
-#include <thread>
+#define NUM_WKERs  4 //8 //use >0 for in-proc threads, <0 for ipc threads
+//#define SHM_KEY  0x4567feed
 
-#ifdef SHM_KEY //multi-process
+
+//#ifdef SHM_KEY //multi-process
+#if NUM_WKERs < 0 //ipc
  #include "shmalloc.h"
- #include "ipcthread.h"
+ #include "ipc.h"
  #define THREAD  IpcThread
  #define THIS_THREAD  IpcThread
 
@@ -91,7 +92,7 @@ void busy_msec(int msec)
  #define THIS_THREAD  std::this_thread
 // MsgQue& mainq = MsgQue("mainq"); //TODO
 // MsgQue& wkerq = MsgQue("wkerq"); //TODO
- MsgQue mainq("mainq"), wkerq("wkerq", mainq.mutex());
+ MsgQue mainq("mainq"), wkerq("wkerq"); //, mainq.mutex());
 //MsgQue& mainq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("mainq");
 //MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
 #endif
@@ -99,7 +100,7 @@ void busy_msec(int msec)
 
 #include <unistd.h> //fork, getpid
 
-//convert thread id to terse int:
+//convert thread/procid to terse int:
 int thrid() //bool locked = false)
 {
 //    auto thrid = std::this_thread::get_id();
@@ -110,14 +111,18 @@ int thrid() //bool locked = false)
 //#ifdef SHM_KEY
 //    return id;
 //#endif
-#ifdef SHM_KEY //need shared vector to make thread ids (inx, actually) consistent and unique
-    typedef vector_ex<THREAD::id, ShmAllocator<THREAD::id>> vectype;
-    static vectype& ids = SHARED(SRCKEY, vectype, vectype);
-    std::unique_lock<std::mutex> lock(ShmHeapAlloc::shmheap.mutex()); //low usage; reuse mutex
-#else
-    static vector_ex<THREAD::id> ids;
+//#ifdef SHM_KEY //need shared vector to make thread ids (inx, actually) consistent and unique
+//    typedef vector_ex<THREAD::id, ShmAllocator<THREAD::id>> vectype;
+//    static vectype& ids = SHARED(SRCKEY, vectype, vectype);
+//    std::unique_lock<std::mutex> lock(ShmHeapAlloc::shmheap.mutex()); //low usage; reuse mutex
+//#else
+    ShmScope<type> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    type& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+
+
+    static vector_ex<THREAD::id> ids(ABS(NUM_WKERs)); //preallocate space
     std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
-#endif
+//#endif
 //        return thrid(true);
 //    }
 //        std::lock_guard<std::mutex> lock(m);

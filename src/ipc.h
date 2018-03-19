@@ -3,6 +3,8 @@
 #ifndef _IPC_H
 #define _IPC_H
 
+#define IPC_THREAD //tell other modules to use ipc threads
+
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -133,6 +135,42 @@ public:
     static std::vector<IpcThread*> all;
 };
 std::vector<IpcThread*> IpcThread::all;
+
+
+//shm object wrapper:
+//deallocates when parent (owner) ipc thread goes out of scope
+//usage:
+//    ShmScope<type> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+//    type& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+template <typename TYPE>
+class ShmScope
+{
+public: //ctor/dtor
+//    TestObj& testobj = *(TestObj*)shmalloc(sizeof(TestObj), thread.isParent()? 0: pipe.rcv(SRCLINE), SRCLINE);
+//    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
+//    PERFECT_FWD2BASE_CTOR(shared, SHOBJ_TYPE&) {}
+#define thread  IpcThread::all[0]
+    template<typename ... ARGS>
+    explicit ShmScope(/*IpcThread& thread,*/ SrcLine srcline = 0, ARGS&& ... args): shmobj(*(TYPE*)shmalloc(sizeof(TYPE), thread->isParent()? 0: thread->rcv(srcline), srcline)), m_isparent(thread->isParent())
+    {
+        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope ctor" << ENDCOLOR_ATLINE(srcline));
+        if (!m_isparent) return;
+        new (&shmobj) TYPE(std::forward<ARGS>(args) ...); //, srcline); //call ctor to init (parent only)
+        thread->send(shmkey(&shmobj), srcline); //send shmkey to child (parent only)
+    }
+#undef thread
+    ~ShmScope()
+    {
+        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope dtor" << ENDCOLOR);
+        if (!m_isparent) return;
+        shmobj.~TYPE();
+        shmfree(&shmobj, SRCLINE);
+    }
+public: //wrapped object
+    TYPE& shmobj;
+private:
+    bool m_isparent;
+};
 
 
 #if 0
