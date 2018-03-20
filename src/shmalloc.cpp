@@ -286,7 +286,6 @@ MAKE_TYPENAME(WithMutex<TestObj COMMA true>)
 //template<typename TYPE>
 //TYPE& shmobj(typedef TYPE& Ref; //kludge: C++ doesn't like "&" on derivation line
 
-
 int main(int argc, const char* argv[])
 {
 //    IpcPipe pipe; //create pipe descriptors < fork()
@@ -309,8 +308,8 @@ int main(int argc, const char* argv[])
 #else //automatically shared object
     typedef WithMutex<TestObj> type;
 //    ShmScope<type> scope(thread, SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
-    ShmScope<type> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
-    type& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+    ShmScope<type, 2> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    type& testobj = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
 //    thread.shared<TestObj> testobj("testobj", SRCLINE);
 //    Shmobj<TestObj> testobj("testobj", thread, SRCLINE);
 

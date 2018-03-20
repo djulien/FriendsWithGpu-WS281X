@@ -19,13 +19,12 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 //#include <sstream>
 //#include <string>
 //#include <string.h> //strlen
-//#include <thread>
 //#include <exception>
 //#include <unistd.h> //getpid
 
 #define WANT_DETAILS  true //false //true
 
-#include "colors.h"
+#include "msgcolors.h"
 #include "ostrfmt.h"
 #include "elapsed.h"
 #include "vectorex.h"
@@ -54,6 +53,7 @@ void busy_msec(int msec)
 
 #define NUM_WKERs  4 //8 //use >0 for in-proc threads, <0 for ipc threads
 //#define SHM_KEY  0x4567feed
+#include <unistd.h> //getpid()
 
 
 //#ifdef SHM_KEY //multi-process
@@ -88,6 +88,7 @@ void busy_msec(int msec)
 //ShmMsgQue& mainq = *new ()("mainq"), wkerq("wkerq");
 //        for (int j = 0; j < NUM_ENTS; j++) array[j] = new_SHM(+j) Complex (i, j); //kludge: force unique key for shmalloc
 #else //multi-thread
+ #include <thread> //std::this_thread
  #define THREAD  std::thread
  #define THIS_THREAD  std::this_thread
 // MsgQue& mainq = MsgQue("mainq"); //TODO
@@ -95,10 +96,55 @@ void busy_msec(int msec)
  MsgQue mainq("mainq"), wkerq("wkerq"); //, mainq.mutex());
 //MsgQue& mainq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("mainq");
 //MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
+// #ifndef IPC_THREAD
+//dummy object wrapper (emulates shmem)
+template <typename TYPE, int NUM_INST = 1>
+class ShmScope
+{
+    typedef struct { int count; TYPE data; } type; //count #ctors, #dtors (ref count)
+public: //ctor/dtor
+//    PERFECT_FWD2BASE_CTOR(shared, SHOBJ_TYPE&) {}
+//#define thread  IpcThread::all[0]
+    template<typename ... ARGS>
+    explicit ShmScope(/*IpcThread& thread,*/ SrcLine srcline = 0, ARGS&& ... args): shmobj(*(type*)malloc_once(sizeof(type))) //, thread->isParent()? 0: thread->rcv(srcline), srcline))//, m_isparent(thread->isParent())
+    {
+//        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope ctor" << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope ctor# " << shmobj.count << ENDCOLOR_ATLINE(srcline));
+//        if (!m_isparent) return;
+        if (shmobj.count++) return; //not first (parent)
+        new (&shmobj.data) TYPE(std::forward<ARGS>(args) ...); //, srcline); //call ctor to init (parent only)
+//        thread->send(shmkey(&shmobj), srcline); //send shmkey to child (parent only)
+    }
+//#undef thread
+    ~ShmScope()
+    {
+//        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope dtor" << ENDCOLOR);
+        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope dtor# " << shmobj.count << ENDCOLOR);
+//        if (!m_isparent) return;
+        if (shmobj.count++ < 2 * NUM_INST) return; //not last (could be parent or child)
+        shmobj.data.~TYPE();
+        free(&shmobj);
+    }
+public: //wrapped object (ref to shared obj)
+    type& shmobj;
+private:
+//always return same address (common to all threads):
+    void* malloc_once(size_t size)
+    {
+        static void* ptr = malloc(size); //wrapped to avoid needing separate template<> decl later
+        return ptr;
+    }
+//    bool m_isparent;
+//    bool isparent() { return (std::this_thread::get_id() == MAIN_THREAD_ID); } //from https://stackoverflow.com/questions/33869852/how-to-find-out-if-we-are-running-in-main-thread
+//    static std::thread::id MAIN_THREAD_ID;
+//    static TYPE shared_obj;
+};
+//template <> std::thread::id ShmScope::MAIN_THREAD_ID = std::this_thread::get_id();
+//template <>  std::thread::id ShmScope::MAIN_THREAD_ID = std::this_thread::get_id();
+template<> const char* WithMutex<vector_ex<std::thread::id>>::TYPENAME() { return "WithMutex<vector_ex<std::thread::id>>"; }
+// #endif //def IPC_THREAD
 #endif
 
-
-#include <unistd.h> //fork, getpid
 
 //convert thread/procid to terse int:
 int thrid() //bool locked = false)
@@ -116,18 +162,19 @@ int thrid() //bool locked = false)
 //    static vectype& ids = SHARED(SRCKEY, vectype, vectype);
 //    std::unique_lock<std::mutex> lock(ShmHeapAlloc::shmheap.mutex()); //low usage; reuse mutex
 //#else
-    ShmScope<type> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
-    type& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
-
-
-    static vector_ex<THREAD::id> ids(ABS(NUM_WKERs)); //preallocate space
-    std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
+//    ShmScope<type> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+//    type& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+    typedef WithMutex<vector_ex<THREAD::id>> type;
+//    static vector_ex<THREAD::id> ids(ABS(NUM_WKERs)); //preallocate space
+//    std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
+    ShmScope<type> scope(SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    type& ids = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
 //#endif
 //        return thrid(true);
 //    }
 //        std::lock_guard<std::mutex> lock(m);
     int ofs = ids.find(id);
-    if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR);
+    if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR_NOLINE);
     if (ofs == -1) { ofs = ids.size(); ids.push_back(id); }
 //    std::stringstream ss;
 //    ss << thrid;

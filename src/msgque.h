@@ -19,6 +19,10 @@
  #define WANT_DETAILS  0
 #endif
 
+#ifndef VOLATILE
+ #define VOLATILE
+#endif
+
 
 #if 1 //new def; shm-compatible
 //usage:

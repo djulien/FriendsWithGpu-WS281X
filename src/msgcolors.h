@@ -24,13 +24,12 @@
 #define PINK_MSG  MAGENTA_MSG //easier to spell :)
 #define CYAN_MSG  ANSI_COLOR("1;36")
 #define GRAY_MSG  ANSI_COLOR("0;37")
-//#define ENDCOLOR  ANSI_COLOR("0")
+#define ENDCOLOR_NOLINE  ANSI_COLOR("0")
 //append the src line# to make debug easier:
 //#define ENDCOLOR_ATLINE(srcline)  " &" TOSTR(srcline) ANSI_COLOR("0") "\n"
-#define ENDCOLOR_ATLINE(srcline)  "  &" << shortsrc(srcline, SRCLINE) << ANSI_COLOR("0") "\n"
+#define ENDCOLOR_ATLINE(srcline)  "  &" << shortsrc(srcline, SRCLINE) << ENDCOLOR_NOLINE "\n"
 //#define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%s) //%d) //NOTE: requires extra param
 #define ENDCOLOR  ENDCOLOR_ATLINE(SRCLINE) //__LINE__)
-
 
 //typedef struct { int line; } SRCLINE; //allow compiler to distinguish param types, prevent implicit conversion
 //typedef int SRCLINE;
