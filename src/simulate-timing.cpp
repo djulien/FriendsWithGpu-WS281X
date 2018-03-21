@@ -35,7 +35,7 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 
 
 #include <chrono>
-//#include <thread>
+#include <thread>
 //https://stackoverflow.com/questions/4184468/sleep-for-milliseconds
 #define sleep_msec(msec)  std::this_thread::sleep_for(std::chrono::milliseconds(msec))
 
@@ -50,23 +50,24 @@ void busy_msec(int msec)
         for (volatile int i = 0; i < 300000; ++i); //NOTE: need volatile to prevent optimization; need busy loop to occupy CPU; sleep system calls do not consume CPU time (allows threads to overlap)
 }
 
+#define ABS(n)  (((n) < 0)? -(n): (n))
+#define NUM_WKERs  -4 //8 //use >0 for in-proc threads, <0 for ipc threads
 
-#define NUM_WKERs  4 //8 //use >0 for in-proc threads, <0 for ipc threads
 //#define SHM_KEY  0x4567feed
 #include <unistd.h> //getpid()
 
 
 //#ifdef SHM_KEY //multi-process
 #if NUM_WKERs < 0 //ipc
- #include "shmalloc.h"
+// #include "shmalloc.h"
  #include "ipc.h"
  #define THREAD  IpcThread
  #define THIS_THREAD  IpcThread
 
 // vector_ex<THREAD::id> size_calc(NUM_WKERs); //dummy var to calculate size of shared memory needed
- struct { vector_ex<THREAD::id> vect; THREAD::id ids[NUM_WKERs]; } size_calc;
- #define SHMLEN  (SHMHDR_LEN + 2 * SHMVAR_LEN(MsgQue) + SHMVAR_LEN(size_calc))
- ShmHeap ShmHeapAlloc::shmheap(SHMLEN, ShmHeap::persist::NewPerm, 0x4567feed);
+// struct { vector_ex<THREAD::id> vect; THREAD::id ids[ABS(NUM_WKERs)]; } size_calc;
+// #define SHMLEN  (SHMHDR_LEN + 2 * SHMVAR_LEN(MsgQue) + SHMVAR_LEN(size_calc))
+// ShmHeap ShmHeapAlloc::shmheap(SHMLEN, ShmHeap::persist::NewPerm, 0x4567feed);
 //int pending = 0;
 //std::vector<int> pending;
 //std::mutex mut;
@@ -76,8 +77,11 @@ void busy_msec(int msec)
 //ShmObject<MsgQue> mainq("mainq"), wkerq("wkerq");
 //MsgQue& mainq = *new (shmheap.alloc(sizeof(MsgQue), __FILE__, __LINE__)) MsgQue("mainq");
 //lamba functions: http://en.cppreference.com/w/cpp/language/lambda
- MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq", ShmHeapAlloc::shmheap.mutex()));
- MsgQue& wkerq = SHARED(SRCKEY, MsgQue, MsgQue("wkerq", mainq.mutex()));
+// MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq", ShmHeapAlloc::shmheap.mutex()));
+// MsgQue& wkerq = SHARED(SRCKEY, MsgQue, MsgQue("wkerq", mainq.mutex()));
+ ShmScope<MsgQue> mscope(SRCLINE, "mainq"), wscope(SRCLINE, "wkerq"); //, mainq.mutex());
+ MsgQue& mainq = mscope.shmobj.data;
+ MsgQue& wkerq = wscope.shmobj.data;
 //MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
 //MsgQue& mainq = *new_SHM(0) MsgQue("mainq");
 //MsgQue& wkerq = *new_SHM(0) MsgQue("wkerq");
@@ -87,6 +91,7 @@ void busy_msec(int msec)
 //ShmHeap ShmHeapAlloc::shmheap(100, ShmHeap::persist::NewPerm, 0x4567feed);
 //ShmMsgQue& mainq = *new ()("mainq"), wkerq("wkerq");
 //        for (int j = 0; j < NUM_ENTS; j++) array[j] = new_SHM(+j) Complex (i, j); //kludge: force unique key for shmalloc
+ template <> const char* WithMutex<vector_ex<int, std::allocator<int>>, true>::TYPENAME() { return "WithMutex<vector_ex<int, std::allocator<int>>, true>"; }
 #else //multi-thread
  #include <thread> //std::this_thread
  #define THREAD  std::thread
@@ -109,7 +114,7 @@ public: //ctor/dtor
     explicit ShmScope(/*IpcThread& thread,*/ SrcLine srcline = 0, ARGS&& ... args): shmobj(*(type*)malloc_once(sizeof(type))) //, thread->isParent()? 0: thread->rcv(srcline), srcline))//, m_isparent(thread->isParent())
     {
 //        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope ctor" << ENDCOLOR_ATLINE(srcline));
-        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope ctor# " << shmobj.count << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope ctor# " << shmobj.count << "/" << (2 * NUM_INST) << FMT(", &obj %p") << & shmobj << ENDCOLOR_ATLINE(srcline));
 //        if (!m_isparent) return;
         if (shmobj.count++) return; //not first (parent)
         new (&shmobj.data) TYPE(std::forward<ARGS>(args) ...); //, srcline); //call ctor to init (parent only)
@@ -119,7 +124,7 @@ public: //ctor/dtor
     ~ShmScope()
     {
 //        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope dtor" << ENDCOLOR);
-        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope dtor# " << shmobj.count << ENDCOLOR);
+        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope dtor# " << shmobj.count << "/" << (2 * NUM_INST) << ENDCOLOR);
 //        if (!m_isparent) return;
         if (shmobj.count++ < 2 * NUM_INST) return; //not last (could be parent or child)
         shmobj.data.~TYPE();
@@ -131,7 +136,13 @@ private:
 //always return same address (common to all threads):
     void* malloc_once(size_t size)
     {
-        static void* ptr = malloc(size); //wrapped to avoid needing separate template<> decl later
+        static void* ptr = safe_memset(malloc(size), 0, size); //wrapped to avoid needing separate template<> decl later
+//        if (ptr && first) { memset(ptr, 0, size); first = false; } //new shmem is zeroed, so clear heap mem as well
+        return ptr;
+    }
+    void* safe_memset(void* ptr, int val, size_t count)
+    {
+        if (ptr) memset(ptr, val, count);
         return ptr;
     }
 //    bool m_isparent;
@@ -153,7 +164,7 @@ int thrid() //bool locked = false)
 //    if (!locked)
 //    {
     auto id = THIS_THREAD::get_id(); //std::this_thread::get_id();
-    ATOMIC(std::cout << CYAN_MSG << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << ENDCOLOR << std::flush);
+    ATOMIC(std::cout << CYAN_MSG << timestamp() << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << ENDCOLOR << std::flush);
 //#ifdef SHM_KEY
 //    return id;
 //#endif
@@ -167,7 +178,7 @@ int thrid() //bool locked = false)
     typedef WithMutex<vector_ex<THREAD::id>> type;
 //    static vector_ex<THREAD::id> ids(ABS(NUM_WKERs)); //preallocate space
 //    std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
-    ShmScope<type> scope(SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    ShmScope<type, ABS(NUM_WKERs) + 1> scope(SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
     type& ids = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
 //#endif
 //        return thrid(true);
@@ -196,7 +207,7 @@ int processed = 0;
 //int main_waker = -1, wker_waker = -1;
 
 
-#define WKER_MSG(color, msg)  ATOMIC(std::cout << color << timestamp() << "wker " << myid << " " << msg << ENDCOLOR << std::flush)
+#define WKER_MSG(color, msg)  ATOMIC_MSG(color << timestamp() << "wker " << myid << " " << msg << ENDCOLOR)
 #define WKER_DELAY  20
 void wker_main()
 {
@@ -276,7 +287,7 @@ void wker_main()
 //public:
 //    ThreadSafe(std::ostream& strm): std::basic_ostream<char>(strm) {};
 //};
-#define MAIN_MSG(color, msg)  ATOMIC(std::cout << color << timestamp() << FMT("main[%d]") << frnum << " " << msg << ENDCOLOR << std::flush)
+#define MAIN_MSG(color, msg)  ATOMIC_MSG(color << timestamp() << FMT("main[%d]") << frnum << " " << msg << ENDCOLOR)
 //#define NUM_WKERs  4 //8
 #define DURATION  10 //100
 #define MAIN_ENCODE_DELAY  10
@@ -302,14 +313,14 @@ int main()
     std::vector<THREAD> wkers;
     MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << (long)&mainq << FMT(", &wkerq = %p") << (long)&wkerq);
 //    pending = 10;
-    for (int n = 0; n < NUM_WKERs; ++n) wkers.emplace_back(wker_main);
+    for (int n = 0; n < ABS(NUM_WKERs); ++n) wkers.emplace_back(wker_main);
     MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");
 //    for (int fr = 0; fr < 10; ++fr) //duration
     for (;;)
     {
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "now wait for replies");
 //        const char* status = "on time";
-        mainq.rcv(&MsgQue::wanted, ((1 << NUM_WKERs) - 1) << 1, true); //wait for all wkers to respond (blocking)
+        mainq.rcv(&MsgQue::wanted, ((1 << ABS(NUM_WKERs)) - 1) << 1, true); //wait for all wkers to respond (blocking)
         MAIN_MSG(PINK_MSG, "all wkers ready, now encode() for " << MAIN_ENCODE_DELAY << " msec");
         busy_msec(MAIN_ENCODE_DELAY); //simulate encode()
         if (++frnum >= DURATION) frnum = -1; //break;

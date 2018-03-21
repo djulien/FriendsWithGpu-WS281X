@@ -77,6 +77,7 @@ public: //ctor/dtor
     bool isChild() const { return (m_pid == 0); }
     bool isError() const { return (m_pid == -1); }
     explicit IpcThread(SrcLine srcline = 0): IpcThread(*new IpcPipe(srcline), srcline) {}
+    explicit IpcThread(_Callable/*&*/ entpt, SrcLine srcline = 0): IpcThread(entpt, *new IpcPipe(srcline), srcline) {}
     explicit IpcThread(IpcPipe& pipe, SrcLine srcline = 0) //: m_pipe(pipe)
     {
         all.push_back(this); //keep track of inst; let caller use global var
@@ -86,7 +87,7 @@ public: //ctor/dtor
         ATOMIC_MSG(YELLOW_MSG << timestamp() << "fork (" << proctype << "): child pid = " << (isParent()? m_pid: getpid()) << ENDCOLOR_ATLINE(srcline));
         if (isError()) throw std::runtime_error(strerror(errno)); //fork failed
     }
-    explicit IpcThread(_Callable& entpt, IpcPipe& pipe /*= IpcPipe()*/, SrcLine srcline = 0): IpcThread(pipe, srcline) //, _Args&&... args)
+    explicit IpcThread(_Callable/*&*/ entpt, IpcPipe& pipe /*= IpcPipe()*/, SrcLine srcline = 0): IpcThread(pipe, srcline) //, _Args&&... args)
     {
         if (!isChild()) return; //parent or error
         (*entpt)(/*args*/); //call child main()
