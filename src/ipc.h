@@ -90,6 +90,7 @@ public: //ctor/dtor
     explicit IpcThread(_Callable/*&*/ entpt, IpcPipe& pipe /*= IpcPipe()*/, SrcLine srcline = 0): IpcThread(pipe, srcline) //, _Args&&... args)
     {
         if (!isChild()) return; //parent or error
+        ATOMIC_MSG(GREEN_MSG << timestamp() << "child " << getpid() << " calling entpt" << ENDCOLOR);
         (*entpt)(/*args*/); //call child main()
         ATOMIC_MSG(RED_MSG << timestamp() << "child " << getpid() << " exit" << ENDCOLOR);
         exit(0); //kludge; don't want to execute remainder of caller
@@ -152,25 +153,26 @@ public: //ctor/dtor
 //    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
 //    PERFECT_FWD2BASE_CTOR(shared, SHOBJ_TYPE&) {}
 #define thread  IpcThread::all[0]
+#define has_threads  IpcThread::all.size()
     template<typename ... ARGS>
-    explicit ShmScope(/*IpcThread& thread,*/ SrcLine srcline = 0, ARGS&& ... args): shmobj(*(type*)shmalloc(sizeof(type), thread->isParent()? 0: thread->rcv(srcline), srcline))//, m_isparent(thread->isParent())
+    explicit ShmScope(/*IpcThread& thread,*/ SrcLine srcline = 0, key_t shmkey = 0, ARGS&& ... args): shmobj(*(type*)::shmalloc(sizeof(type), shmkey? shmkey: (!has_threads || thread->isParent())? 0: thread->rcv(srcline), srcline))//, m_isparent(thread->isParent())
     {
 //        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope ctor" << ENDCOLOR_ATLINE(srcline));
-        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope ctor# " << shmobj.count << ENDCOLOR_ATLINE(srcline));
+        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope ctor# " << shmobj.count << "/" << (2 * NUM_INST) << ENDCOLOR_ATLINE(srcline));
 //        if (!m_isparent) return;
         if (shmobj.count++) return; //not first (parent)
         new (&shmobj.data) TYPE(std::forward<ARGS>(args) ...); //, srcline); //call ctor to init (parent only)
-        thread->send(shmkey(&shmobj), srcline); //send shmkey to child (parent only)
+        if (!shmkey && has_threads) thread->send(::shmkey(&shmobj), srcline); //send shmkey to child (parent only)
     }
 #undef thread
     ~ShmScope()
     {
 //        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope dtor" << ENDCOLOR);
-        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope dtor# " << shmobj.count << ENDCOLOR);
+        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope dtor# " << shmobj.count << "/" << (2 * NUM_INST) << ENDCOLOR);
 //        if (!m_isparent) return;
         if (shmobj.count++ < 2 * NUM_INST) return; //not last (could be parent or child)
         shmobj.data.~TYPE();
-        shmfree(&shmobj, SRCLINE);
+        ::shmfree(&shmobj, SRCLINE);
     }
 public: //wrapped object (ref to shared obj)
     type& shmobj;

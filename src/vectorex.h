@@ -34,6 +34,13 @@ public: //extensions
         if (!this->size()) buf << sep << if_empty; //"(empty)";
         return buf.str().substr(strlen(sep));
     }
+//atomic push + find:
+    int push_and_find(const TYPE& that)
+    {
+        int retval = this->size();
+        this->push_back(that);
+        return retval;
+    }
 };
 //template<class TYPE>
 //std::allocator<TYPE> vector_ex<TYPE>::def_alloc; //default allocator; TODO: is this needed?

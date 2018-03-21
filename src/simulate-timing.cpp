@@ -79,10 +79,13 @@ void busy_msec(int msec)
 //lamba functions: http://en.cppreference.com/w/cpp/language/lambda
 // MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq", ShmHeapAlloc::shmheap.mutex()));
 // MsgQue& wkerq = SHARED(SRCKEY, MsgQue, MsgQue("wkerq", mainq.mutex()));
- ShmScope<MsgQue> mscope(SRCLINE, "mainq"), wscope(SRCLINE, "wkerq"); //, mainq.mutex());
+ #define SHMKEY1  0x1111beef
+ #define SHMKEY2  0x2222beef
+ #define SHMKEY3  0x3333beef
+ ShmScope<MsgQue> mscope(SRCLINE, SHMKEY1, "mainq"), wscope(SRCLINE, SHMKEY2, "wkerq"); //, mainq.mutex());
  MsgQue& mainq = mscope.shmobj.data;
  MsgQue& wkerq = wscope.shmobj.data;
-//MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return new shared<MsgQue>("mainq"); });
+//MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return77', t new shared<MsgQue>("mainq"); });
 //MsgQue& mainq = *new_SHM(0) MsgQue("mainq");
 //MsgQue& wkerq = *new_SHM(0) MsgQue("wkerq");
 //MsgQue& wkerq = *new () MsgQue("wkerq");
@@ -178,15 +181,16 @@ int thrid() //bool locked = false)
     typedef WithMutex<vector_ex<THREAD::id>> type;
 //    static vector_ex<THREAD::id> ids(ABS(NUM_WKERs)); //preallocate space
 //    std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
-    ShmScope<type, ABS(NUM_WKERs) + 1> scope(SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    ShmScope<type, ABS(NUM_WKERs) + 1> scope(SRCLINE, SHMKEY3); //shm obj wrapper; call dtor when goes out of scope (parent only)
     type& ids = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
 //#endif
 //        return thrid(true);
 //    }
 //        std::lock_guard<std::mutex> lock(m);
-    int ofs = ids.find(id);
+//NOTE: use op->() for shm safety with ipc
+    int ofs = ids->find(id);
     if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR_NOLINE);
-    if (ofs == -1) { ofs = ids.size(); ids.push_back(id); }
+    if (ofs == -1) ofs = ids->push_and_find(id); //{ ofs = ids.size(); ids.push_back(id); }
 //    std::stringstream ss;
 //    ss << thrid;
 //    ss << THRID;
@@ -211,6 +215,7 @@ int processed = 0;
 #define WKER_DELAY  20
 void wker_main()
 {
+    sleep(2); //give parent head start
     int myid = thrid();
     int frnum = 0;
     WKER_MSG(CYAN_MSG, "started, render " << frnum << " for " << WKER_DELAY << " msec");
@@ -434,4 +439,9 @@ int main()
 }
 #endif
 
-//eof
+//EOF
+#clean up shmem objects before running:
+ipcrm -M 0x1111beef
+ipcrm -M 0x2222beef
+ipcrm -M 0x3333beef
+#eof
