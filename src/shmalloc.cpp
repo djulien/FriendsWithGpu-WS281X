@@ -262,7 +262,7 @@ int main(int argc, const char* argv[])
 /// Test 3
 //
 
-#if 1//def TEST3_GOOD //generic shm usage pattern
+#ifdef TEST3_GOOD //generic shm usage pattern
 //usage:
 //    ShmMsgQue& msgque = *(ShmMsgQue*)shmalloc(sizeof(ShmMsgQue), shmkey, SRCLINE);
 //    if (isParent) new (&msgque) ShmMsgQue(name, SRCLINE); //call ctor to init (parent only)
@@ -321,12 +321,37 @@ int main(int argc, const char* argv[])
 //    TestObj& testobj = SHARED(TestObj("shmobj", SRCLINE), thread);
 //    IpcShared<TestObj> TestObj("shmobj", SRCLINE), thread);
 #endif
-    testobj->inc(); //testobj->inc();
-    testobj->print(SRCLINE); //testobj->print();
+    testobj->inc(); //testobj.inc();
+    testobj->print(SRCLINE); //testobj.print();
 
     ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent (waiting to)": "child") << " exit" << ENDCOLOR);
     if (thread.isParent()) thread.join(SRCLINE); //don't let parent go out of scope before child (parent calls testobj dtor, not child); NOTE: blocks until child state changes
 //    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
+    return 0;
+}
+#endif
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Test 4
+//
+
+#if 1//def TEST3_GOOD //generic shm usage pattern
+//#include <memory> //unique_ptr<>
+
+#define COMMA ,  //kludge: macros don't like commas within args; from https://stackoverflow.com/questions/13842468/comma-in-c-c-macro
+MAKE_TYPENAME(WithMutex<TestObj COMMA true>)
+
+int main(int argc, const char* argv[])
+{
+    ShmPtr<TestObj, 0x4444beef, 100, false> objptr("shmobj", SRCLINE);
+    objptr->inc();
+    objptr->inc();
+    objptr->inc();
+    objptr->print();
+//    objptr->lock();
+
     return 0;
 }
 #endif

@@ -9,6 +9,9 @@
 //atomic operations:
 #ifdef IPC_THREAD
  #error TBD
+ ShmScope<MsgQue> mscope(SRCLINE, SHMKEY1, "mainq"), wscope(SRCLINE, SHMKEY2, "wkerq"); //, mainq.mutex());
+ MsgQue& mainq = mscope.shmobj.data;
+ 
 #else
 //std::recursive_mutex atomic_mut;
  std::mutex atomic_mut; //in-process mutex (all threads have same address space)

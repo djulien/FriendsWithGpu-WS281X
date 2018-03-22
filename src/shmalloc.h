@@ -44,13 +44,19 @@
 #define SHM_MAGIC  0xfeedbeef //marker to detect valid shmem block
 typedef struct { int id; key_t key; size_t size; uint32_t marker; } ShmHdr;
 
+//#ifdef SHMALLOC_DEBUG
+// #define SHMALLOC_MSG  ATOMIC_MSG
+//#else
+// #define SHMALLOC_MSG(msg)  //noop
+//#endif
+
 
 //check if shmem ptr is valid:
 static ShmHdr* shmptr(void* addr, const char* func)
 {
     ShmHdr* ptr = static_cast<ShmHdr*>(addr); --ptr;
     if (ptr->marker == SHM_MAGIC) return ptr;
-    char buf[50];
+    char buf[64];
     snprintf(buf, sizeof(buf), "%s: bad shmem pointer %p", func, addr);
     throw std::runtime_error(buf);
 }
@@ -59,7 +65,7 @@ static ShmHdr* shmptr(void* addr, const char* func)
 //allocate memory:
 void* shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
 {
-    if ((size < 1) || (size >= 10000000)) throw std::runtime_error("shmalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
+    if ((size < 1) || (size >= 10e6)) throw std::runtime_error("shmalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
     size += sizeof(ShmHdr);
     if (!key) key = (rand() << 16) | 0xbeef;
     int shmid = shmget(key, size, 0666 | IPC_CREAT); //create if !exist; clears to 0 upon creation
@@ -233,6 +239,7 @@ public:
 //    typedef struct { size_t count[1]; uint32_t data[0]; } entry;
     size_t m_storage[EXTRA + divup(SIZE, sizeof(size_t))]; //first element = used count
 //    size_t& m_used;
+#undef EXTRA
 };
 //NOTE: caller might need to define these:
 //template<>
@@ -421,6 +428,58 @@ public: //operators
 //template<>
 //const char* shm_obj<WithMutex<MemPool<40>, true>>::TYPENAME() { return "shm_obj<WithMutex<MemPool<40>, true>>"; }
 #endif
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// stand-alone shm ptr:
+//
+
+//shmem mixin class:
+//like std::safe_ptr<> but for shmem:
+//additional params are passed via template to keep ctor clean (for perfect fwding)
+template <typename TYPE, int KEY = 0, int EXTRA = 0, bool INIT = true, bool AUTO_LOCK = true>
+class ShmPtr
+{
+//    WithMutex<TYPE>* m_ptr;
+//    struct ShmContents
+//    {
+//        int shmid; //need this to dettach/destroy later (key might have been generated)
+//        std::mutex mutex; //need a mutex to control access, so include it with shmem object
+//        std::atomic<bool> locked; //NOTE: mutex.try_lock() is not reliable (spurious failures); use explicit flag instead; see: http://en.cppreference.com/w/cpp/thread/mutex/try_lock
+//        TYPE data; //caller's data (could be larger)
+//    }* m_ptr;
+    typedef WithMutex<TYPE, AUTO_LOCK> shm_type;
+    shm_type* m_ptr;
+//    WithMutex<TYPE, AUTO_LOCK>* m_ptr;
+//    typedef decltype(*m_ptr) shm_type;
+public: //ctor/dtor
+//    PERFECT_FWD2BASE_CTOR(ShmPtr, TYPE)
+    template<typename ... ARGS>
+    explicit ShmPtr(ARGS&& ... args): m_ptr(0)
+    {
+        m_ptr = static_cast<shm_type*>(shmalloc(sizeof(*m_ptr) + EXTRA, KEY)); //, SrcLine srcline = 0)
+        if (!INIT || !m_ptr) return;
+        memset(m_ptr, 0, sizeof(*m_ptr) + EXTRA); //re-init (not needed first time)
+//        m_ptr->mutex.std::mutex();
+//        m_ptr->locked = false;
+//        m_ptr->data.TYPE();
+//        m_ptr->WithMutex<TYPE>(std::forward<ARGS>(args) ...);
+//        m_ptr->WithMutex<TYPE, AUTO_LOCK>(std::forward<ARGS>(args ...)); //pass args to TYPE's ctor (perfect fwding)
+        new (m_ptr) shm_type(std::forward<ARGS>(args) ...); //, srcline); //pass args to TYPE's ctor (perfect fwding)
+     }
+    ~ShmPtr()
+    {
+        if (!INIT || !m_ptr) return;
+//        m_ptr->~WithMutex<TYPE>();
+        m_ptr->~shm_type(); //call TYPE's dtor
+        shmfree(m_ptr);
+    }
+public: //operators
+//    TYPE* operator->() { return m_ptr; }
+    shm_type* operator->() { return m_ptr; }
+//    operator TYPE&() { return *m_ptr; }
+};
 
 
 ///////////////////////////////////////////////////////////////////////////////

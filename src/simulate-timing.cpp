@@ -60,7 +60,7 @@ void busy_msec(int msec)
 //#ifdef SHM_KEY //multi-process
 #if NUM_WKERs < 0 //ipc
 // #include "shmalloc.h"
- #include "ipc.h"
+ #include "ipc.h" //needs to come first (to request Ipc versions of other classes)
  #define THREAD  IpcThread
  #define THIS_THREAD  IpcThread
 
