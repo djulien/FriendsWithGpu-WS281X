@@ -3,13 +3,28 @@
 #ifndef _IPC_H
 #define _IPC_H
 
-#define IPC_THREAD //tell other modules to use ipc threads
-
+#define IPC_THREAD //tell other modules to use ipc threads instead of in-proc threads
 
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h> //fork, getpid
-#include "elapsed.h" //timestamp()
+#include <algorithm> //std::find()
+#include <vector> //std::vector<>
+#include <stdexcept> //std::runtime_error
+#include <memory> //std::shared_ptr<>
+
+
+#ifdef IPC_DEBUG
+ #include "atomic.h" //ATOMIC_MSG()
+ #include "ostrfmt.h" //FMT()
+ #include "elapsed.h" //timestamp()
+ #include "msgcolors.h" //SrcLine, msg colors
+ #define DEBUG_MSG  ATOMIC_MSG
+#else
+ #define DEBUG_MSG(msg)  //noop
+ #include "msgcolors.h" //SrcLine, msg colors
+#endif
+
 
 //ipc msgs:
 //NOTE: must be created before fork()
@@ -19,8 +34,8 @@ private: //data members
     int m_fd[2];
 //    bool m_open[2];
 public: //ctor
-    IpcPipe(SrcLine srcline = 0): m_fd{-1, -1} { ATOMIC_MSG(BLUE_MSG << timestamp() << "IpcPipe ctor" << ENDCOLOR_ATLINE(srcline)); pipe(m_fd); } //m_open[0] = m_open[1] = true; } //create pipe descriptors < fork()
-    ~IpcPipe() { pipe_close(ReadEnd); pipe_close(WriteEnd); ATOMIC_MSG(BLUE_MSG << timestamp() << "IpcPipe dtor" << ENDCOLOR); }
+    IpcPipe(SrcLine srcline = 0): m_fd{-1, -1} { DEBUG_MSG(BLUE_MSG << timestamp() << "IpcPipe ctor" << ENDCOLOR_ATLINE(srcline)); pipe(m_fd); } //m_open[0] = m_open[1] = true; } //create pipe descriptors < fork()
+    ~IpcPipe() { pipe_close(ReadEnd); pipe_close(WriteEnd); DEBUG_MSG(BLUE_MSG << timestamp() << "IpcPipe dtor" << ENDCOLOR); }
 public: //methods
 //no    const int Parent2Child = 0, Child2Parent = 1;
     const int ReadEnd = 0, WriteEnd = 1;
@@ -34,9 +49,9 @@ public: //methods
         int which = WriteEnd;
 //        direction(which);
         pipe_close(1 - which);
-//ATOMIC_MSG("pipe write[" << which << "]" << ENDCOLOR);
+//DEBUG_MSG("pipe write[" << which << "]" << ENDCOLOR);
         ssize_t wrlen = write(m_fd[which], &value, sizeof(value));
-        ATOMIC_MSG(((wrlen == sizeof(value))? BLUE_MSG: RED_MSG) << timestamp() << "parent '" << getpid() << "' send len " << wrlen << FMT(", value 0x%lx") << value << " to child" << ENDCOLOR_ATLINE(srcline));
+        DEBUG_MSG(((wrlen == sizeof(value))? BLUE_MSG: RED_MSG) << timestamp() << "parent '" << getpid() << "' send len " << wrlen << FMT(", value 0x%lx") << value << " to child" << ENDCOLOR_ATLINE(srcline));
         if (wrlen == -1) throw std::runtime_error(strerror(errno)); //write failed
 //        close(m_fd[1]);
     }
@@ -46,9 +61,9 @@ public: //methods
         int retval = -1;
 //        direction(1 - which); //close write side of pipe; child is read-only
         pipe_close(1 - which);
-//ATOMIC_MSG("pipe read[" << which << "]" << ENDCOLOR);
+//DEBUG_MSG("pipe read[" << which << "]" << ENDCOLOR);
         ssize_t rdlen = read(m_fd[which], &retval, sizeof(retval)); //NOTE: blocks until data received
-        ATOMIC_MSG(((rdlen == sizeof(retval))? BLUE_MSG: RED_MSG) << timestamp() << "child '" << getpid() << "' rcv len " << rdlen << FMT(", value 0x%lx") << retval << " from parent" << ENDCOLOR_ATLINE(srcline));
+        DEBUG_MSG(((rdlen == sizeof(retval))? BLUE_MSG: RED_MSG) << timestamp() << "child '" << getpid() << "' rcv len " << rdlen << FMT(", value 0x%lx") << retval << " from parent" << ENDCOLOR_ATLINE(srcline));
         if (rdlen == -1) throw std::runtime_error(strerror(errno)); //read failed
 //        close(m_fd[0]);
         return retval;
@@ -58,15 +73,13 @@ private: //helpers:
     {
 //        if (!m_open[which]) return;
         if (m_fd[which] == -1) return;
-//ATOMIC_MSG("pipe close[" << which << "]" << ENDCOLOR);
+//DEBUG_MSG("pipe close[" << which << "]" << ENDCOLOR);
         close(m_fd[which]);
         m_fd[which] = -1;
     }
 };
 
 
-#include <algorithm> //std::find()
-#include <vector> //std::vector<>
 class IpcThread
 {
 public: //ctor/dtor
@@ -84,15 +97,15 @@ public: //ctor/dtor
         m_pid = fork();
         m_pipe.reset(&pipe); //NOTE: pipe must be cre < fork
         const char* proctype = isParent()? "parent": "child";
-        ATOMIC_MSG(YELLOW_MSG << timestamp() << "fork (" << proctype << "): child pid = " << (isParent()? m_pid: getpid()) << ENDCOLOR_ATLINE(srcline));
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "fork (" << proctype << "): child pid = " << (isParent()? m_pid: getpid()) << ENDCOLOR_ATLINE(srcline));
         if (isError()) throw std::runtime_error(strerror(errno)); //fork failed
     }
     explicit IpcThread(_Callable/*&*/ entpt, IpcPipe& pipe /*= IpcPipe()*/, SrcLine srcline = 0): IpcThread(pipe, srcline) //, _Args&&... args)
     {
         if (!isChild()) return; //parent or error
-        ATOMIC_MSG(GREEN_MSG << timestamp() << "child " << getpid() << " calling entpt" << ENDCOLOR);
+        DEBUG_MSG(GREEN_MSG << timestamp() << "child " << getpid() << " calling entpt" << ENDCOLOR);
         (*entpt)(/*args*/); //call child main()
-        ATOMIC_MSG(RED_MSG << timestamp() << "child " << getpid() << " exit" << ENDCOLOR);
+        DEBUG_MSG(RED_MSG << timestamp() << "child " << getpid() << " exit" << ENDCOLOR);
         exit(0); //kludge; don't want to execute remainder of caller
     }
     ~IpcThread()
@@ -113,7 +126,7 @@ public: //methods
     {
         int status;
         if (!isParent() || isError()) throw std::runtime_error(/*RED_MSG*/ "join (child): no process to join" /*ENDCOLOR*/);
-        ATOMIC_MSG(YELLOW_MSG << timestamp() << "join: wait for pid " << m_pid << ENDCOLOR_ATLINE(srcline));
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "join: wait for pid " << m_pid << ENDCOLOR_ATLINE(srcline));
         waitpid(m_pid, &status, /*options*/ 0); //NOTE: will block until child state changes
     }
 #if 0
@@ -139,6 +152,14 @@ public:
 std::vector<IpcThread*> IpcThread::all;
 
 
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Scoped shmem wrapper
+//
+
+#if 0 //circular dependency; use ShmPtr<> instead
+#include "shmalloc.h"
+
 //shm object wrapper:
 //deallocates when parent (owner) ipc thread goes out of scope
 //usage:
@@ -157,18 +178,19 @@ public: //ctor/dtor
     template<typename ... ARGS>
     explicit ShmScope(/*IpcThread& thread,*/ SrcLine srcline = 0, key_t shmkey = 0, ARGS&& ... args): shmobj(*(type*)::shmalloc(sizeof(type), shmkey? shmkey: (!has_threads || thread->isParent())? 0: thread->rcv(srcline), srcline))//, m_isparent(thread->isParent())
     {
-//        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope ctor" << ENDCOLOR_ATLINE(srcline));
-        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope ctor# " << shmobj.count << "/" << (2 * NUM_INST) << ENDCOLOR_ATLINE(srcline));
+//        DEBUG_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope ctor" << ENDCOLOR_ATLINE(srcline));
+        DEBUG_MSG(BLUE_MSG << timestamp() << "scope ctor# " << shmobj.count << "/" << (2 * NUM_INST) << ENDCOLOR_ATLINE(srcline));
 //        if (!m_isparent) return;
         if (shmobj.count++) return; //not first (parent)
         new (&shmobj.data) TYPE(std::forward<ARGS>(args) ...); //, srcline); //call ctor to init (parent only)
         if (!shmkey && has_threads) thread->send(::shmkey(&shmobj), srcline); //send shmkey to child (parent only)
     }
+#undef has_threads
 #undef thread
     ~ShmScope()
     {
-//        ATOMIC_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope dtor" << ENDCOLOR);
-        ATOMIC_MSG(BLUE_MSG << timestamp() << "scope dtor# " << shmobj.count << "/" << (2 * NUM_INST) << ENDCOLOR);
+//        DEBUG_MSG(BLUE_MSG << timestamp() << (m_isparent? "parent": "child") << " scope dtor" << ENDCOLOR);
+        DEBUG_MSG(BLUE_MSG << timestamp() << "scope dtor# " << shmobj.count << "/" << (2 * NUM_INST) << ENDCOLOR);
 //        if (!m_isparent) return;
         if (shmobj.count++ < 2 * NUM_INST) return; //not last (could be parent or child)
         shmobj.data.~TYPE();
@@ -179,6 +201,7 @@ public: //wrapped object (ref to shared obj)
 private:
 //    bool m_isparent;
 };
+#endif
 
 
 #if 0
@@ -206,12 +229,13 @@ public: //helper class to clean up ref count
         Scope(type& obj, _Destructor&& clup): m_obj(obj), m_clup(clup) { m_obj.addref(); }
         ~Scope() { if (!m_obj.delref()) m_clup(&m_obj); }
     };
-//    std::shared_ptr<type> clup(/*!thread.isParent()? 0:*/ &testobj, [](type* ptr) { ATOMIC_MSG("bye " << ptr->numref() << "\n"); if (ptr->dec()) return; ptr->~TestObj(); shmfree(ptr, SRCLINE); });
+//    std::shared_ptr<type> clup(/*!thread.isParent()? 0:*/ &testobj, [](type* ptr) { DEBUG_MSG("bye " << ptr->numref() << "\n"); if (ptr->dec()) return; ptr->~TestObj(); shmfree(ptr, SRCLINE); });
 public:
     int& numref() { return m_count; }
     int& addref() { return ++m_count; }
-    int& delref() { /*ATOMIC_MSG("dec ref " << m_count - 1 << "\n")*/; return --m_count; }
+    int& delref() { /*DEBUG_MSG("dec ref " << m_count - 1 << "\n")*/; return --m_count; }
 };
 #endif
 
+#undef DEBUG_MSG
 #endif //ndef _IPC_H

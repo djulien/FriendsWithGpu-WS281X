@@ -12,13 +12,16 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 // x/80xw 0x7ffff7ff7000
 
 
-//#include "shmallocator.h"
+#define WANT_TEST1
+#define SHMALLOC_DEBUG //show shmalloc debug msgs
 
+#include "ipc.h" //put first to define ipc variants
 #include "atomic.h"
-#include "msgcolors.h"
+#include "msgcolors.h" //SrcLine, msg colors
 #include "ostrfmt.h" //FMT()
 #include "elapsed.h" //timestamp()
-#include "shmalloc.h"
+#include "shmalloc.h" //MemPool<>, WithMutex<>, ShmAllocator<>
+//#include "shmallocator.h"
 
 
 //little test class for testing shared memory:
@@ -43,15 +46,14 @@ public:
 /// Test 1
 //
 
-#ifdef TEST1_GOOD //shm_obj test, single proc
+#ifdef WANT_TEST1 //shm_obj test, single proc
 
 //#define MEMSIZE  rdup(10, 8)+8 + rdup(4, 8)+8
 //WithMutex<MemPool<MEMSIZE>> pool20;
 WithMutex<MemPool<rdup(10, 8)+8 + rdup(4, 8)+8>> pool20;
 //typedef WithMutex<MemPool<MEMSIZE>> pool_type;
 //pool_type pool20;
-
-//MAKE_TYPENAME(MemPool<32>)
+MAKE_TYPENAME(MemPool<32>)
 MAKE_TYPENAME(MemPool<40>)
 MAKE_TYPENAME(WithMutex<MemPool<40>>)
 
@@ -107,7 +109,7 @@ int main(int argc, const char* argv[])
 /// Test 2
 //
 
-#ifdef TEST2_GOOD //proxy example, multi-proc
+#ifdef WANT_TEST2 //proxy example, multi-proc
 //#include "vectorex.h"
 //#include <unistd.h> //fork()
 #include "ipc.h"
@@ -262,7 +264,7 @@ int main(int argc, const char* argv[])
 /// Test 3
 //
 
-#ifdef TEST3_GOOD //generic shm usage pattern
+#ifdef WANT_TEST3 //generic shm usage pattern
 //usage:
 //    ShmMsgQue& msgque = *(ShmMsgQue*)shmalloc(sizeof(ShmMsgQue), shmkey, SRCLINE);
 //    if (isParent) new (&msgque) ShmMsgQue(name, SRCLINE); //call ctor to init (parent only)
@@ -337,7 +339,7 @@ int main(int argc, const char* argv[])
 /// Test 4
 //
 
-#if 1//def TEST3_GOOD //generic shm usage pattern
+#ifdef WANT_TEST4 //generic shm usage pattern
 //#include <memory> //unique_ptr<>
 
 #define COMMA ,  //kludge: macros don't like commas within args; from https://stackoverflow.com/questions/13842468/comma-in-c-c-macro
@@ -345,6 +347,7 @@ MAKE_TYPENAME(WithMutex<TestObj COMMA true>)
 
 int main(int argc, const char* argv[])
 {
+    ATOMIC_MSG(BLUE_MSG << "start" << ENDCOLOR);
     ShmPtr<TestObj, 0x4444beef, 100, false> objptr("shmobj", SRCLINE);
     objptr->inc();
     objptr->inc();
@@ -352,6 +355,7 @@ int main(int argc, const char* argv[])
     objptr->print();
 //    objptr->lock();
 
+    ATOMIC_MSG(BLUE_MSG << "finish" << ENDCOLOR);
     return 0;
 }
 #endif

@@ -9,8 +9,10 @@
 #define _COLORS_H
 
 //macro expansion helpers:
-#define TOSTR(str)  TOSTR_NESTED(str)
-#define TOSTR_NESTED(str)  #str
+#ifndef TOSTR
+ #define TOSTR(str)  TOSTR_NESTED(str)
+ #define TOSTR_NESTED(str)  #str
+#endif
 
 
 //ANSI color codes (for console output):
@@ -25,11 +27,17 @@
 #define CYAN_MSG  ANSI_COLOR("1;36")
 #define GRAY_MSG  ANSI_COLOR("0;37")
 #define ENDCOLOR_NOLINE  ANSI_COLOR("0")
+
 //append the src line# to make debug easier:
 //#define ENDCOLOR_ATLINE(srcline)  " &" TOSTR(srcline) ANSI_COLOR("0") "\n"
 #define ENDCOLOR_ATLINE(srcline)  "  &" << shortsrc(srcline, SRCLINE) << ENDCOLOR_NOLINE "\n"
 //#define ENDCOLOR_MYLINE  ENDCOLOR_ATLINE(%s) //%d) //NOTE: requires extra param
 #define ENDCOLOR  ENDCOLOR_ATLINE(SRCLINE) //__LINE__)
+
+
+#ifndef SIZEOF
+ #define SIZEOF(thing)  (sizeof(thing) / sizeof((thing)[0]))
+#endif
 
 //typedef struct { int line; } SRCLINE; //allow compiler to distinguish param types, prevent implicit conversion
 //typedef int SRCLINE;
@@ -42,11 +50,7 @@
 //#include <stdio.h> 
 
 
-#ifndef SIZEOF
- #define SIZEOF(thing)  (sizeof(thing) / sizeof((thing)[0]))
-#endif
-
-//smart ptr wrapper for DIR*:
+//smart ptr wrapper for DIR:
 class Dir
 {
 public: //ctor/dtor
@@ -104,6 +108,7 @@ static bool isunique(const char* folder, const char* basename, const char* ext)
 
 #define SRCLINE  __FILE__ ":" TOSTR(__LINE__)
 typedef const char* SrcLine; //allow compiler to distinguish param types, catch implicit conv
+
 SrcLine shortsrc(SrcLine srcline, SrcLine defline) //int line = 0)
 {
     static char buf[60]; //static to preserve after return to caller
@@ -152,7 +157,7 @@ public: //opeartors
 
 #ifdef UNIT_TEST
 #include <iostream>
-#include "colors.h"
+#include "msgcolors.h"
 
 void func(int a, SrcLine srcline = 0)
 {
@@ -168,4 +173,5 @@ int main(int argc, const char* argv[])
     func(2, SRCLINE);
     return 0;
 }
+
 #endif //def UNIT_TEST

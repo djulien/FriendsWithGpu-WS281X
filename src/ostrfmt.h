@@ -7,8 +7,10 @@
 //idea from https://stackoverflow.com/questions/535444/custom-manipulator-for-c-iostream
 //and https://stackoverflow.com/questions/11989374/floating-point-format-for-stdostream
 //std::ostream& fmt(std::ostream& out, const char* str)
+
 #include <sstream>
 #include <stdio.h> //snprintf
+
 class FMT
 {
 public: //ctor
@@ -23,7 +25,7 @@ private:
         std::ostream& operator<<(const TYPE& value)
         {
 //            return m_strm << "FMT(" << m_fmt << "," << value << ")";
-            char buf[20]; //enlarge as needed
+            char buf[32]; //enlarge as needed
             int needlen = snprintf(buf, sizeof(buf), m_fmt, value);
 //            buf[sizeof(buf) - 1] = '\0'; //make sure it's delimited (shouldn't be necessary)
 //printf(" [fmt: len %d for '%s' too big? %d] ", needlen, buf, needlen >= sizeof(buf));

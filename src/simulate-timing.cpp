@@ -24,7 +24,7 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 
 #define WANT_DETAILS  true //false //true
 
-#include "msgcolors.h"
+#include "msgcolors.h" //SrcLine, msg colors
 #include "ostrfmt.h"
 #include "elapsed.h"
 #include "vectorex.h"

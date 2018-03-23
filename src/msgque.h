@@ -15,12 +15,22 @@
 //for example see http://en.cppreference.com/w/cpp/thread/condition_variable
 #include "shmalloc.h"
 
-#ifndef WANT_DETAILS
- #define WANT_DETAILS  0
-#endif
-
 #ifndef VOLATILE
  #define VOLATILE
+#endif
+
+#ifdef MSGQUE_DEBUG
+ #include "atomic.h" //ATOMIC_MSG()
+ #include "ostrfmt.h" //FMT()
+ #include "elapsed.h" //timestamp()
+ #include "msgcolors.h" //SrcLine, msg colors
+ #define DEBUG_MSG  ATOMIC_MSG
+#else
+ #define DEBUG_MSG(msg)  //noop
+ #include "msgcolors.h" //SrcLine, msg colors
+#endif
+#ifndef MSGQUE_DETAILS
+ #define MSGQUE_DETAILS  0
 #endif
 
 
@@ -43,14 +53,14 @@ public: //ctor/dtor
 //    explicit MsgQue(const char* name = 0, VOLATILE std::mutex& mutex = /*std::mutex()*/ shared_mutex): m_msg(0), m_mutex(mutex)
     explicit MsgQue(const char* name = 0): m_msg(0)
     {
-//        /*if (WANT_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
+//        /*if (MSGQUE_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
 //        strncpy(m_name, "MsgQue-", sizeof(m_name));
         strncpy(m_name, (name && *name)? name: "(unnamed)", sizeof(m_name));
     }
     ~MsgQue()
     {
-        if (m_msg /*&& WANT_DETAILS*/) ATOMIC_MSG(RED_MSG << timestamp() << "MsgQue-" << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR) //benign, but might be caller bug so complain
-        else ATOMIC_MSG(GREEN_MSG << timestamp() << "MsgQue-" << m_name << ".dtor: empty @exit" << ENDCOLOR);
+        if (m_msg /*&& MSGQUE_DETAILS*/) DEBUG_MSG(RED_MSG << timestamp() << "MsgQue-" << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR) //benign, but might be caller bug so complain
+        else DEBUG_MSG(GREEN_MSG << timestamp() << "MsgQue-" << m_name << ".dtor: empty @exit" << ENDCOLOR);
 //        if (m_autodel) delete this;
     }
 public: //mem alloc
@@ -60,7 +70,7 @@ public: //mem alloc
         void* ptr = new char[size];
         const char* bp = strrchr(srcfile, '/');
         if (bp) srcfile = bp + 1;
-        ATOMIC_MSG(YELLOW_MSG << timestamp() << "alloc size " << size << " at adrs " << FMT("0x%x") << ptr << ", autodef? " << autodel << " from " << srcfile << ":" << srcline << ENDCOLOR << std::flush);
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "alloc size " << size << " at adrs " << FMT("0x%x") << ptr << ", autodef? " << autodel << " from " << srcfile << ":" << srcline << ENDCOLOR << std::flush);
 //        if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
 //        m_autodel = autodel; //won't work with static method
 //        if (autodel)
@@ -73,7 +83,7 @@ public: //mem alloc
     {
   //      shmheap.dealloc(ptr);
         delete ptr;
-        ATOMIC_MSG(YELLOW_MSG << timestamp() << "dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
     }
 #endif
 public: //getters
@@ -97,21 +107,21 @@ public: //methods
         if (m_msg & msg) throw "MsgQue.send: msg already queued"; // + tostr(msg) + " already queued");
         m_msg |= msg; //use bitmask for multiple msgs
         if (!(m_msg & msg)) throw "MsgQue.send: msg enqueue failed"; // + tostr(msg) + " failed");
-        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << "MssgQue-" << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << "MssgQue-" << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
         if (!broadcast) m_condvar.notify_one(); //wake main thread
         else m_condvar.notify_all(); //wake *all* wker threads
         return *this; //fluent
     }
 //rcv filters:
-    bool wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
-    bool not_wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
+    bool wanted(int val) { if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
+    bool not_wanted(int val) { if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
 //    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
     int rcv(bool (MsgQue::*filter)(int val), int operand = 0, bool remove = false)
     {
         std::unique_lock<VOLATILE std::mutex> scoped_lock(m_mutex);
 //        scoped_lock lock;
 //        m_condvar.wait(scoped_lock());
-        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << "MsgQue-" << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << "MsgQue-" << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
         while (!(this->*filter)(operand)) m_condvar.wait(scoped_lock); //ignore spurious wakeups
         int retval = m_msg;
         if (remove) m_msg = 0;
@@ -193,12 +203,12 @@ class MsgQue//Base
 public: //ctor/dtor
     explicit MsgQue(const char* name = 0, VOLATILE std::mutex& mutex = /*std::mutex()*/ shared_mutex): m_msg(0), m_mutex(mutex)
     {
-        /*if (WANT_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
+        /*if (MSGQUE_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
     }
     ~MsgQue()
     {
-        if (m_msg /*&& WANT_DETAILS*/) ATOMIC_MSG(RED_MSG << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR) //benign, but might be caller bug so complain
-        else ATOMIC_MSG(GREEN_MSG << m_name << ".dtor: empty @exit" << ENDCOLOR);
+        if (m_msg /*&& MSGQUE_DETAILS*/) DEBUG_MSG(RED_MSG << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR) //benign, but might be caller bug so complain
+        else DEBUG_MSG(GREEN_MSG << m_name << ".dtor: empty @exit" << ENDCOLOR);
 //        if (m_autodel) delete this;
     }
 #if 0
@@ -207,7 +217,7 @@ public: //ctor/dtor
         void* ptr = new char[size];
         const char* bp = strrchr(srcfile, '/');
         if (bp) srcfile = bp + 1;
-        ATOMIC_MSG(YELLOW_MSG << "alloc size " << size << " at adrs " << FMT("0x%x") << ptr << ", autodef? " << autodel << " from " << srcfile << ":" << srcline << ENDCOLOR << std::flush);
+        DEBUG_MSG(YELLOW_MSG << "alloc size " << size << " at adrs " << FMT("0x%x") << ptr << ", autodef? " << autodel << " from " << srcfile << ":" << srcline << ENDCOLOR << std::flush);
 //        if (!ptr) throw std::runtime_error("ShmHeap: alloc failed"); //debug only
 //        m_autodel = autodel; //won't work with static method
 //        if (autodel)
@@ -220,7 +230,7 @@ public: //ctor/dtor
     {
   //      shmheap.dealloc(ptr);
         delete ptr;
-        ATOMIC_MSG(YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
+        DEBUG_MSG(YELLOW_MSG << "dealloc adrs " << FMT("0x%x") << ptr << ENDCOLOR << std::flush);
     }
 #endif
 public: //getters
@@ -242,21 +252,21 @@ public: //methods
         if (m_msg & msg) throw "MsgQue.send: msg already queued"; // + tostr(msg) + " already queued");
         m_msg |= msg; //use bitmask for multiple msgs
         if (!(m_msg & msg)) throw "MsgQue.send: msg enqueue failed"; // + tostr(msg) + " failed");
-        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
         if (!broadcast) m_condvar.notify_one(); //wake main thread
         else m_condvar.notify_all(); //wake *all* wker threads
         return *this; //fluent
     }
 //rcv filters:
-    bool wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
-    bool not_wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
+    bool wanted(int val) { if (MSGQUE_DETAILS) DEBUG_MSG(FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
+    bool not_wanted(int val) { if (MSGQUE_DETAILS) DEBUG_MSG(FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
 //    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
     int rcv(bool (MsgQue::*filter)(int val), int operand = 0, bool remove = false)
     {
         std::unique_lock<VOLATILE std::mutex> scoped_lock(m_mutex);
 //        scoped_lock lock;
 //        m_condvar.wait(scoped_lock());
-        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
         while (!(this->*filter)(operand)) m_condvar.wait(scoped_lock); //ignore spurious wakeups
         int retval = m_msg;
         if (remove) m_msg = 0;
@@ -326,11 +336,11 @@ class ShmMsgQue: public ShmHeapAlloc //: public MsgQue
 public:
     explicit ShmMsgQue(const char* name = 0): m_msg(0)
     {
-        if (WANT_DETAILS) { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
+        if (MSGQUE_DETAILS) { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
     }
     ~ShmMsgQue()
     {
-        if (m_msg && WANT_DETAILS) ATOMIC_MSG(RED_MSG << m_name << ".dtor: !empty" << FMT("0x%x") << m_msg << ENDCOLOR); //benign, but might be caller bug so complain
+        if (m_msg && MSGQUE_DETAILS) DEBUG_MSG(RED_MSG << m_name << ".dtor: !empty" << FMT("0x%x") << m_msg << ENDCOLOR); //benign, but might be caller bug so complain
     }
 public:
     ShmMsgQue& clear()
@@ -346,21 +356,21 @@ public:
         if (m_msg & msg) throw "MsgQue.send: msg already queued"; // + tostr(msg) + " already queued");
         m_msg |= msg; //use bitmask for multiple msgs
         if (!(m_msg & msg)) throw "MsgQue.send: msg enqueue failed"; // + tostr(msg) + " failed");
-        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "1") << ", now qued " << FMT("0x%x") << m_msg << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "1") << ", now qued " << FMT("0x%x") << m_msg << ENDCOLOR);
         if (!broadcast) m_condvar.notify_one(); //wake main thread
         else m_condvar.notify_all(); //wake *all* wker threads
         return *this; //fluent
     }
 //rcv filters:
-    bool wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
-    bool not_wanted(int val) { if (WANT_DETAILS) ATOMIC_MSG(FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
+    bool wanted(int val) { if (MSGQUE_DETAILS) DEBUG_MSG(FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
+    bool not_wanted(int val) { if (MSGQUE_DETAILS) DEBUG_MSG(FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
 //    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
     int rcv(bool (ShmMsgQue::*filter)(int val), int operand = 0, bool remove = false)
     {
 //        std::unique_lock<std::mutex> lock(mutex);
         scoped_lock lock;
 //        m_condvar.wait(scoped_lock());
-        if (WANT_DETAILS) ATOMIC_MSG(BLUE_MSG << timestamp() << m_name << ".rcv: " << FMT("0x%x") << m_msg << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << m_name << ".rcv: " << FMT("0x%x") << m_msg << ENDCOLOR);
         while (!(this->*filter)(operand)) m_condvar.wait(lock); //ignore spurious wakeups
         int retval = m_msg;
         if (remove) m_msg = 0;
@@ -417,4 +427,5 @@ std::mutex ShmMsgQue::m_mutex;
 #endif
 
 
+#undef DEBUG_MSG
 #endif //ndef _MSGQUE_H

@@ -3,9 +3,12 @@
 #ifndef _ELAPSED_H
 #define _ELAPSED_H
 
- 
-//std::chrono::duration<double> elapsed()
+ //std::chrono::duration<double> elapsed()
 #include <chrono>
+#include <sstream>
+#include "ostrfmt.h" //FMT()
+
+
 //#include <iostream> //std::ostringstream, std::ostream
 //#include <iomanip> //setfill, setw, etc
 double elapsed_msec()
@@ -59,7 +62,6 @@ double elapsed_msec()
 }
 
 
-#include <sstream>
 std::string timestamp()
 {
     std::stringstream ss;
