@@ -23,7 +23,7 @@
 
 //#include <iostream> //std::cout, std::flush
 #include <sys/ipc.h>
-#include <sys/shm.h>
+#include <sys/shm.h> //shmctl(), shmget(), shmat(), shmdt()
 #include <errno.h>
 #include <stdexcept> //std::runtime_error
 #include <mutex> //std::mutex, lock
@@ -32,17 +32,16 @@
 #include <memory> //std::shared_ptr<>
 
 
+#include "msgcolors.h" //SrcLine, msg colors
 #ifdef SHMALLOC_DEBUG //CAUTION: recursive
  #include "atomic.h" //ATOMIC_MSG()
  #include "ostrfmt.h" //FMT()
  #include "elapsed.h" //timestamp()
- #include "msgcolors.h" //SrcLine, msg colors
  #define DEBUG_MSG  ATOMIC_MSG
 // #undef SHMALLOC_DEBUG
 // #define SHMALLOC_DEBUG  ATOMIC_MSG
 #else
  #define DEBUG_MSG(msg)  //noop
- #include "msgcolors.h" //SrcLine, msg colors
 // #define SHMALLOC_DEBUG(msg)  //noop
 #endif
 
@@ -448,12 +447,12 @@ public: //operators
 
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// stand-alone shm ptr:
+/// shmem ptr with auto-cleanup:
 //
 
-//shmem mixin class:
+//shmem ptr wrapper class:
 //like std::safe_ptr<> but for shmem:
-//additional params are passed via template to keep ctor clean (for perfect fwding)
+//additional params are passed via template to keep ctor signature clean (for perfect fwding)
 template <typename TYPE, int KEY = 0, int EXTRA = 0, bool INIT = true, bool AUTO_LOCK = true>
 class ShmPtr
 {
@@ -474,7 +473,7 @@ public: //ctor/dtor
     template<typename ... ARGS>
     explicit ShmPtr(ARGS&& ... args): m_ptr(0)
     {
-        m_ptr = static_cast<shm_type*>(shmalloc(sizeof(*m_ptr) + EXTRA, KEY)); //, SrcLine srcline = 0)
+        m_ptr = static_cast<shm_type*>(::shmalloc(sizeof(*m_ptr) + EXTRA, KEY)); //, SrcLine srcline = 0)
         if (!INIT || !m_ptr) return;
         memset(m_ptr, 0, sizeof(*m_ptr) + EXTRA); //re-init (not needed first time)
 //        m_ptr->mutex.std::mutex();
@@ -489,13 +488,17 @@ public: //ctor/dtor
         if (!INIT || !m_ptr) return;
 //        m_ptr->~WithMutex<TYPE>();
         m_ptr->~shm_type(); //call TYPE's dtor
-        shmfree(m_ptr);
+//        std::cout << "good-bye ShmPtr\n" << std::flush;
+        ::shmfree(m_ptr);
     }
 public: //operators
 //    TYPE* operator->() { return m_ptr; }
     shm_type* operator->() { return m_ptr; }
 //    operator TYPE&() { return *m_ptr; }
     shm_type* get() { return m_ptr; }
+public: //info about shmem
+    key_t shmkey() { return ::shmkey(m_ptr); }
+    size_t shmsize() { return ::shmsize(m_ptr); }
 };
 
 

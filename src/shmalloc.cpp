@@ -1,6 +1,6 @@
 #!/bin/bash -x
 echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
-#line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
+#line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line); add "-E" to above to see raw src
 
 //shared memory allocator test
 //self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
@@ -15,8 +15,8 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 #define WANT_TEST1
 #define SHMALLOC_DEBUG //show shmalloc debug msgs
 
-#include "ipc.h" //put first to define ipc variants
-#include "atomic.h"
+#include "ipc.h" //put first to request ipc variants
+#include "atomic.h" //otherwise put this one first so shared mutex will be destroyed last
 #include "msgcolors.h" //SrcLine, msg colors
 #include "ostrfmt.h" //FMT()
 #include "elapsed.h" //timestamp()
