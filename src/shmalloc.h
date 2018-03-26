@@ -112,7 +112,7 @@ void shmfree(void* addr, SrcLine srcline = 0)
 //    struct shmid_ds info;
 //    if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
     if (shmdt(ptr) == -1) throw std::runtime_error(strerror(errno));
-    ptr = 0; //can't use ptr after this point
+    ptr = 0; //CAUTION: can't use ptr after this point
 //    DEBUG_MSG(CYAN_MSG << "shmfree: dettached " << ENDCOLOR); //desc();
 //    int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
 //    if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
@@ -121,6 +121,7 @@ void shmfree(void* addr, SrcLine srcline = 0)
     if (shmctl(info.id, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
     if (!shminfo.shm_nattch) //no more procs attached, delete it
         if (shmctl(info.id, IPC_RMID, NULL /*ignored*/)) throw std::runtime_error(strerror(errno));
+    if (addr == )
     DEBUG_MSG(CYAN_MSG << timestamp() << "shmfree: freed " << FMT("key 0x%lx") << info.key << FMT(", id 0x%lx") << info.id << ", size " << info.size << ", cre pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR_ATLINE(srcline));
 }
 

@@ -91,9 +91,11 @@ private: //helpers
 //#define ATOMIC(stmt)  { std::unique_lock<std::mutex, std::defer_lock> lock(atomic_mut); stmt; }
 //#define ATOMIC(stmt)  { LockOnce lock; stmt; }
 //#define ATOMIC(stmt)  { std::unique_ptr<LockOnce> lock(new LockOnce()); stmt; }
-#define ATOMIC(stmt)  { InOut here("atomic"); LockOnce lock; stmt; }
+#define ATOMIC_1ARG(stmt)  { InOut here("atomic"); LockOnce lock; stmt; }
+#define ATOMIC_2ARGS(stmt, check)  { InOut here("atomic"); LockOnce lock; stmt; }
 
-#define ATOMIC_MSG(msg)  ATOMIC(std::cout << msg << std::flush)
+#define ATOMIC_MSG_1ARG(msg)  ATOMIC(std::cout << msg << std::flush)
+#define ATOMIC_MSG_2ARGS(msg, check)  ATOMIC(std::cout << msg << std::flush, check)
 
 
 #ifdef IPC_THREAD
@@ -118,13 +120,13 @@ std::mutex& LockOnce::mutex() //use wrapper to avoid trailing static decl at glo
     return *m_mutex.get(); //return real shared mutex; //(state == Ready)? *m_mutex.get(): *(std::mutex*)0; //nested_mutex;
 }
 
-class ordering
-{
-public: //ctor/dtor
-    ordering() { ATOMIC_MSG(BLUE_MSG << "first atomic msg"); }
-    ~ordering() { ATOMIC_MSG(BLUE_MSG << "last atomic msg"); }
-};
-ordering dummy; //kludge: force creation of global mutex before other usage so it will be destroyed last
+//class ordering
+//{
+//public: //ctor/dtor
+//    ordering() { ATOMIC_MSG(BLUE_MSG << "first atomic msg" << ENDCOLOR); }
+//    ~ordering() { ATOMIC_MSG(BLUE_MSG << "last atomic msg" << ENDCOLOR); }
+//};
+//ordering dummy; //kludge: force creation of global mutex before other usage so it will be destroyed last
 #endif
 
 
