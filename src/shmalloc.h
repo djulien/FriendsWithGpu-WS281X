@@ -41,7 +41,7 @@
 // #undef SHMALLOC_DEBUG
 // #define SHMALLOC_DEBUG  ATOMIC_MSG
 #else
- #define DEBUG_MSG(msg)  //noop
+ #define DEBUG_MSG(...)  //noop
 // #define SHMALLOC_DEBUG(msg)  //noop
 #endif
 
@@ -104,7 +104,7 @@ size_t shmsize(void* addr) { return shmptr(addr, "shmsize")->size; }
 
 
 //dealloc shmem:
-void shmfree(void* addr, SrcLine srcline = 0)
+void shmfree(void* addr, bool debug_msg, SrcLine srcline = 0)
 {
     ShmHdr* ptr = shmptr(addr, "shmfree");
     DEBUG_MSG(CYAN_MSG << timestamp() << FMT("shmfree: adrs %p") << addr << FMT(" = ptr %p") << ptr << ENDCOLOR_ATLINE(srcline));
@@ -121,9 +121,9 @@ void shmfree(void* addr, SrcLine srcline = 0)
     if (shmctl(info.id, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
     if (!shminfo.shm_nattch) //no more procs attached, delete it
         if (shmctl(info.id, IPC_RMID, NULL /*ignored*/)) throw std::runtime_error(strerror(errno));
-    if (addr == )
-    DEBUG_MSG(CYAN_MSG << timestamp() << "shmfree: freed " << FMT("key 0x%lx") << info.key << FMT(", id 0x%lx") << info.id << ", size " << info.size << ", cre pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR_ATLINE(srcline));
+    DEBUG_MSG(CYAN_MSG << timestamp() << "shmfree: freed " << FMT("key 0x%lx") << info.key << FMT(", id 0x%lx") << info.id << ", size " << info.size << ", cre pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR_ATLINE(srcline), debug_msg);
 }
+void shmfree(void* addr, SrcLine srcline = 0) { shmfree(addr, true, srcline); }
 
 
 //std::Deleter wrapper for shmfree:
@@ -472,7 +472,7 @@ class ShmPtr
 public: //ctor/dtor
 //    PERFECT_FWD2BASE_CTOR(ShmPtr, TYPE)
     template<typename ... ARGS>
-    explicit ShmPtr(ARGS&& ... args): m_ptr(0)
+    explicit ShmPtr(ARGS&& ... args): m_ptr(0), debug_free(true)
     {
         m_ptr = static_cast<shm_type*>(::shmalloc(sizeof(*m_ptr) + EXTRA, KEY)); //, SrcLine srcline = 0)
         if (!INIT || !m_ptr) return;
@@ -490,7 +490,7 @@ public: //ctor/dtor
 //        m_ptr->~WithMutex<TYPE>();
         m_ptr->~shm_type(); //call TYPE's dtor
 //        std::cout << "good-bye ShmPtr\n" << std::flush;
-        ::shmfree(m_ptr);
+        ::shmfree(m_ptr, debug_free);
     }
 public: //operators
 //    TYPE* operator->() { return m_ptr; }
@@ -498,6 +498,7 @@ public: //operators
 //    operator TYPE&() { return *m_ptr; }
     shm_type* get() { return m_ptr; }
 public: //info about shmem
+    bool debug_free;
     key_t shmkey() { return ::shmkey(m_ptr); }
     size_t shmsize() { return ::shmsize(m_ptr); }
 };
