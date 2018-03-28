@@ -123,7 +123,7 @@ void shmfree(void* addr, bool debug_msg, SrcLine srcline = 0)
         if (shmctl(info.id, IPC_RMID, NULL /*ignored*/)) throw std::runtime_error(strerror(errno));
     DEBUG_MSG(CYAN_MSG << timestamp() << "shmfree: freed " << FMT("key 0x%lx") << info.key << FMT(", id 0x%lx") << info.id << ", size " << info.size << ", cre pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR_ATLINE(srcline), debug_msg);
 }
-void shmfree(void* addr, SrcLine srcline = 0) { shmfree(addr, true, srcline); }
+void shmfree(void* addr, SrcLine srcline = 0) { shmfree(addr, true, srcline); } //overload
 
 
 //std::Deleter wrapper for shmfree:
@@ -413,7 +413,7 @@ public: //pointer operator; allows safe multi-process access to shared object's 
 //const char* WithMutex<MemPool<40>, true>::TYPENAME() { return "WithMutex<MemPool<40>, true>"; }
 
 
-#if 1
+#if 0 //use ShmPtr<> instead
 //shm object wrapper:
 //use operator-> to access wrapped object's methods
 //std::shared_ptr<> used to clean up shmem afterwards

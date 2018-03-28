@@ -109,6 +109,7 @@ static bool isunique(const char* folder, const char* basename, const char* ext)
 #define SRCLINE  __FILE__ ":" TOSTR(__LINE__)
 typedef const char* SrcLine; //allow compiler to distinguish param types, catch implicit conv
 
+//shorten src file name:
 SrcLine shortsrc(SrcLine srcline, SrcLine defline) //int line = 0)
 {
     static char buf[60]; //static to preserve after return to caller

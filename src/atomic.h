@@ -4,13 +4,16 @@
 #ifndef _ATOMIC_H
 #define _ATOMIC_H
 
-#include <iostream> //std::cout, std::flush
 #include <mutex> //std::mutex, std::unique_lock
 #include "msgcolors.h" //SrcLine and colors (used with ATOMIC_MSG)
 //#include <memory> //std::unique_ptr<>
 
+#include <iostream> //std::cout, std::flush
+#define MY_DEBUG(msg)  //noop
+//#define MY_DEBUG(msg)  std::cout << msg << "\n" << std::flush
 
-//atomic operations:
+
+//atomic wrapper to iostream messages:
 #ifdef IPC_THREAD
 // #include "shmkeys.h"
 // #include "shmalloc.h"
@@ -36,7 +39,7 @@
  private: //members
     void maybe_lock(bool want_lock)
     {
-        std::cout << "LockOnce: should i lock? " << (want_lock && !!m_lock.mutex()) << "\n" << std::flush;
+        MY_DEBUG("LockOnce: should i lock? " << (want_lock && !!m_lock.mutex()));
         if (want_lock && m_lock.mutex()) m_lock.lock(); //only lock mutex if it is ready
     } 
 //    std::mutex& first_lock(std::mutex& mutex) { if (!recursion()++) lock(); } //only lock 1x/process
@@ -80,8 +83,8 @@ public: //ctor/dtor
 private: //helpers
     void debug(bool inout)
     {
-        if (inout) std::cout << m_funcname << " in ...\n" << std::flush;
-        else std::cout << " ... " << m_funcname << " out\n" << std::flush;
+        if (inout) MY_DEBUG(m_funcname << " in ...");
+        else MY_DEBUG(" ... " << m_funcname << " out");
     }
 };
 //#endif
@@ -93,7 +96,8 @@ private: //helpers
 #define USE_ARG3(one, two, three, ...)  three
 
 //use macro so any stmt can be nested within scoped lock:
-//CAUTION: might be recursive if IPC_THREAD is turned on for ShmPtr (in shmalloc.h)
+//CAUTION: recursive if IPC_THREAD is turned on with DEBUG for ShmPtr (in shmalloc.h)
+//use optional parameter to bypass lock (to avoid recursion deadlock on mutex)
 //#define ATOMIC(stmt)  { std::unique_lock<std::mutex, std::defer_lock> lock(atomic_mut); stmt; }
 //#define ATOMIC(stmt)  { LockOnce lock; stmt; }
 //#define ATOMIC(stmt)  { std::unique_ptr<LockOnce> lock(new LockOnce()); stmt; }
@@ -116,13 +120,13 @@ std::mutex& LockOnce::mutex() //use wrapper to avoid trailing static decl at glo
 //        static std::mutex m_mutex;
 //    static bool ready = false; //enum { None, Started, Ready } state = None;
     static bool busy = false; //detect recursion
-    std::cout << "cre mutex: busy? " << busy << "\n" << std::flush;
+    MY_DEBUG("cre mutex: busy? " << busy);
     if (busy) return *(std::mutex*)0; //placeholder mutex; NOTE: will segfault if caller tries to use this
 //    if (!ready /*state == Started*/) return *(std::mutex*)0; //placeholder mutex; NOTE: will segfault if caller tries to use it
 //    state = Started;
     busy = true;
     static ShmPtr<std::mutex, ATOMIC_MSG_SHMKEY, 0, true, false> m_mutex; //ipc mutex (must be in shared memory); static for persistence and defered init to avoid “static initialization order fiasco”
-    m_mutex.debug_free = false; //inhibit debug msgs after shmfree()
+    m_mutex.debug_free = false; //don't lock debug msgs after shmfree() (shared mutex is gone)
 //    static std::mutex nested_mutex;
 //    state = Ready;
     busy = false;

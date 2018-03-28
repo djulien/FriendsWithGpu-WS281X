@@ -12,15 +12,17 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 // x/80xw 0x7ffff7ff7000
 
 
-#define WANT_TEST1
+//#define WANT_TEST1
+//#define WANT_TEST2
+#define WANT_TEST3
 #define SHMALLOC_DEBUG //show shmalloc debug msgs
 
-#include "ipc.h" //put first to request ipc variants
-#include "atomic.h" //otherwise put this one first so shared mutex will be destroyed last
+#include "ipc.h" //put first to request ipc variants; comment out for in-proc multi-threading
+#include "atomic.h" //otherwise put this one first so shared mutex will be destroyed last; ATOMIC_MSG()
 #include "msgcolors.h" //SrcLine, msg colors
 #include "ostrfmt.h" //FMT()
 #include "elapsed.h" //timestamp()
-#include "shmalloc.h" //MemPool<>, WithMutex<>, ShmAllocator<>
+#include "shmalloc.h" //MemPool<>, WithMutex<>, ShmAllocator<>, ShmPtr<>
 //#include "shmallocator.h"
 
 
@@ -109,10 +111,13 @@ int main(int argc, const char* argv[])
 /// Test 2
 //
 
-#ifdef WANT_TEST2 //proxy example, multi-proc
+#ifdef WANT_TEST2 //proxy example, multi-proc; BROKEN
 //#include "vectorex.h"
 //#include <unistd.h> //fork()
-#include "ipc.h"
+//#include "ipc.h"
+#ifndef IPC_THREAD
+ #error "uncomment ipc.h near top for this test"
+#endif
 
 //template <>
 //const char* ShmAllocator<TestObj>::TYPENAME() { return "TestObj"; }
@@ -126,6 +131,11 @@ MAKE_TYPENAME(WithMutex<TestObj COMMA true>)
 MAKE_TYPENAME(ShmAllocator<TestObj>)
 MAKE_TYPENAME(WithMutex<MemPool<300> COMMA true>)
 MAKE_TYPENAME(MemPool<300>)
+
+//typedef shm_obj<WithMutex<MemPool<PAGE_SIZE>>> ShmHeap;
+//template <typename TYPE, int KEY = 0, int EXTRA = 0, bool INIT = true, bool AUTO_LOCK = true>
+#include "shmkeys.h"
+//#include "shmalloc.h"
 
 
 //#include <sys/types.h>
@@ -156,7 +166,11 @@ int main(int argc, const char* argv[])
 //    ShmSeg& shm = *std::allocator<ShmSeg>(1); //alloc space but don't init
 //    ShmAllocator<ShmSeg> heap_alloc;
 //used shared_ptr<> for ref counting *and* to allow skipping ctor in child procs:
-    std::shared_ptr<ShmHeap> shmheaptr; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
+//    std::shared_ptr<ShmHeap> shmheaptr; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
+//    typedef ShmPtr<WithMutex<MemPool<PAGE_SIZE>>, HEAPPAGE_SHMKEY> ShmHeap;
+    typedef ShmPtr<MemPool<PAGE_SIZE>, HEAPPAGE_SHMKEY> ShmHeap;
+//    typedef ShmAllocator<TestObj, PAGE_SIZE> ShmHeap;
+    ShmHeap shmheaptr;
 //    ShmHeap shmheap; //(ShmAllocator<ShmSeg>().allocate()); //alloc space but don't init yet
 //    ShmSeg* shmptr = heap_alloc.allocate(1); //alloc space but don't init yet
 //    std::unique_ptr<ShmSeg> shm = shmptr;
@@ -164,9 +178,9 @@ int main(int argc, const char* argv[])
 //    if (owner) shmheaptr.reset(new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(), shmdeleter<ShmHeap>()); //[](TYPE* ptr) { shmfree(ptr); }); //0x123beef, ShmSeg::persist::NewTemp, 300)); //call ctor to init (parent only)
 //#define INNER_CREATE(args)  m_ptr(new (shmalloc(sizeof(TYPE))) TYPE(args), [](TYPE* ptr) { shmfree(ptr); }) //pass ctor args down into m_var ctor; deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 //    shmheaptr.reset(thread.isParent()? new (shmalloc(sizeof(ShmHeap), SRCLINE)) ShmHeap(): (ShmHeap*)shmalloc(sizeof(ShmHeap), pipe.child_rcv(SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
-    shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), thread.isParent()? 0: pipe.rcv(SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
-    if (thread.isParent()) new (shmheaptr.get()) ShmHeap(); //call ctor to init (parent only)
-    if (thread.isParent()) pipe.send(shmkey(shmheaptr.get()), SRCLINE);
+//    shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), thread.isParent()? 0: pipe.rcv(SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //call ctor to init (parent only)
+//    if (thread.isParent()) new (shmheaptr.get()) ShmHeap(); //call ctor to init (parent only)
+//    if (thread.isParent()) pipe.send(shmkey(shmheaptr.get()), SRCLINE);
     ATOMIC_MSG(BLUE_MSG << timestamp() << FMT("shmheap at %p") << shmheaptr.get() << ENDCOLOR);
 //    else shmptr.reset(new /*(shmptr.get())*/ ShmHeap(rcv(fd), ShmSeg::persist::Reuse, 1));
 //    else shmheaptr.reset((ShmHeap*)shmalloc(sizeof(ShmHeap), rcv(fd, SRCLINE), SRCLINE), shmdeleter<ShmHeap>()); //don't call ctor; Seg::persist::Reuse, 1));
@@ -265,6 +279,9 @@ int main(int argc, const char* argv[])
 //
 
 #ifdef WANT_TEST3 //generic shm usage pattern
+#ifndef IPC_THREAD
+ #error "uncomment ipc.h near top for this test"
+#endif
 //usage:
 //    ShmMsgQue& msgque = *(ShmMsgQue*)shmalloc(sizeof(ShmMsgQue), shmkey, SRCLINE);
 //    if (isParent) new (&msgque) ShmMsgQue(name, SRCLINE); //call ctor to init (parent only)
@@ -272,8 +289,9 @@ int main(int argc, const char* argv[])
 //    if (isParent) { msgque.~ShmMsgQue(); shmfree(&msgque, SRCLINE); }
 
 #include "vectorex.h"
+#include "shmkeys.h"
 //#include <unistd.h> //fork()
-#include "ipc.h" //IpcThread(), IpcPipe()
+//#include "ipc.h" //IpcThread(), IpcPipe()
 //#include <memory> //unique_ptr<>
 
 //template <>
@@ -310,8 +328,11 @@ int main(int argc, const char* argv[])
 #else //automatically shared object
     typedef WithMutex<TestObj> type;
 //    ShmScope<type> scope(thread, SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
-    ShmScope<type, 2> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
-    type& testobj = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+//    ShmScope<type, 2> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+//    type& testobj = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+parent: INIT true
+child: INIT false
+    ShmPtr<TestObj, TESTOBJ_SHMKEY, 0, false> testobj("testobj", SRCLINE);
 //    thread.shared<TestObj> testobj("testobj", SRCLINE);
 //    Shmobj<TestObj> testobj("testobj", thread, SRCLINE);
 
