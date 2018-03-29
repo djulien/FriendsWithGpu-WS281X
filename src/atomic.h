@@ -125,8 +125,9 @@ std::mutex& LockOnce::mutex() //use wrapper to avoid trailing static decl at glo
 //    if (!ready /*state == Started*/) return *(std::mutex*)0; //placeholder mutex; NOTE: will segfault if caller tries to use it
 //    state = Started;
     busy = true;
-    static ShmPtr<std::mutex, ATOMIC_MSG_SHMKEY, 0, true, false> m_mutex; //ipc mutex (must be in shared memory); static for persistence and defered init to avoid “static initialization order fiasco”
-    m_mutex.debug_free = false; //don't lock debug msgs after shmfree() (shared mutex is gone)
+    static ShmPtr_params override(SRCLINE, ATOMIC_MSG_SHMKEY, 0, true, false); //don't lock debug msgs after shmfree() (shared mutex is gone)
+    static ShmPtr<std::mutex, /*ATOMIC_MSG_SHMKEY, 0, true,*/ false> m_mutex; //ipc mutex (must be in shared memory); static for persistence and defered init to avoid “static initialization order fiasco”
+//    m_mutex.debug_free = false; //don't lock debug msgs after shmfree() (shared mutex is gone)
 //    static std::mutex nested_mutex;
 //    state = Ready;
     busy = false;

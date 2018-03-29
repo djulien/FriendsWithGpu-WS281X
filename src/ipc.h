@@ -93,9 +93,9 @@ public: //ctor/dtor
     explicit IpcThread(_Callable/*&*/ entpt, SrcLine srcline = 0): IpcThread(entpt, *new IpcPipe(srcline), srcline) {}
     explicit IpcThread(IpcPipe& pipe, SrcLine srcline = 0) //: m_pipe(pipe)
     {
-        all.push_back(this); //keep track of inst; let caller use global var
+        all.push_back(this); //keep track of instances; let caller use global collection
         m_pid = fork();
-        m_pipe.reset(&pipe); //NOTE: pipe must be cre < fork
+        m_pipe.reset(&pipe); //NOTE: must cre pipe < fork
         const char* proctype = isParent()? "parent": "child";
         DEBUG_MSG(YELLOW_MSG << timestamp() << "fork (" << proctype << "): child pid = " << (isParent()? m_pid: getpid()) << ENDCOLOR_ATLINE(srcline));
         if (isError()) throw std::runtime_error(strerror(errno)); //fork failed

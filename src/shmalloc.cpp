@@ -1,5 +1,5 @@
 #!/bin/bash -x
-echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
+echo -e '\e[1;36m'; g++ -O3 -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line); add "-E" to above to see raw src
 
 //shared memory allocator test
@@ -14,8 +14,10 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 
 //#define WANT_TEST1
 //#define WANT_TEST2
-#define WANT_TEST3
+//#define WANT_TEST3
+#define WANT_TEST4
 #define SHMALLOC_DEBUG //show shmalloc debug msgs
+#define IPC_DEBUG //show ipc debug msgs
 
 #include "ipc.h" //put first to request ipc variants; comment out for in-proc multi-threading
 #include "atomic.h" //otherwise put this one first so shared mutex will be destroyed last; ATOMIC_MSG()
@@ -62,7 +64,7 @@ MAKE_TYPENAME(WithMutex<MemPool<40>>)
 
 int main(int argc, const char* argv[])
 {
-    ATOMIC_MSG(PINK_MSG << "data space:" <<ENDCOLOR);
+    ATOMIC_MSG(PINK_MSG << timestamp() << "data space:" <<ENDCOLOR);
     void* ptr1 = pool20->alloc(10);
 //    void* ptr1 = pool20()()->alloc(10);
 //    void* ptr1 = pool20.base().base().alloc(10);
@@ -70,14 +72,15 @@ int main(int argc, const char* argv[])
     pool20->free(ptr2);
     void* ptr3 = pool20->alloc(1);
 
-    ATOMIC_MSG(PINK_MSG << "stack:" <<ENDCOLOR);
+    ATOMIC_MSG(PINK_MSG << timestamp() << "stack:" <<ENDCOLOR);
     MemPool<rdup(1, 8)+8 + rdup(1, 8)+8> pool10; //don't need mutex on stack mem (not safe to share it)
     void* ptr4 = pool10.alloc(1);
     void* ptr5 = pool10.alloc(1);
     void* ptr6 = pool10.alloc(0);
 
-    typedef decltype(pool20) pool_type; //use same type as pool20
-    ATOMIC_MSG(PINK_MSG << "shmem: actual size " << sizeof(pool_type) << ENDCOLOR);
+//    typedef decltype(pool20) pool_type; //use same type as pool20
+    typedef MemPool<rdup(10, 8)+8 + rdup(4, 8)+8> pool_type; //use same type as pool20
+    ATOMIC_MSG(PINK_MSG << timestamp() << "shmem: actual size " << sizeof(pool_type) << ENDCOLOR);
 //    std::shared_ptr<pool_type /*, shmdeleter<pool_type>*/> shmpool(new (shmalloc(sizeof(pool_type))) pool_type(), shmdeleter<pool_type>());
 //    std::shared_ptr<pool_type /*, shmdeleter<pool_type>*/> shmpool(new (shmalloc(sizeof(pool_type))) pool_type(), shmdeleter<pool_type>());
 //    pool_type& shmpool = *new (shmalloc(sizeof(pool_type))) pool_type();
@@ -90,7 +93,8 @@ int main(int argc, const char* argv[])
     std::unique_ptr<pool_type, shmdeleter<pool_type>> clup(&shmpool, shmdeleter<pool_type>());
 #endif
 //    SHM_DECL(pool_type, shmpool); //equiv to "pool_type shmpool", but allocates in shmem
-    shm_obj<pool_type> shmpool; //put it in shared memory instead of stack
+//    shm_obj<pool_type> shmpool; //put it in shared memory instead of stack
+    ShmPtr<pool_type> shmpool;
 //    ATOMIC_MSG(BLUE_MSG << shmpool.TYPENAME() << ENDCOLOR); //NOTE: don't use -> here (causes recursive lock)
 //    shmpool->m_mutex.lock();
 //    shmpool->debug();
@@ -330,9 +334,8 @@ int main(int argc, const char* argv[])
 //    ShmScope<type> scope(thread, SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
 //    ShmScope<type, 2> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
 //    type& testobj = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
-parent: INIT true
-child: INIT false
-    ShmPtr<TestObj, TESTOBJ_SHMKEY, 0, false> testobj("testobj", SRCLINE);
+    ShmPtr_params(SRCLINE, TESTOBJ_SHMKEY, 0, thread.isParent(), true);
+    ShmPtr<TestObj /*, TESTOBJ_SHMKEY, 0, false*/> testobj("testobj", SRCLINE); //, thread.isParent()); //only allow parent to init/destroy object
 //    thread.shared<TestObj> testobj("testobj", SRCLINE);
 //    Shmobj<TestObj> testobj("testobj", thread, SRCLINE);
 
@@ -362,21 +365,35 @@ child: INIT false
 
 #ifdef WANT_TEST4 //generic shm usage pattern
 //#include <memory> //unique_ptr<>
+#include "shmkeys.h"
 
 #define COMMA ,  //kludge: macros don't like commas within args; from https://stackoverflow.com/questions/13842468/comma-in-c-c-macro
 MAKE_TYPENAME(WithMutex<TestObj COMMA true>)
 
 int main(int argc, const char* argv[])
 {
-    ATOMIC_MSG(BLUE_MSG << "start" << ENDCOLOR);
-    ShmPtr<TestObj, 0x4444beef, 100, false> objptr("shmobj", SRCLINE);
-    objptr->inc();
-    objptr->inc();
-    objptr->inc();
-    objptr->print();
-//    objptr->lock();
+    ATOMIC_MSG(BLUE_MSG << timestamp() << "start test 4" << ENDCOLOR);
+//    ShmPtr_params(SRCLINE, 0x444decaf, 100, true); //!i && thread.isParent());
+//    ShmPtr<TestObj> objptr("shmobj", SRCLINE);
+//    IpcThread threads[4];
+//    ATOMIC_MSG(PINK_MSG << timestamp() << "start pid " << IpcThread::get_id() << ENDCOLOR);
+//    std::atomic<int> first = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        IpcThread thread;
+        ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent": "child") << "[" << i << "] pid " << thread.get_id() << ENDCOLOR);
+        if (!thread.isParent())
+        ShmPtr_params(SRCLINE, 0x444decaf, 100, !i && thread.isParent()); //init first time only
+        ShmPtr<TestObj> objptr("shmobj", SRCLINE);
+        objptr->inc();
+        objptr->inc();
+        objptr->inc();
+        objptr->print();
+//        objptr->lock();
+        if (!thread.isParent()) break;
+    }
 
-    ATOMIC_MSG(BLUE_MSG << "finish" << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << timestamp() << "finish" << ENDCOLOR);
     return 0;
 }
 #endif

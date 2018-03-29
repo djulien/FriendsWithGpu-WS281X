@@ -451,11 +451,48 @@ public: //operators
 /// shmem ptr with auto-cleanup:
 //
 
+//kludge: allow caller to pass run-time params into ShmPtr ctor without changing ShmPtr ctor signature
+//use base class so it can be shared between all templates
+class ShmPtr_params
+{
+public: //ctor/dtor
+//    ShmPtr_params(const char* where = "ctor"): ShmPtr_params(0, 0, true, true, where) {}
+    ShmPtr_params(/*const char* where = "ctor",*/ SrcLine srcline = 0, int key = 0, int extra = 0, bool want_init = true, bool debug_free = true)
+    {
+        debug(srcline /*where*/, "before");
+        ShmKey = key;
+        Extra = extra;
+        WantInit = want_init;
+        DebugFree = debug_free;
+        debug(srcline /*where*/, "after");
+    }
+public: //members
+    static int ShmKey;
+    static int Extra;
+    static bool WantInit;
+    static bool DebugFree;
+//public: //methods
+    void debug(SrcLine srcline = 0, /*const char* where = "",*/ const char* when = "")
+    {
+//        DEBUG_MSG(BLUE_MSG << timestamp() << "ShmPtr params " << when << FMT(": key 0x%x") << ShmKey << ", extra " << Extra << ", init? " << WantInit << ", debug free? " << DebugFree << ENDCOLOR_ATLINE(srcline));
+    }
+//    static void defaults()
+//    {
+//        ShmKey = 0;
+//        WantInit = true;
+//    }
+};
+int ShmPtr_params::ShmKey;
+int ShmPtr_params::Extra;
+bool ShmPtr_params::WantInit;
+bool ShmPtr_params::DebugFree;
+ShmPtr_params defaults(SRCLINE); //"default"); //DRY kludge: set params to default values
+
 //shmem ptr wrapper class:
 //like std::safe_ptr<> but for shmem:
 //additional params are passed via template to keep ctor signature clean (for perfect fwding)
-template <typename TYPE, int KEY = 0, int EXTRA = 0, bool INIT = true, bool AUTO_LOCK = true>
-class ShmPtr
+template <typename TYPE, /*int KEY = 0, int EXTRA = 0, bool INIT = true,*/ bool AUTO_LOCK = true>
+class ShmPtr: public ShmPtr_params
 {
 //    WithMutex<TYPE>* m_ptr;
 //    struct ShmContents
@@ -467,16 +504,19 @@ class ShmPtr
 //    }* m_ptr;
     typedef typename std::conditional<AUTO_LOCK, WithMutex<TYPE, AUTO_LOCK>, TYPE>::type shm_type; //see https://stackoverflow.com/questions/17854407/how-to-make-a-conditional-typedef-in-c?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
     shm_type* m_ptr;
+    bool m_want_init, m_debug_free;
 //    WithMutex<TYPE, AUTO_LOCK>* m_ptr;
 //    typedef decltype(*m_ptr) shm_type;
 public: //ctor/dtor
 //    PERFECT_FWD2BASE_CTOR(ShmPtr, TYPE)
     template<typename ... ARGS>
-    explicit ShmPtr(ARGS&& ... args): m_ptr(0), debug_free(true)
+//    explicit ShmPtr(ARGS&& ... args, bool want_init = true): m_ptr(0), m_want_init(want_init), debug_free(true)
+    explicit ShmPtr(ARGS&& ... args): ShmPtr_params(SRCLINE /*"preserve base"*/, ShmKey, Extra, WantInit, DebugFree), m_ptr(0), m_want_init(WantInit), m_debug_free(DebugFree) //kludge: preserve ShmPtr_params
     {
-        m_ptr = static_cast<shm_type*>(::shmalloc(sizeof(*m_ptr) + EXTRA, KEY)); //, SrcLine srcline = 0)
-        if (!INIT || !m_ptr) return;
-        memset(m_ptr, 0, sizeof(*m_ptr) + EXTRA); //re-init (not needed first time)
+        m_ptr = static_cast<shm_type*>(::shmalloc(sizeof(*m_ptr) + Extra, ShmKey)); //, SrcLine srcline = 0)
+        ShmPtr_params defaults(SRCLINE); //("reset"); //reset to default values for next instantiation
+        if (/*!INIT ||*/ !m_ptr || !m_want_init) return;
+        memset(m_ptr, 0, ::shmsize(m_ptr)); //sizeof(*m_ptr) + EXTRA); //re-init (not needed first time)
 //        m_ptr->mutex.std::mutex();
 //        m_ptr->locked = false;
 //        m_ptr->data.TYPE();
@@ -486,11 +526,11 @@ public: //ctor/dtor
      }
     ~ShmPtr()
     {
-        if (!INIT || !m_ptr) return;
+        if (/*!INIT ||*/ !m_ptr || !m_want_init) return;
 //        m_ptr->~WithMutex<TYPE>();
         m_ptr->~shm_type(); //call TYPE's dtor
 //        std::cout << "good-bye ShmPtr\n" << std::flush;
-        ::shmfree(m_ptr, debug_free);
+        ::shmfree(m_ptr, m_debug_free);
     }
 public: //operators
 //    TYPE* operator->() { return m_ptr; }
@@ -498,7 +538,7 @@ public: //operators
 //    operator TYPE&() { return *m_ptr; }
     shm_type* get() { return m_ptr; }
 public: //info about shmem
-    bool debug_free;
+//    bool debug_free;
     key_t shmkey() { return ::shmkey(m_ptr); }
     size_t shmsize() { return ::shmsize(m_ptr); }
 };
