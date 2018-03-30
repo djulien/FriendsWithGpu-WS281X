@@ -7,7 +7,7 @@
 
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <unistd.h> //fork, getpid
+#include <unistd.h> //fork, getpid()
 #include <algorithm> //std::find()
 #include <vector> //std::vector<>
 #include <stdexcept> //std::runtime_error
@@ -34,7 +34,7 @@ private: //data members
     int m_fd[2];
 //    bool m_open[2];
 public: //ctor
-    IpcPipe(SrcLine srcline = 0): m_fd{-1, -1} { DEBUG_MSG(BLUE_MSG << timestamp() << "IpcPipe ctor" << ENDCOLOR_ATLINE(srcline)); pipe(m_fd); } //m_open[0] = m_open[1] = true; } //create pipe descriptors < fork()
+    explicit IpcPipe(SrcLine srcline = 0): m_fd{-1, -1} { DEBUG_MSG(BLUE_MSG << timestamp() << "IpcPipe ctor" << ENDCOLOR_ATLINE(srcline)); pipe(m_fd); } //m_open[0] = m_open[1] = true; } //create pipe descriptors < fork()
     ~IpcPipe() { pipe_close(ReadEnd); pipe_close(WriteEnd); DEBUG_MSG(BLUE_MSG << timestamp() << "IpcPipe dtor" << ENDCOLOR); }
 public: //methods
 //no    const int Parent2Child = 0, Child2Parent = 1;
@@ -86,7 +86,7 @@ public: //ctor/dtor
     typedef void (*_Callable)(void); //void* data); //TODO: make generic?
 //    template<typename _Callable, typename... _Args>
 //    explicit IpcThread(_Callable&& entpt, _Args&&... args)
-    bool isParent() const { return (m_pid != 0); }
+    bool isParent() const { return !isChild() && !isError(); } //(m_pid != 0); }
     bool isChild() const { return (m_pid == 0); }
     bool isError() const { return (m_pid == -1); }
     explicit IpcThread(SrcLine srcline = 0): IpcThread(*new IpcPipe(srcline), srcline) {}

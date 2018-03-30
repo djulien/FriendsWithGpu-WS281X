@@ -6,6 +6,7 @@
  //std::chrono::duration<double> elapsed()
 #include <chrono>
 #include <sstream>
+#include <unistd.h> //getpid()
 #include "ostrfmt.h" //FMT()
 
 
@@ -69,7 +70,7 @@ std::string timestamp()
 //    ss << THRID;
 //    float x = 1.2;
 //    int h = 42;
-    ss << FMT("[%4.3f msec] ") << elapsed_msec();
+    ss << FMT("[%4.3f msec ") << elapsed_msec() << getpid() << "] ";
     return ss.str();
 }
 

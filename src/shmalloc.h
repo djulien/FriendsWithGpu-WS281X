@@ -65,7 +65,7 @@ typedef struct { int id; key_t key; size_t size; uint32_t marker; } ShmHdr;
 static ShmHdr* shmptr(void* addr, const char* func)
 {
     ShmHdr* ptr = static_cast<ShmHdr*>(addr); --ptr;
-    if (ptr->marker == SHM_MAGIC) return ptr;
+    if (!((ptr->marker ^ SHM_MAGIC) & ~1)) return ptr;
     char buf[64];
     snprintf(buf, sizeof(buf), "%s: bad shmem pointer %p", func, addr);
     throw std::runtime_error(buf);
@@ -77,9 +77,11 @@ void* shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
 {
     if ((size < 1) || (size >= 10e6)) throw std::runtime_error("shmalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
     size += sizeof(ShmHdr);
-    if (!key) key = (rand() << 16) | 0xbeef;
-    int shmid = shmget(key, size, 0666 | IPC_CREAT); //create if !exist; clears to 0 upon creation
-    DEBUG_MSG(CYAN_MSG << timestamp() << "shmalloc: cre shmget key " << FMT("0x%lx") << key << ", size " << size << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR_ATLINE(srcline));
+    if (!key) key = (rand() << 16) | 0xbeef; //generate new (pseudo-random) key
+    int shmid = shmget(key, size, 0666); // | IPC_CREAT); //create if !exist; clears to 0 upon creation
+    bool existed = (shmid != -1);
+    if (!existed) shmid = shmget(key, size, 0666 | IPC_CREAT); //create if !exist; clears to 0 upon creation
+    DEBUG_MSG(CYAN_MSG << timestamp() << "shmalloc: cre shmget key " << FMT("0x%lx") << key << ", size " << size << ", existed? " << existed << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR_ATLINE(srcline));
     if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
     struct shmid_ds shminfo;
     if (shmctl(shmid, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
@@ -90,6 +92,7 @@ void* shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
     ptr->key = key;
     ptr->size = shminfo.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
     ptr->marker = SHM_MAGIC;
+    if (existed) ptr->marker ^= 1;
     return ++ptr;
 }
 void* shmalloc(size_t size, SrcLine srcline = 0) { return shmalloc(size, 0, srcline); }
@@ -102,6 +105,9 @@ key_t shmkey(void* addr) { return shmptr(addr, "shmkey")->key; }
 //get size:
 size_t shmsize(void* addr) { return shmptr(addr, "shmsize")->size; }
 
+
+//tell caller if new shm blk was created:
+bool shmexisted(void* addr) { return (shmptr(addr, "shmexisted")->marker != SHM_MAGIC); }
 
 //dealloc shmem:
 void shmfree(void* addr, bool debug_msg, SrcLine srcline = 0)
@@ -457,19 +463,19 @@ class ShmPtr_params
 {
 public: //ctor/dtor
 //    ShmPtr_params(const char* where = "ctor"): ShmPtr_params(0, 0, true, true, where) {}
-    ShmPtr_params(/*const char* where = "ctor",*/ SrcLine srcline = 0, int key = 0, int extra = 0, bool want_init = true, bool debug_free = true)
+    ShmPtr_params(/*const char* where = "ctor",*/ SrcLine srcline = 0, int key = 0, int extra = 0, bool want_reinit = true, bool debug_free = true)
     {
         debug(srcline /*where*/, "before");
         ShmKey = key;
         Extra = extra;
-        WantInit = want_init;
+        WantReInit = want_reinit;
         DebugFree = debug_free;
         debug(srcline /*where*/, "after");
     }
 public: //members
     static int ShmKey;
     static int Extra;
-    static bool WantInit;
+    static bool WantReInit;
     static bool DebugFree;
 //public: //methods
     void debug(SrcLine srcline = 0, /*const char* where = "",*/ const char* when = "")
@@ -484,7 +490,7 @@ public: //members
 };
 int ShmPtr_params::ShmKey;
 int ShmPtr_params::Extra;
-bool ShmPtr_params::WantInit;
+bool ShmPtr_params::WantReInit;
 bool ShmPtr_params::DebugFree;
 ShmPtr_params defaults(SRCLINE); //"default"); //DRY kludge: set params to default values
 
@@ -511,11 +517,12 @@ public: //ctor/dtor
 //    PERFECT_FWD2BASE_CTOR(ShmPtr, TYPE)
     template<typename ... ARGS>
 //    explicit ShmPtr(ARGS&& ... args, bool want_init = true): m_ptr(0), m_want_init(want_init), debug_free(true)
-    explicit ShmPtr(ARGS&& ... args): ShmPtr_params(SRCLINE /*"preserve base"*/, ShmKey, Extra, WantInit, DebugFree), m_ptr(0), m_want_init(WantInit), m_debug_free(DebugFree) //kludge: preserve ShmPtr_params
+    explicit ShmPtr(ARGS&& ... args): ShmPtr_params(SRCLINE /*"preserve base"*/, ShmKey, Extra, WantReInit, DebugFree), m_ptr(0), m_want_init(WantReInit), m_debug_free(DebugFree) //kludge: preserve ShmPtr_params
     {
         m_ptr = static_cast<shm_type*>(::shmalloc(sizeof(*m_ptr) + Extra, ShmKey)); //, SrcLine srcline = 0)
         ShmPtr_params defaults(SRCLINE); //("reset"); //reset to default values for next instantiation
-        if (/*!INIT ||*/ !m_ptr || !m_want_init) return;
+        if (::shmexisted(m_ptr))
+            if (/*!INIT ||*/ !m_ptr || !m_want_init) return;
         memset(m_ptr, 0, ::shmsize(m_ptr)); //sizeof(*m_ptr) + EXTRA); //re-init (not needed first time)
 //        m_ptr->mutex.std::mutex();
 //        m_ptr->locked = false;
@@ -539,8 +546,9 @@ public: //operators
     shm_type* get() { return m_ptr; }
 public: //info about shmem
 //    bool debug_free;
-    key_t shmkey() { return ::shmkey(m_ptr); }
-    size_t shmsize() { return ::shmsize(m_ptr); }
+    key_t shmkey() const { return ::shmkey(m_ptr); }
+    size_t shmsize() const { return ::shmsize(m_ptr); }
+    bool existed() const { return ::shmexisted(m_ptr); }
 };
 
 

@@ -1,5 +1,5 @@
 #!/bin/bash -x
-echo -e '\e[1;36m'; g++ -O3 -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
+echo -e '\e[1;36m'; g++ -E -O3 -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line); add "-E" to above to see raw src
 
 //shared memory allocator test
@@ -18,6 +18,7 @@ echo -e '\e[1;36m'; g++ -O3 -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthrea
 #define WANT_TEST4
 #define SHMALLOC_DEBUG //show shmalloc debug msgs
 #define IPC_DEBUG //show ipc debug msgs
+#define CRITICAL_DEBUG //show critical section debug msgs
 
 #include "ipc.h" //put first to request ipc variants; comment out for in-proc multi-threading
 #include "atomic.h" //otherwise put this one first so shared mutex will be destroyed last; ATOMIC_MSG()
@@ -366,9 +367,38 @@ int main(int argc, const char* argv[])
 #ifdef WANT_TEST4 //generic shm usage pattern
 //#include <memory> //unique_ptr<>
 #include "shmkeys.h"
+#include "critical.h"
 
-#define COMMA ,  //kludge: macros don't like commas within args; from https://stackoverflow.com/questions/13842468/comma-in-c-c-macro
-MAKE_TYPENAME(WithMutex<TestObj COMMA true>)
+
+//#define COMMA ,  //kludge: macros don't like commas within args; from https://stackoverflow.com/questions/13842468/comma-in-c-c-macro
+//MAKE_TYPENAME(WithMutex<TestObj COMMA true>)
+
+#if 0
+class thing
+{
+    const char* m_name;
+public:
+    thing(const char* name): m_name(name) { std::cout << m_name << " thing ctor\n"; }
+    thing(const thing& that) { std::cout << "cpoy " << that.m_name << "\n"; }
+    ~thing() { std::cout << m_name << " thing dtor\n"; }
+};
+    {
+        std::vector<thing> things;
+        things.reserve(5);
+        things.emplace_back("th1");
+        std::cout << "here1 " << things.size() << "\n";
+        things.emplace_back("th2");
+        std::cout << "here2 " << things.size() << "\n";
+        {
+            things.emplace_back("th3");
+            std::cout << "here3 " << things.size() << "\n";
+        }
+        std::cout << "here4 " << things.size() << "\n";
+        things.emplace_back("th4");
+        std::cout << "here5 " << things.size() << "\n";
+    }
+    std::cout << "here6\n";
+#endif
 
 int main(int argc, const char* argv[])
 {
@@ -377,18 +407,26 @@ int main(int argc, const char* argv[])
 //    ShmPtr<TestObj> objptr("shmobj", SRCLINE);
 //    IpcThread threads[4];
 //    ATOMIC_MSG(PINK_MSG << timestamp() << "start pid " << IpcThread::get_id() << ENDCOLOR);
-//    std::atomic<int> first = 0;
-    for (int i = 0; i < 4; ++i)
+//    /*std::atomic<int>*/ int first = 0;
+    std::vector<IpcThread> threads(4); //prevent going out of scope and forcing join until all children created
+//    for (int i = 0; i < 4; ++i)
+//        if (!i ||)
+    for (int i = 0; i < threads.capacity(); ++i)
     {
-        IpcThread thread;
+//        IpcThread thread;
+        threads.emplace_back(SRCLINE); //add one new thread; outer scope delays dtor
+        IpcThread& thread = threads[i]; //threads.size() - 1];
         ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent": "child") << "[" << i << "] pid " << thread.get_id() << ENDCOLOR);
-        if (!thread.isParent())
-        ShmPtr_params(SRCLINE, 0x444decaf, 100, !i && thread.isParent()); //init first time only
-        ShmPtr<TestObj> objptr("shmobj", SRCLINE);
-        objptr->inc();
-        objptr->inc();
-        objptr->inc();
-        objptr->print();
+        if (!i || !thread.isParent())
+        {
+            CriticalSection<SHARED_CRITICAL_SHMKEY> cs(SRCLINE); //ensure ShmPtr_params used correctly
+            ShmPtr_params(SRCLINE, TESTOBJ_SHMKEY, 100, false); //!first++); //!i && thread.isParent()); //init first time only
+            ShmPtr<TestObj, false> objptr("shmobj", SRCLINE); //NOTE: don't need auto-lock due to critical section
+            objptr->inc();
+            objptr->inc();
+            objptr->inc();
+            objptr->print();
+        }
 //        objptr->lock();
         if (!thread.isParent()) break;
     }
