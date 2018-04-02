@@ -1,5 +1,5 @@
 #!/bin/bash -x
-echo -e '\e[1;36m'; g++ -E -O3 -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
+echo -e '\e[1;36m'; g++ -O3 -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line); add "-E" to above to see raw src
 
 //shared memory allocator test
@@ -19,6 +19,7 @@ echo -e '\e[1;36m'; g++ -E -O3 -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 #define SHMALLOC_DEBUG //show shmalloc debug msgs
 #define IPC_DEBUG //show ipc debug msgs
 #define CRITICAL_DEBUG //show critical section debug msgs
+#define ATOMIC_DEBUG //show ATOMIC() debug msgs
 
 #include "ipc.h" //put first to request ipc variants; comment out for in-proc multi-threading
 #include "atomic.h" //otherwise put this one first so shared mutex will be destroyed last; ATOMIC_MSG()
@@ -408,15 +409,15 @@ int main(int argc, const char* argv[])
 //    IpcThread threads[4];
 //    ATOMIC_MSG(PINK_MSG << timestamp() << "start pid " << IpcThread::get_id() << ENDCOLOR);
 //    /*std::atomic<int>*/ int first = 0;
-    std::vector<IpcThread> threads(4); //prevent going out of scope and forcing join until all children created
+    std::vector<IpcThread> threads; //prevent going out of scope and forcing join until all children created
+    threads.reserve(4); //alloc space to avoid extraneous copy ctor calls later
 //    for (int i = 0; i < 4; ++i)
 //        if (!i ||)
     for (int i = 0; i < threads.capacity(); ++i)
     {
 //        IpcThread thread;
-        threads.emplace_back(SRCLINE); //add one new thread; outer scope delays dtor
-        IpcThread& thread = threads[i]; //threads.size() - 1];
-        ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent": "child") << "[" << i << "] pid " << thread.get_id() << ENDCOLOR);
+        IpcThread& thread = (threads.emplace_back(SRCLINE), threads[i]); //threads.size() - 1]; //add one new thread; outer scope delays dtor
+        ATOMIC_MSG(PINK_MSG << timestamp() << thread.proctype() << "[" << i << "] pid " << thread.get_id() << ENDCOLOR);
         if (!i || !thread.isParent())
         {
             CriticalSection<SHARED_CRITICAL_SHMKEY> cs(SRCLINE); //ensure ShmPtr_params used correctly
@@ -429,8 +430,8 @@ int main(int argc, const char* argv[])
         }
 //        objptr->lock();
         if (!thread.isParent()) break;
+        thread.allow_any(); //children might not execute in order
     }
-
     ATOMIC_MSG(BLUE_MSG << timestamp() << "finish" << ENDCOLOR);
     return 0;
 }

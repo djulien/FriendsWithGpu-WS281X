@@ -457,6 +457,17 @@ public: //operators
 /// shmem ptr with auto-cleanup:
 //
 
+#pragma message("TODO: use named args")
+//https://marcoarena.wordpress.com/2014/12/16/bring-named-parameters-in-modern-cpp/
+//TEST_F(SomeDiceGameConfig, JustTwoTurnsGame)
+//{
+//   auto gameConfig = CreateGameConfig( [](auto& r) {
+//       r.NumberOfDice = 5u;
+//       r.MaxDiceValue = 6;
+//       r.NumberOfTurns = 2u;
+//   });
+//}
+
 //kludge: allow caller to pass run-time params into ShmPtr ctor without changing ShmPtr ctor signature
 //use base class so it can be shared between all templates
 class ShmPtr_params

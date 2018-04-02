@@ -70,7 +70,11 @@ std::string timestamp()
 //    ss << THRID;
 //    float x = 1.2;
 //    int h = 42;
-    ss << FMT("[%4.3f msec ") << elapsed_msec() << getpid() << "] ";
+    ss << FMT("[%4.3f msec") << elapsed_msec();
+#ifdef IPC_THREAD
+    ss << " " << getpid();
+#endif
+    ss << "] ";
     return ss.str();
 }
 

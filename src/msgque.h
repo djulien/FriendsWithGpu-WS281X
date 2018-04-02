@@ -25,8 +25,10 @@
  #include "elapsed.h" //timestamp()
  #include "msgcolors.h" //SrcLine, msg colors
  #define DEBUG_MSG  ATOMIC_MSG
+ #define WANT_DEBUG(stmt)  stmt
 #else
- #define DEBUG_MSG(msg)  //noop
+ #define DEBUG_MSG(msg)  {} //noop
+ #define WANT_DEBUG(stmt)  {} //noop
  #include "msgcolors.h" //SrcLine, msg colors
 #endif
 #ifndef MSGQUE_DETAILS
@@ -55,7 +57,7 @@ public: //ctor/dtor
     {
 //        /*if (MSGQUE_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
 //        strncpy(m_name, "MsgQue-", sizeof(m_name));
-        strncpy(m_name, (name && *name)? name: "(unnamed)", sizeof(m_name));
+        WANT_DEBUG(strncpy(m_name, (name && *name)? name: "(unnamed)", sizeof(m_name)));
     }
     ~MsgQue()
     {
@@ -88,6 +90,9 @@ public: //mem alloc
 #endif
 public: //getters
     inline VOLATILE std::mutex& mutex() { return m_mutex; } //in case caller wants to share between instances
+public: //operators
+    MsgQue* operator->() { return this; } //for compatibility with Shm wrapper operator->
+    MsgQue* get() { return this; }
 public: //methods
 //    MsgQue& clear() { m_msg = 0; return *this; } //fluent
 public: //methods
@@ -107,7 +112,7 @@ public: //methods
         if (m_msg & msg) throw "MsgQue.send: msg already queued"; // + tostr(msg) + " already queued");
         m_msg |= msg; //use bitmask for multiple msgs
         if (!(m_msg & msg)) throw "MsgQue.send: msg enqueue failed"; // + tostr(msg) + " failed");
-        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << "MssgQue-" << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << "MsgQue-" << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
         if (!broadcast) m_condvar.notify_one(); //wake main thread
         else m_condvar.notify_all(); //wake *all* wker threads
         return *this; //fluent
@@ -174,7 +179,7 @@ private: //data
     std::condition_variable m_condvar;
 //    int m_msg[MAXLEN], m_count;
 //    std::string m_name; //for debug only
-    char m_name[20]; //store name directly in object so shm object doesn't use char pointer
+    WANT_DEBUG(char m_name[20]); //store name directly in object so shm object doesn't use char pointer (only for debug)
     /*volatile*/ int m_msg;
 };
 #endif
@@ -427,5 +432,6 @@ std::mutex ShmMsgQue::m_mutex;
 #endif
 
 
+#undef WANT_DEBUG
 #undef DEBUG_MSG
 #endif //ndef _MSGQUE_H

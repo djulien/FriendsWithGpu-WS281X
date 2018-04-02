@@ -14,21 +14,33 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 // disp var
 // printf "%x\n", var
 
+#define NUM_WKERs  -4 //8 //use >0 for in-proc threads, <0 for ipc threads
+#define WANT_DETAILS  true //false //true
+#define IPC_DEBUG
+#define MSGQUE_DEBUG
+#define MSGQUE_DETAILS  true
 
-#include <iostream>
+#define ABS(n)  (((n) < 0)? -(n): (n))
+
+
+//#include <iostream>
 //#include <sstream>
 //#include <string>
 //#include <string.h> //strlen
 //#include <exception>
 //#include <unistd.h> //getpid
 
-#define WANT_DETAILS  true //false //true
-
 #include "msgcolors.h" //SrcLine, msg colors
-#include "ostrfmt.h"
-#include "elapsed.h"
+#include "ostrfmt.h" //FMT()
 #include "vectorex.h"
-#include "atomic.h"
+#include "shmkeys.h"
+//#define SHM_KEY  0x4567feed
+#if NUM_WKERs < 0 //ipc
+ #include "ipc.h" //needs to come first (to request Ipc versions of other classes)
+#endif
+//these ones need to come after ipc.h (#def IPC_THREAD):
+#include "elapsed.h" //timestamp()
+#include "atomic.h" //ATOMIC_MSG()
 //#define SHM_KEY  0x4567feed
 #include "msgque.h"
 //#define new_SHM(ignore)  new
@@ -46,21 +58,16 @@ echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -W
 void busy_msec(int msec)
 {
 //NO    for (double started = elapsed_msec(); elapsed_msec() < started + msec; ) //NOTE: can't use elapsed time; allows overlapped time slices
+    ATOMIC_MSG(BLUE_MSG << timestamp() << "busy wait " << msec << " msec" << ENDCOLOR);
     while (msec-- > 0)
         for (volatile int i = 0; i < 300000; ++i); //NOTE: need volatile to prevent optimization; need busy loop to occupy CPU; sleep system calls do not consume CPU time (allows threads to overlap)
 }
-
-#define ABS(n)  (((n) < 0)? -(n): (n))
-#define NUM_WKERs  -4 //8 //use >0 for in-proc threads, <0 for ipc threads
-
-//#define SHM_KEY  0x4567feed
-#include <unistd.h> //getpid()
 
 
 //#ifdef SHM_KEY //multi-process
 #if NUM_WKERs < 0 //ipc
 // #include "shmalloc.h"
- #include "ipc.h" //needs to come first (to request Ipc versions of other classes)
+// #include "ipc.h" //needs to come first (to request Ipc versions of other classes)
  #define THREAD  IpcThread
  #define THIS_THREAD  IpcThread
 
@@ -79,12 +86,13 @@ void busy_msec(int msec)
 //lamba functions: http://en.cppreference.com/w/cpp/language/lambda
 // MsgQue& mainq = SHARED(SRCKEY, MsgQue, MsgQue("mainq", ShmHeapAlloc::shmheap.mutex()));
 // MsgQue& wkerq = SHARED(SRCKEY, MsgQue, MsgQue("wkerq", mainq.mutex()));
- #define SHMKEY1  0x1111beef
- #define SHMKEY2  0x2222beef
- #define SHMKEY3  0x3333beef
- ShmScope<MsgQue> mscope(SRCLINE, SHMKEY1, "mainq"), wscope(SRCLINE, SHMKEY2, "wkerq"); //, mainq.mutex());
- MsgQue& mainq = mscope.shmobj.data;
- MsgQue& wkerq = wscope.shmobj.data;
+// ShmScope<MsgQue> mscope(SRCLINE, SHMKEY1, "mainq"), wscope(SRCLINE, SHMKEY2, "wkerq"); //, mainq.mutex());
+// MsgQue& mainq = mscope.shmobj.data;
+// MsgQue& wkerq = wscope.shmobj.data;
+ShmPtr_params settings1(SRCLINE, SHMKEY1, 0, false);
+ShmPtr<MsgQue> mainq("mainq");
+ShmPtr_params settings2(SRCLINE, SHMKEY2, 0, false);
+ShmPtr<MsgQue> wkerq("wkerq");
 //MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return77', t new shared<MsgQue>("mainq"); });
 //MsgQue& mainq = *new_SHM(0) MsgQue("mainq");
 //MsgQue& wkerq = *new_SHM(0) MsgQue("wkerq");
@@ -95,7 +103,7 @@ void busy_msec(int msec)
 //ShmMsgQue& mainq = *new ()("mainq"), wkerq("wkerq");
 //        for (int j = 0; j < NUM_ENTS; j++) array[j] = new_SHM(+j) Complex (i, j); //kludge: force unique key for shmalloc
  template <> const char* WithMutex<vector_ex<int, std::allocator<int>>, true>::TYPENAME() { return "WithMutex<vector_ex<int, std::allocator<int>>, true>"; }
-#else //multi-thread
+#else //multi-thread (single process)
  #include <thread> //std::this_thread
  #define THREAD  std::thread
  #define THIS_THREAD  std::this_thread
@@ -106,6 +114,7 @@ void busy_msec(int msec)
 //MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
 // #ifndef IPC_THREAD
 //dummy object wrapper (emulates shmem)
+#if 0
 template <typename TYPE, int NUM_INST = 1>
 class ShmScope
 {
@@ -153,6 +162,7 @@ private:
 //    static std::thread::id MAIN_THREAD_ID;
 //    static TYPE shared_obj;
 };
+#endif
 //template <> std::thread::id ShmScope::MAIN_THREAD_ID = std::this_thread::get_id();
 //template <>  std::thread::id ShmScope::MAIN_THREAD_ID = std::this_thread::get_id();
 template<> const char* WithMutex<vector_ex<std::thread::id>>::TYPENAME() { return "WithMutex<vector_ex<std::thread::id>>"; }
@@ -161,13 +171,15 @@ template<> const char* WithMutex<vector_ex<std::thread::id>>::TYPENAME() { retur
 
 
 //convert thread/procid to terse int:
+#include <unistd.h> //getpid()
+#include "critical.h"
 int thrid() //bool locked = false)
 {
 //    auto thrid = std::this_thread::get_id();
 //    if (!locked)
 //    {
     auto id = THIS_THREAD::get_id(); //std::this_thread::get_id();
-    ATOMIC(std::cout << CYAN_MSG << timestamp() << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << ENDCOLOR << std::flush);
+//    ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << ENDCOLOR);
 //#ifdef SHM_KEY
 //    return id;
 //#endif
@@ -178,11 +190,19 @@ int thrid() //bool locked = false)
 //#else
 //    ShmScope<type> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
 //    type& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
-    typedef WithMutex<vector_ex<THREAD::id>> type;
+//    typedef WithMutex<vector_ex<THREAD::id>> type;
+    typedef vector_ex<THREAD::id> type; //TODO: use decltype(id)
 //    static vector_ex<THREAD::id> ids(ABS(NUM_WKERs)); //preallocate space
 //    std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
-    ShmScope<type, ABS(NUM_WKERs) + 1> scope(SRCLINE, SHMKEY3); //shm obj wrapper; call dtor when goes out of scope (parent only)
-    type& ids = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+//    ShmScope<type, ABS(NUM_WKERs) + 1> scope(SRCLINE, SHMKEY3); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    static ShmPtr_params settings(SRCLINE, THRIDS_SHMKEY, (ABS(NUM_WKERs) + 1) * sizeof(THREAD::id), false); //don't need auto-lock due to explicit critical section
+    static ShmPtr<type> ids;
+//    {
+    CriticalSection<SHARED_CRITICAL_SHMKEY> cs(SRCLINE);
+    if (!ids->size()) ids->reserve(ABS(NUM_WKERs) + 1); //avoid extraneous copy ctors later
+//    }
+//    ids->reserve(ABS(NUM_WKERs) + 1); //avoid extraneous copy ctors later; only needs to happen 1x; being lazy: just use wrapped method rather than using a critical section with a condition
+//    type& ids = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
 //#endif
 //        return thrid(true);
 //    }
@@ -190,12 +210,13 @@ int thrid() //bool locked = false)
 //NOTE: use op->() for shm safety with ipc
     int ofs = ids->find(id);
     if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR_NOLINE);
-    if (ofs == -1) ofs = ids->push_and_find(id); //{ ofs = ids.size(); ids.push_back(id); }
+    if (ofs == -1) { ofs = ids->size(); ids->push_back(id); } //ofs = ids.push_and_find(id);
 //    std::stringstream ss;
 //    ss << thrid;
 //    ss << THRID;
 //    ss << ofs;
 //    return ss.str();
+    ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << " => thr inx " << ofs << ENDCOLOR);
     return ofs;
 }
 
@@ -223,10 +244,10 @@ void wker_main()
     {
         busy_msec(WKER_DELAY); //simulate render()
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "rendered " << frnum << ", now notify main");
-        mainq.send(1 << myid);
+        mainq->send(1 << myid);
 
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "now wait for next req");
-        frnum = wkerq.rcv(&MsgQue::not_wanted, frnum);
+        frnum = wkerq->rcv(&MsgQue::not_wanted, frnum);
         WKER_MSG(BLUE_MSG, "woke with req for " << frnum << ", now render for " << WKER_DELAY << " msec");
         if (frnum < 0) break;
     }
@@ -316,7 +337,7 @@ int main()
 #endif
     int frnum = 0;
     std::vector<THREAD> wkers;
-    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << (long)&mainq << FMT(", &wkerq = %p") << (long)&wkerq);
+    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << mainq.get() << FMT(", &wkerq = %p") << wkerq.get());
 //    pending = 10;
     for (int n = 0; n < ABS(NUM_WKERs); ++n) wkers.emplace_back(wker_main);
     MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");
@@ -325,13 +346,13 @@ int main()
     {
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "now wait for replies");
 //        const char* status = "on time";
-        mainq.rcv(&MsgQue::wanted, ((1 << ABS(NUM_WKERs)) - 1) << 1, true); //wait for all wkers to respond (blocking)
+        mainq->rcv(&MsgQue::wanted, ((1 << ABS(NUM_WKERs)) - 1) << 1, true); //wait for all wkers to respond (blocking)
         MAIN_MSG(PINK_MSG, "all wkers ready, now encode() for " << MAIN_ENCODE_DELAY << " msec");
         busy_msec(MAIN_ENCODE_DELAY); //simulate encode()
         if (++frnum >= DURATION) frnum = -1; //break;
         const char* status = (frnum < 0)? "quit": "frreq";
         /*if (WANT_DETAILS)*/ MAIN_MSG(PINK_MSG, "encoded, now notify wkers (" << status << ") and finish render() for " << MAIN_PRESENT_DELAY << " msec");
-        wkerq.clear().send(frnum, true); //wake *all* wkers
+        wkerq->clear().send(frnum, true); //wake *all* wkers
 //        MAIN_MSG(PINK_MSG, "notified wkers (" << status << "), now finish render() for " << MAIN_PRESENT_DELAY << " msec");
         sleep_msec(MAIN_PRESENT_DELAY); //simulate render present()
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "presented");
@@ -339,7 +360,7 @@ int main()
     }
     for (auto& w: wkers) w.join(); //    std::vector<std::thread> wkers;
     MAIN_MSG(CYAN_MSG, "quit");
-    wkerq.clear(); //leave queue in empty state (benign; avoid warning)
+    wkerq->clear(); //leave queue in empty state (benign; avoid warning)
 }
 #if 0 //explicit mutex + cond var
 int main()
@@ -441,7 +462,6 @@ int main()
 
 //EOF
 #clean up shmem objects before running:
-ipcrm -M 0x1111beef
-ipcrm -M 0x2222beef
-ipcrm -M 0x3333beef
+set +x
+echo -e '\e[1;33m'; awk '/#define/{ if (NF > 2) print "ipcrm -vM " $3; }' < shmkeys.h | bash |& grep -v "invalid key"; echo -e '\e[0m'
 #eof

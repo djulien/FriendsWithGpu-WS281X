@@ -8,13 +8,6 @@
 #ifndef _COLORS_H
 #define _COLORS_H
 
-//macro expansion helpers:
-#ifndef TOSTR
- #define TOSTR(str)  TOSTR_NESTED(str)
- #define TOSTR_NESTED(str)  #str
-#endif
-
-
 //ANSI color codes (for console output):
 //https://en.wikipedia.org/wiki/ANSI_escape_code
 #define ANSI_COLOR(code)  "\x1b[" code "m"
@@ -39,18 +32,15 @@
  #define SIZEOF(thing)  (sizeof(thing) / sizeof((thing)[0]))
 #endif
 
-//typedef struct { int line; } SRCLINE; //allow compiler to distinguish param types, prevent implicit conversion
-//typedef int SRCLINE;
-//#define _GNU_SOURCE //select GNU version of basename()
-#include <stdio.h> //snprintf()
-//#include <stdlib.h> //atoi()
-#include <string.h>
-#include <dirent.h> //opendir(), readdir(), closedir()
-//#include <memory> //std::unique_ptr<>
-//#include <stdio.h> 
+//macro expansion helpers:
+#ifndef TOSTR
+ #define TOSTR(str)  TOSTR_NESTED(str)
+ #define TOSTR_NESTED(str)  #str
+#endif
 
 
 //smart ptr wrapper for DIR:
+#include <dirent.h> //opendir(), readdir(), closedir()
 class Dir
 {
 public: //ctor/dtor
@@ -66,6 +56,11 @@ private: //data
 
 
 //check for ambiguous base file name:
+#include <string.h>
+#include <algorithm> //std::min()
+#include <string>
+//#include <memory> //std::unique_ptr<>
+//#include <stdio.h> 
 static bool isunique(const char* folder, const char* basename, const char* ext)
 {
 //    static std::map<const char*, const char*> exts;
@@ -106,10 +101,15 @@ static bool isunique(const char* folder, const char* basename, const char* ext)
 }
 
 
+//typedef struct { int line; } SRCLINE; //allow compiler to distinguish param types, prevent implicit conversion
+//typedef int SRCLINE;
 #define SRCLINE  __FILE__ ":" TOSTR(__LINE__)
 typedef const char* SrcLine; //allow compiler to distinguish param types, catch implicit conv
 
 //shorten src file name:
+#include <stdio.h> //snprintf()
+//#define _GNU_SOURCE //select GNU version of basename()
+//#include <stdlib.h> //atoi()
 SrcLine shortsrc(SrcLine srcline, SrcLine defline) //int line = 0)
 {
     static char buf[60]; //static to preserve after return to caller
