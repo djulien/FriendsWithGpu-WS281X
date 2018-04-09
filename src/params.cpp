@@ -19,6 +19,19 @@ echo -e '\e[1;36m'; OPT=0; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 //to see compiled code:
 //objdump -CSr params
 
+//NOTE: default is g++ 5.4 on ubuntu 16.04
+//NO-NOTE: needs g++-6:
+//to see which compiler(s) installed:  ls /usr/bin | grep g[c+][c+]
+//to change default compiler version:  sudo update-alternatives --config gcc
+//https://askubuntu.com/questions/466651/how-do-i-use-the-latest-gcc-on-ubuntu
+// gcc -v; g++ -v
+// sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+// sudo apt update
+// sudo apt-get install gcc-6 g++-6
+// sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-6 60 --slave /usr/bin/g++ g++ /usr/bin/g++-6
+// gcc -v; g++ -v
+
+
 class other
 {
     int m_int;
@@ -41,6 +54,8 @@ public:
 //#include "atomic.h" //ATOMIC_MSG()
 #include "msgcolors.h" //SrcLine, msg colors
 #define MSG(msg)  { std::cout << msg << std::flush; }
+
+//void hello() { MSG("hello"); }
 
 class API
 {
@@ -68,13 +83,15 @@ private: //member vars (caller *cannot* set these directly):
 public: //ctors/dtors
 //    class CtorParams: public i, public b, public s, public o {};
 //    explicit api(GetParams<api> get_params = 0)
-    explicit API(void (*get_params)(API& p) = 0)
+//    explicit API(void (*get_params)(API& p) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+    explicit API(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
     {
 //        CtorParams params = {i, b, s, o}; //allow caller to set my member vars
-        if (get_params) get_params(*this); //set member vars directly
+        if (get_params) get_params(i, s, b, srcline); //(*this); //set member vars directly
 //        std::cout << "ctor: "; show(); std::cout << "\n" <<std::flush;
         MSG(BLUE_MSG << "ctor: " << show() << ENDCOLOR_ATLINE(srcline));
     }
+#define ctor(stmts)  [](int& i, std::string& s, bool& b, SrcLine& srcline) stmts
     ~API() { MSG(BLUE_MSG << "dtor: " << show() << ENDCOLOR_ATLINE(srcline)); }
 public: //operators
     friend std::ostream& operator<<(std::ostream& ostrm, const API& api) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
@@ -85,13 +102,17 @@ public: //operators
 public: //methods
 //    class FuncParams: public s, public i, public b;
 //    typedef struct { std::string s; int i; bool b; } FuncParams; //use typedef in function cb sig so caller can use auto type in lambda function
+//    /*struct*/ class FuncParams { public: std::string s; int i; bool b; SrcLine srcline; FuncParams(): s("none"), i(999), b(true), srcline(SRCLINE) {} }; //FuncParams() { s = "none"; i = 999; b = true; }}; // FuncParams;
     struct FuncParams { std::string s = "none"; int i = 999; bool b = true; SrcLine srcline = SRCLINE; }; //FuncParams() { s = "none"; i = 999; b = true; }}; // FuncParams;
+//    typedef struct { std::string s /*= "none"*/; int i /*= 999*/; bool b /*= true*/; SrcLine srcline /*= 0*/; } FuncParams; //() { s = "none"; i = 999; b = true; }}; // FuncParams;
 //    struct FuncParams_t: FuncParams { FuncParams my_t; };
 //    void func(GetParams<FuncParams> get_params = 0)
-    void func(void (*get_params)(struct FuncParams& p) = 0)
+//    void func(void (*get_params)(struct FuncParams& p) = 0)
+    void func(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0)
     {
+//        hello();
         /*static*/ struct FuncParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
-        if (get_params) get_params(params);
+        if (get_params) get_params(params.i, params.s, params.b, params.srcline); //get_params(params);
 //        func(params);
 //    }
 //    void func(FuncParams& params)
@@ -104,6 +125,7 @@ public: //methods
 //        std::cout << "func: "; show(); std::cout << "\n" <<std::flush;
         MSG(BLUE_MSG << "func: " << show() << ENDCOLOR_ATLINE(params.srcline));
     }
+#define func(stmts)  func([](int& i, std::string& s, bool& b, SrcLine& srcline) stmts)
 private: //helpers
     API& show() { return *this; } //dummy function for readability
 //    void show() { std::cout << "i " << i << ", b " << b << ", s '" << s << "', o " << o << std::flush; }
@@ -115,23 +137,9 @@ private: //helpers
 };
 
 
-#if 0
-void mylambda(api::FuncParams& params)
-{
-    struct my_params: public std::decay_t<decltype(params)>
-    {
-//        int i; std::string s;
-        my_params() { i = 222; s = "strstrstr"; }
-    };
-    my_params x;
-    std::cout << sizeof(params) << ", " << sizeof(my_params) << "\n" << std::flush;
-    new (&params) struct my_params();
-}
-#endif
-
 //#include <typeinfo>
 //#define PARAMS(name)  [](auto& name)
-#include <type_traits> //std::decay_t<>
+#include <type_traits> //std::decay<>, std::remove_reference<>
 #include <iostream> //std::cout, std::flush
 int main(int argc, const char* argv[])
 {
@@ -154,12 +162,21 @@ int main(int argc, const char* argv[])
 //see https://stackoverflow.com/questions/12122234/how-to-initialize-a-struct-using-the-c-style-while-using-the-g-compiler/14206226#14206226
 //no (returns adrs of temp); use lambda param instead: #define PLIST(stmts)  []() -> api::FuncParams* { struct my_param_list: api::FuncParams { my_param_list() { stmts; }}; return &my_param_list(); }
 //NOTE: need c++14 for auto lambda params
+//NOTE: needs g++-6 for inheritance from lambda param + std::decay_t
 //#define PLIST(stmts)  [](auto& p){ struct my_params: /*public api::FuncParams*/ decltype(p) { my_params() { /*stmts*/; std::cout << typeid(p).name() << "\n" << std::flush; }}; new (&p) struct my_params(); }
 //#define PLIST(stmts)  [](auto& p){ typedef /*decltype(p)*/ struct api::FuncParams plist; /*std::cout << typeid(p).name() << "\n" << std::flush*/; struct my_params: plist { my_params() { stmts; }}; } //new (&p) struct my_params(); }
-#define PLIST1(stmts)  [](auto& params){ struct my_params: API::FuncParams { my_params() { stmts; }}; new (&params) struct my_params(); }
-#define PLIST2(stmts)  [](auto& params){ struct my_params: API { my_params() { stmts; }}; new (&params) struct my_params(); }
-#define PLIST(stmts)  [](auto params){ struct my_params: public std::decay_t<decltype(params)> { my_params() { stmts; }}; my_params x; std::cout << sizeof(params) << ", " << sizeof(my_params) << "\n" << std::flush; new (&params) struct my_params(); }
-    A.func(PLIST2( i = 222; s = "strstrstr"; srcline = SRCLINE; ));
+//#define TYPEOF(plist)  API::FuncParams //std::decay_t<decltype(plist)>
+//#define TYPEOF(plist)  base_type //std::remove_reference<decltype(plist)> //decltype(plist) //std::decay_t<decltype(plist)> //API::FuncParams
+//#define TYPEOF(plist)  std::decay<decltype(plist)>::type //API::FuncParams
+//#define PLIST1(stmts)  [](auto& params){ struct my_params: API::FuncParams { my_params() { stmts; }}; new (&params) struct my_params(); }
+//#define PLIST2(stmts)  [](auto& params){ struct my_params: API { my_params() { stmts; }}; new (&params) struct my_params(); }
+//#define PLIST(stmts)  [](auto& params) { class my_params: public std::decay<decltype(params)>::type { public: my_params() { this->srcline = SRCLINE; stmts; } }; /*debug()*/; new (&params) my_params(); } //my_params x; std::cout << sizeof(params) << ", " << sizeof(my_params) << "\n" << std::flush; new (&params) struct my_params(); }
+//NO WORKY FOR DEPENDENT CLASS MEMBERS: #define PLIST(stmts)  [](auto& params) { struct my_params: std::decay<decltype(params)>::type { my_params() { this->srcline = SRCLINE; stmts; } }; /*debug()*/; new (&params) my_params(); } //my_params x; std::cout << sizeof(params) << ", " << sizeof(my_params) << "\n" << std::flush; new (&params) struct my_params(); }
+//#define PLIST(stmts)  [](auto& params){ struct wrap { template<typename TYPE> using base_type = typename std::remove_reference<TYPE>::type; struct my_params: public TYPEOF(params) { my_params() { /*srcline = SRCLINE; stmts*/; }}}; debug(); new (&params) struct my_params(); } //my_params x; std::cout << sizeof(params) << ", " << sizeof(my_params) << "\n" << std::flush; new (&params) struct my_params(); }
+//#define debug()  { std::cout << "plist size: " << sizeof(params) << ", " << sizeof(my_params) << "\n" << std::flush; }
+//    A.func(PLIST( this->i = 222; this->s = "strstrstr"; ));
+//#define func(stmts)  [](int& i, std::string& s, bool& b, other*& o, SrcLine& srcline) stmts
+    A.func({ i = 222; s = "strstrstr"; });
 //    A.func(mylambda);
 #if 0
     A.func([](auto& params)
@@ -178,11 +195,11 @@ int main(int argc, const char* argv[])
         new (m_ptr) shm_type(std::forward<ARGS>(args) ...); //, srcline); //pass args to TYPE's ctor (perfect fwding)
     };
 #endif
-    A.func(PLIST1( i = 333; srcline = SRCLINE; ));
+    A.func({ i = 333; });
 
-    API B(PLIST2( i = 2; b = true; s = "str"; /*o = new other(4)*/; srcline = SRCLINE; ));
-    B.func();
-    B.func(PLIST1( i = 55; srcline = SRCLINE; ));
+    API B(ctor({ i = 2; b = true; s = "str"; /*o = new other(4)*/; }));
+    B.func({});
+    B.func({ i = 55; });
 
     return 0;
 }
