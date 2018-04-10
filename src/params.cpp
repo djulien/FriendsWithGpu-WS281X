@@ -84,14 +84,16 @@ public: //ctors/dtors
 //    class CtorParams: public i, public b, public s, public o {};
 //    explicit api(GetParams<api> get_params = 0)
 //    explicit API(void (*get_params)(API& p) = 0) //: i(0), b(false), srcline(0), o(nullptr)
-    explicit API(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+#define API_CTOR_PLIST  (int& i, std::string& s, bool& b, SrcLine& srcline)
+//    explicit API(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+    explicit API(void (*get_params) API_CTOR_PLIST = 0) //: i(0), b(false), srcline(0), o(nullptr)
+//#define ctor(stmts)  [](int& i, std::string& s, bool& b, SrcLine& srcline) stmts
     {
 //        CtorParams params = {i, b, s, o}; //allow caller to set my member vars
         if (get_params) get_params(i, s, b, srcline); //(*this); //set member vars directly
 //        std::cout << "ctor: "; show(); std::cout << "\n" <<std::flush;
         MSG(BLUE_MSG << "ctor: " << show() << ENDCOLOR_ATLINE(srcline));
     }
-#define ctor(stmts)  [](int& i, std::string& s, bool& b, SrcLine& srcline) stmts
     ~API() { MSG(BLUE_MSG << "dtor: " << show() << ENDCOLOR_ATLINE(srcline)); }
 public: //operators
     friend std::ostream& operator<<(std::ostream& ostrm, const API& api) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
@@ -108,11 +110,14 @@ public: //methods
 //    struct FuncParams_t: FuncParams { FuncParams my_t; };
 //    void func(GetParams<FuncParams> get_params = 0)
 //    void func(void (*get_params)(struct FuncParams& p) = 0)
-    void func(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0)
+#define API_FUNC_PLIST  (int& i, std::string& s, bool& b, SrcLine& srcline)
+//    void func(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0)
+    void func(void (*get_params) API_FUNC_PLIST = 0)
+//#define func(stmts)  func([](int& i, std::string& s, bool& b, SrcLine& srcline) { stmts })
     {
 //        hello();
         /*static*/ struct FuncParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
-        if (get_params) get_params(params.i, params.s, params.b, params.srcline); //get_params(params);
+        if (get_params) get_params(params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
 //        func(params);
 //    }
 //    void func(FuncParams& params)
@@ -125,7 +130,6 @@ public: //methods
 //        std::cout << "func: "; show(); std::cout << "\n" <<std::flush;
         MSG(BLUE_MSG << "func: " << show() << ENDCOLOR_ATLINE(params.srcline));
     }
-#define func(stmts)  func([](int& i, std::string& s, bool& b, SrcLine& srcline) stmts)
 private: //helpers
     API& show() { return *this; } //dummy function for readability
 //    void show() { std::cout << "i " << i << ", b " << b << ", s '" << s << "', o " << o << std::flush; }
@@ -176,7 +180,7 @@ int main(int argc, const char* argv[])
 //#define debug()  { std::cout << "plist size: " << sizeof(params) << ", " << sizeof(my_params) << "\n" << std::flush; }
 //    A.func(PLIST( this->i = 222; this->s = "strstrstr"; ));
 //#define func(stmts)  [](int& i, std::string& s, bool& b, other*& o, SrcLine& srcline) stmts
-    A.func({ i = 222; s = "strstrstr"; });
+    A.func([] API_FUNC_PLIST { i = 222; s = "strstrstr"; });
 //    A.func(mylambda);
 #if 0
     A.func([](auto& params)
@@ -195,11 +199,12 @@ int main(int argc, const char* argv[])
         new (m_ptr) shm_type(std::forward<ARGS>(args) ...); //, srcline); //pass args to TYPE's ctor (perfect fwding)
     };
 #endif
-    A.func({ i = 333; });
+    A.func([] API_FUNC_PLIST { i = 333; });
 
-    API B(ctor({ i = 2; b = true; s = "str"; /*o = new other(4)*/; }));
-    B.func({});
-    B.func({ i = 55; });
+//API X(stmt)  =>  API X(ctor(stmt));
+    API B([] API_CTOR_PLIST { i = 2; b = true; s = "str"; /*o = new other(4)*/; });
+    B.func();
+    B.func([] API_FUNC_PLIST { i = 55; });
 
     return 0;
 }
