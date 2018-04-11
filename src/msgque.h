@@ -49,6 +49,9 @@
 //template <bool IPC>
 
 //safe for multi-threading (uses mutex):
+//#ifndef PARAMS
+// #define PARAMS  SRCLINE, [](auto& _)
+//#endif
 class MsgQue//Base
 {
 public: //ctor/dtor
@@ -103,8 +106,13 @@ public: //methods
         m_msg = 0;
         return *this; //fluent
     }
-    MsgQue& send(int msg, bool broadcast = false)
+//    struct SendParams { int msg = 0; bool broadcast = false; SrcLine srcline = SRCLINE; }; //FuncParams() { s = "none"; i = 999; b = true; }}; // FuncParams;
+    MsgQue& send(int msg, bool broadcast = false, SrcLine srcline = 0)
+//    MsgQue& send(SrcLine mySrcLine = 0, void (*get_params)(struct SendParams&) = 0)
     {
+//        /*static*/ struct SendParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
+//        if (mySrcLine) params.srcline = mySrcLine;
+//        if (get_params) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
 //        std::stringstream ssout;
 //        scoped_lock lock;
         std::unique_lock<VOLATILE std::mutex> scoped_lock(m_mutex);
@@ -112,7 +120,7 @@ public: //methods
         if (m_msg & msg) throw "MsgQue.send: msg already queued"; // + tostr(msg) + " already queued");
         m_msg |= msg; //use bitmask for multiple msgs
         if (!(m_msg & msg)) throw "MsgQue.send: msg enqueue failed"; // + tostr(msg) + " failed");
-        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << "MsgQue-" << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << "MsgQue-" << m_name << ".send " << FMT("0x%x") << msg << " to " << (broadcast? "all": "one") << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
         if (!broadcast) m_condvar.notify_one(); //wake main thread
         else m_condvar.notify_all(); //wake *all* wker threads
         return *this; //fluent
@@ -121,12 +129,17 @@ public: //methods
     bool wanted(int val) { if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
     bool not_wanted(int val) { if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
 //    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
-    int rcv(bool (MsgQue::*filter)(int val), int operand = 0, bool remove = false)
+//    struct RcvParams { bool (MsgQue::*filter)(int val) = 0, int operand = 0, bool remove = false, SrcLine srcline = SRCLINE; };
+    int rcv(bool (MsgQue::*filter)(int val), int operand = 0, bool remove = false, SrcLine srcline = 0)
+//    int rcv(SrcLine mySrcLine = 0, void (*get_params)(struct RcvParams&) = 0)
     {
+//        /*static*/ struct RcvParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
+//        if (mySrcLine) params.srcline = mySrcLine;
+//        if (get_params) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
         std::unique_lock<VOLATILE std::mutex> scoped_lock(m_mutex);
 //        scoped_lock lock;
 //        m_condvar.wait(scoped_lock());
-        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << "MsgQue-" << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR);
+        if (MSGQUE_DETAILS) DEBUG_MSG(BLUE_MSG << timestamp() << "MsgQue-" << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
         while (!(this->*filter)(operand)) m_condvar.wait(scoped_lock); //ignore spurious wakeups
         int retval = m_msg;
         if (remove) m_msg = 0;

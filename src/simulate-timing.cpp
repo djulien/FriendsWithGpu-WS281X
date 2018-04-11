@@ -1,5 +1,5 @@
 #!/bin/bash -x
-echo -e '\e[1;36m'; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O3 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
+echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O$OPT -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++14 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 
 //simulate multi-threaded (multi-process) timing
@@ -89,10 +89,12 @@ void busy_msec(int msec)
 // ShmScope<MsgQue> mscope(SRCLINE, SHMKEY1, "mainq"), wscope(SRCLINE, SHMKEY2, "wkerq"); //, mainq.mutex());
 // MsgQue& mainq = mscope.shmobj.data;
 // MsgQue& wkerq = wscope.shmobj.data;
-ShmPtr_params settings1(SRCLINE, SHMKEY1, 0, false);
-ShmPtr<MsgQue> mainq("mainq");
-ShmPtr_params settings2(SRCLINE, SHMKEY2, 0, false);
-ShmPtr<MsgQue> wkerq("wkerq");
+//ShmPtr_params settings1(SRCLINE, SHMKEY1, 0, false);
+//ShmPtr<MsgQue> mainq("mainq");
+ShmPtr<MsgQue> mainq(PARAMS {_.name = "mainq"; _.shmkey = SHMKEY1; /*_.extra = 0*/; _.want_reinit = false; });
+//ShmPtr_params settings2(SRCLINE, SHMKEY2, 0, false);
+//ShmPtr<MsgQue> wkerq("wkerq");
+ShmPtr<MsgQue> mainq(PARAMS {_.name = "wkerq"; _.shmkey = SHMKEY2; /*_.extra = 0*/; _.want_reinit = false; });
 //MsgQue& mainq = shared<MsgQue>(SRCKEY, []{ return77', t new shared<MsgQue>("mainq"); });
 //MsgQue& mainq = *new_SHM(0) MsgQue("mainq");
 //MsgQue& wkerq = *new_SHM(0) MsgQue("wkerq");
@@ -109,7 +111,8 @@ ShmPtr<MsgQue> wkerq("wkerq");
  #define THIS_THREAD  std::this_thread
 // MsgQue& mainq = MsgQue("mainq"); //TODO
 // MsgQue& wkerq = MsgQue("wkerq"); //TODO
- MsgQue mainq("mainq"), wkerq("wkerq"); //, mainq.mutex());
+// MsgQue mainq("mainq"), wkerq("wkerq"); //, mainq.mutex());
+ MsgQue mainq(PARAMS {_.name = "mainq"; }), wkerq(PARAMS {_.name = "wkerq"; }), 
 //MsgQue& mainq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("mainq");
 //MsgQue& wkerq = *new /*(__FILE__, __LINE__, true)*/ MsgQue("wkerq");
 // #ifndef IPC_THREAD

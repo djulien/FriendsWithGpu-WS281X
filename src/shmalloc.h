@@ -468,6 +468,7 @@ public: //operators
 //   });
 //}
 
+#if 0
 //kludge: allow caller to pass run-time params into ShmPtr ctor without changing ShmPtr ctor signature
 //use base class so it can be shared between all templates
 class ShmPtr_params
@@ -504,6 +505,11 @@ int ShmPtr_params::Extra;
 bool ShmPtr_params::WantReInit;
 bool ShmPtr_params::DebugFree;
 ShmPtr_params defaults(SRCLINE); //"default"); //DRY kludge: set params to default values
+#endif
+
+#ifndef PARAMS
+ #define PARAMS  SRCLINE, [](auto& _)
+#endif
 
 //shmem ptr wrapper class:
 //like std::safe_ptr<> but for shmem:

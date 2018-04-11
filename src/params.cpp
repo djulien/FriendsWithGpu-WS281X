@@ -1,5 +1,5 @@
 #!/bin/bash -x
-echo -e '\e[1;36m'; OPT=0; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O$OPT -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++14 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
+echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O$OPT -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++14 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 ///////////////////////////////////////////////////////////////////////////////
 ////
@@ -57,6 +57,10 @@ public:
 
 //void hello() { MSG("hello"); }
 
+//#define PARAMS(stmts)  [](auto& p){ srcline = SRCLINE; stmts; }
+#ifndef PARAMS
+ #define PARAMS  SRCLINE, [](auto& _)
+#endif
 class API
 {
 public: //member vars (caller can set these via ctor params):
@@ -84,13 +88,21 @@ public: //ctors/dtors
 //    class CtorParams: public i, public b, public s, public o {};
 //    explicit api(GetParams<api> get_params = 0)
 //    explicit API(void (*get_params)(API& p) = 0) //: i(0), b(false), srcline(0), o(nullptr)
-#define API_CTOR_PLIST  (int& i, std::string& s, bool& b, SrcLine& srcline)
+//====
+//    PERFECT_FWD2BASE_CTOR(ShmPtr, TYPE)
+//    template<typename ... ARGS>
+//    explicit ShmPtr(ARGS&& ... args): ShmPtr_params(SRCLINE /*"preserve base"*/, ShmKey, Extra, WantReInit, DebugFree), m_ptr(0), m_want_init(WantReInit), m_debug_free(DebugFree) //kludge: preserve ShmPtr_params
+//        new (m_ptr) shm_type(std::forward<ARGS>(args) ...); //, srcline); //pass args to TYPE's ctor (perfect fwding)
+//====
+//#define API_CTOR  (int& i, std::string& s, bool& b, SrcLine& srcline)
 //    explicit API(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
-    explicit API(void (*get_params) API_CTOR_PLIST = 0) //: i(0), b(false), srcline(0), o(nullptr)
+    explicit API(SrcLine mySrcLine = 0, void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+//    explicit API(void (*get_params) API_CTOR = 0) //: i(0), b(false), srcline(0), o(nullptr)
 //#define ctor(stmts)  [](int& i, std::string& s, bool& b, SrcLine& srcline) stmts
     {
 //        CtorParams params = {i, b, s, o}; //allow caller to set my member vars
-        if (get_params) get_params(i, s, b, srcline); //(*this); //set member vars directly
+        if (mySrcLine) srcline = mySrcLine;
+        if (get_params) get_params(*this); //(i, s, b, srcline); //(*this); //set member vars directly
 //        std::cout << "ctor: "; show(); std::cout << "\n" <<std::flush;
         MSG(BLUE_MSG << "ctor: " << show() << ENDCOLOR_ATLINE(srcline));
     }
@@ -110,14 +122,16 @@ public: //methods
 //    struct FuncParams_t: FuncParams { FuncParams my_t; };
 //    void func(GetParams<FuncParams> get_params = 0)
 //    void func(void (*get_params)(struct FuncParams& p) = 0)
-#define API_FUNC_PLIST  (int& i, std::string& s, bool& b, SrcLine& srcline)
+//#define API_FUNC  (int& i, std::string& s, bool& b, SrcLine& srcline)
 //    void func(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0)
-    void func(void (*get_params) API_FUNC_PLIST = 0)
+    void func(SrcLine mySrcLine = 0, void (*get_params)(struct FuncParams&) = 0)
+//    void func(void (*get_params) API_FUNC = 0)
 //#define func(stmts)  func([](int& i, std::string& s, bool& b, SrcLine& srcline) { stmts })
     {
 //        hello();
         /*static*/ struct FuncParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
-        if (get_params) get_params(params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
+        if (mySrcLine) params.srcline = mySrcLine;
+        if (get_params) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
 //        func(params);
 //    }
 //    void func(FuncParams& params)
@@ -155,16 +169,16 @@ int main(int argc, const char* argv[])
         << "fpm " << sizeof(API::FuncParams) << ", "
         << "\n" << std::flush;
 
-    API A;
+    API A(PARAMS {});
 //    A.func(PARAMS(p) { p.i = 222; p.s = "strstrstr"; });
 
-//#define PLIST(stmts)  [](auto& p){ std::string& s = p.s; int& i = p.i; bool& b = p.b; stmts; }
-//    A.func(PLIST( i = 222; s = "strstrstr"; ));
+//#define PARAMS(stmts)  [](auto& p){ std::string& s = p.s; int& i = p.i; bool& b = p.b; stmts; }
+//    A.func(PARAMS( i = 222; s = "strstrstr"; ));
 
 //kludge: specialize param struct to allow selective setting of named members without using parent struct name:
 //use placement new to avoid copy ctor
 //see https://stackoverflow.com/questions/12122234/how-to-initialize-a-struct-using-the-c-style-while-using-the-g-compiler/14206226#14206226
-//no (returns adrs of temp); use lambda param instead: #define PLIST(stmts)  []() -> api::FuncParams* { struct my_param_list: api::FuncParams { my_param_list() { stmts; }}; return &my_param_list(); }
+//no (returns adrs of temp); use lambda param instead: #define PARAMS(stmts)  []() -> api::FuncParams* { struct my_param_list: api::FuncParams { my_param_list() { stmts; }}; return &my_param_list(); }
 //NOTE: need c++14 for auto lambda params
 //NOTE: needs g++-6 for inheritance from lambda param + std::decay_t
 //#define PLIST(stmts)  [](auto& p){ struct my_params: /*public api::FuncParams*/ decltype(p) { my_params() { /*stmts*/; std::cout << typeid(p).name() << "\n" << std::flush; }}; new (&p) struct my_params(); }
@@ -180,7 +194,9 @@ int main(int argc, const char* argv[])
 //#define debug()  { std::cout << "plist size: " << sizeof(params) << ", " << sizeof(my_params) << "\n" << std::flush; }
 //    A.func(PLIST( this->i = 222; this->s = "strstrstr"; ));
 //#define func(stmts)  [](int& i, std::string& s, bool& b, other*& o, SrcLine& srcline) stmts
-    A.func([] API_FUNC_PLIST { i = 222; s = "strstrstr"; });
+//    A.func([] API_FUNC { i = 222; s = "strstrstr"; });
+//    A.func([] API_FUNC { i = 222; s = "strstrstr"; });
+    A.func(PARAMS { _.i = 222; _.s = "strstrstr"; });
 //    A.func(mylambda);
 #if 0
     A.func([](auto& params)
@@ -199,12 +215,15 @@ int main(int argc, const char* argv[])
         new (m_ptr) shm_type(std::forward<ARGS>(args) ...); //, srcline); //pass args to TYPE's ctor (perfect fwding)
     };
 #endif
-    A.func([] API_FUNC_PLIST { i = 333; });
+//    A.func([] API_FUNC { i = 333; });
+    A.func(PARAMS { _.i = 333; });
 
 //API X(stmt)  =>  API X(ctor(stmt));
-    API B([] API_CTOR_PLIST { i = 2; b = true; s = "str"; /*o = new other(4)*/; });
-    B.func();
-    B.func([] API_FUNC_PLIST { i = 55; });
+//    API B([] API_CTOR { i = 2; b = true; s = "str"; /*o = new other(4)*/; });
+    API B(PARAMS { _.i = 2; _.b = true; _.s = "str"; /*_.o = new other(4)*/; });
+    B.func(PARAMS {});
+//    B.func([] API_FUNC { i = 55; });
+    B.func(PARAMS { _.i = 55; });
 
     return 0;
 }
