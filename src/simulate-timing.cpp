@@ -466,5 +466,5 @@ int main()
 //EOF
 #clean up shmem objects before running:
 set +x
-echo -e '\e[1;33m'; awk '/#define/{ if (NF > 2) print "ipcrm -vM " $3; }' < shmkeys.h | bash |& grep -v "invalid key"; echo -e '\e[0m'
+echo -e '\e[1;33m'; awk '/#define/{ if (NF > 2) print "ipcrm -vM " $3; }' < shmkeys.h | bash |& grep -v "invalid key" | awk '/removing shared memory segment id/{ id = gensub(/^(.*) '([0-9]+)'$/, "\\1 0x\\2", "g", $0); printf "%s %s %s %s }'; echo -e '\e[0m'
 #eof
