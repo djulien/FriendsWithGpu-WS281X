@@ -505,7 +505,6 @@ int ShmPtr_params::Extra;
 bool ShmPtr_params::WantReInit;
 bool ShmPtr_params::DebugFree;
 ShmPtr_params defaults(SRCLINE); //"default"); //DRY kludge: set params to default values
-#endif
 
 #ifndef PARAMS
  #define PARAMS  SRCLINE, [](auto& _)
@@ -567,6 +566,7 @@ public: //info about shmem
     size_t shmsize() const { return ::shmsize(m_ptr); }
     bool existed() const { return ::shmexisted(m_ptr); }
 };
+#endif
 
 
 ///////////////////////////////////////////////////////////////////////////////

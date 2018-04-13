@@ -62,6 +62,7 @@
 #ifndef PARAMS
  #define PARAMS  SRCLINE, [](auto& _)
 #endif
+//template <typename THRID>
 class MsgQue//Base
 {
 //protected:
@@ -87,8 +88,10 @@ public: //ctor params
 //        IFIPC(int shmkey = 0); //shmem handling info
         int shmkey = 0; //shmem handling info
 //        int extra = 0;
+//        typedef decltype(IpcThread::get_id()) ThreadId;
 #else
         const int shmkey = 0;
+//        typedef decltype(std::this_thread::get_id()) ThreadId;
 #endif
         bool want_reinit = true;
 //        bool debug_free = true;
@@ -116,7 +119,7 @@ public: //ctor/dtor
 //        m_ptr->data.TYPE();
 //        m_ptr->WithMutex<TYPE>(std::forward<ARGS>(args) ...);
 //        m_ptr->WithMutex<TYPE, AUTO_LOCK>(std::forward<ARGS>(args ...)); //pass args to TYPE's ctor (perfect fwding)
-        new (m_ptr) decltype(*m_ptr)::type(); //, srcline); //pass args to TYPE's ctor (perfect fwding)
+        new (m_ptr) std::decay<decltype(*m_ptr)>::type(); //, srcline); //pass args to TYPE's ctor (perfect fwding)
         WANT_DEBUG(strncpy(m_ptr->name, (name && *name)? name: "(unnamed)", sizeof(m_ptr->name)));
     }
     ~MsgQue()
@@ -228,6 +231,55 @@ public: //methods
         myprintf(30, BLUE_MSG "sent[%d] 0x%x to signal 0x%x" ENDCOLOR, this->pending.size(), toint(msg), toint(this));
     }
 #endif
+public: //methods
+//convert thread/procid to terse int:
+//#include <unistd.h> //getpid()
+//#include "critical.h"
+    int thrid() //THRID& id) //bool locked = false)
+    {
+#ifdef IPC_THREAD //shmem handling info
+        auto id = IpcThread::get_id();
+#else
+        auto id = std::this_thread::get_id();
+#endif
+        typedef decltype(id) ThreadId;
+        static vectype& ids = SHARED(SRCKEY, vectype, vectype);
+//    std::unique_lock<std::mutex> lock(ShmHeapAlloc::shmheap.mutex()); //low usage; reuse mutex
+//#else
+//    ShmScope<type> scope(SRCLINE, "testobj", SRCLINE); //shm obj wrapper; call dtor when goes out of scope (parent only)
+//    type& testobj = scope.shmobj; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+//    typedef WithMutex<vector_ex<THREAD::id>> type;
+        static typedef vector_ex<THRID> type; //TODO: use decltype(id)
+//    static vector_ex<THREAD::id> ids(ABS(NUM_WKERs)); //preallocate space
+//    std::unique_lock<std::mutex> lock(atomic_mut); //low usage; reuse mutex
+//    ShmScope<type, ABS(NUM_WKERs) + 1> scope(SRCLINE, SHMKEY3); //shm obj wrapper; call dtor when goes out of scope (parent only)
+    static ShmPtr_params settings(SRCLINE, THRIDS_SHMKEY, (ABS(NUM_WKERs) + 1) * sizeof(THREAD::id), false); //don't need auto-lock due to explicit critical section
+    static ShmPtr<type> ids;
+//    {
+    CriticalSection<SHARED_CRITICAL_SHMKEY> cs(SRCLINE);
+    if (!ids->size()) ids->reserve(ABS(NUM_WKERs) + 1); //avoid extraneous copy ctors later
+//    }
+//    ids->reserve(ABS(NUM_WKERs) + 1); //avoid extraneous copy ctors later; only needs to happen 1x; being lazy: just use wrapped method rather than using a critical section with a condition
+//    type& ids = scope.shmobj.data; //ShmObj<TestObj>("testobj", thread, SRCLINE);
+//#endif
+//        return thrid(true);
+//    }
+//        std::lock_guard<std::mutex> lock(m);
+//NOTE: use op->() for shm safety with ipc
+    int ofs = ids->find(id);
+    if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR_NOLINE);
+    if (ofs == -1) { ofs = ids->size(); ids->push_back(id); } //ofs = ids.push_and_find(id);
+//    std::stringstream ss;
+//    ss << thrid;
+//    ss << THRID;
+//    ss << ofs;
+//    return ss.str();
+    ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << " => thr inx " << ofs << ENDCOLOR);
+    return ofs;
+}
+
+
+
 //protected:
 private: //helpers
 //can't use nested class on non-static members :(

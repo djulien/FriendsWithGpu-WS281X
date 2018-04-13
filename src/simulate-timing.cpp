@@ -173,6 +173,7 @@ template<> const char* WithMutex<vector_ex<std::thread::id>>::TYPENAME() { retur
 #endif
 
 
+#if 0
 //convert thread/procid to terse int:
 #include <unistd.h> //getpid()
 #include "critical.h"
@@ -222,6 +223,7 @@ int thrid() //bool locked = false)
     ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << " => thr inx " << ofs << ENDCOLOR);
     return ofs;
 }
+#endif
 
 
 #if 0
