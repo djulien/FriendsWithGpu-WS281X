@@ -155,7 +155,7 @@ public: //operators
 };
 
 template<typename TYPE>
-void test(TYPE& vec)
+void test1(TYPE& vec)
 {
     DEBUG("initial: " << vec.join(", ", "(empty)") << ", sizeof: " << sizeof(vec));
     size_t num = vec.size();
@@ -168,26 +168,27 @@ void test(TYPE& vec)
     DEBUG("all " << num + 3 << ": " << vec.join(", "));
 }
     
-int main(int argc, const char* argv[])
+//int main(int argc, const char* argv[])
+void unit_test()
 {
 //    typedef int vectype;
     typedef IntObj vectype;
     vector_ex<vectype> vec1;
-    test(vec1);
+    test1(vec1);
 
 //    struct thing2 { PreallocVector<int, false> vec2; int values2[10]; thing2(): vec2(3, 1), values2({11, 22, 33, 44, 55, 66, 77, 88, 99, 1010}) {}; } thing2;
     vectype values2[10] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 1010};
     PreallocVector<vectype, false> vec2(values2, 3, 1);
 //    DEBUG(FMT("&list2[0] = %p") << &values2[0]);
-    test(vec2);
+    test1(vec2);
 
 //    struct thing3 { PreallocVector<int, true> vec3; int values3[10]; thing3(): vec3(3, 1), values3({11, 22, 33, 44, 55, 66, 77, 88, 99, 1010}) {}; } thing3;
     vectype values3[10] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 1010};
     PreallocVector<vectype, true> vec3(values3, 3, 1);
 //    DEBUG(FMT("&list3[0] = %p") << &values3[0]);
-    test(vec3);
+    test1(vec3);
 
-    return 0;
+//    return 0;
 }
 #endif //def WANT_UNIT_TEST
 //eof

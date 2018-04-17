@@ -28,9 +28,8 @@
 #include <stdexcept> //std::runtime_error
 #include <mutex> //std::mutex, lock
 #include <atomic> //std::atomic
-#include <type_traits> //std::conditional<>
+#include <type_traits> //std::conditional<>, std::enable_if<>
 #include <memory> //std::shared_ptr<>
-#include <type_traits> //std::enable_if<>
 
 #include "msgcolors.h" //SrcLine, msg colors
 #ifdef SHMALLOC_DEBUG //CAUTION: recursive
@@ -101,14 +100,24 @@ struct check
 //stash some info within shmem block returned to caller:
 #define SHM_MAGIC  0xfeedbeef //marker to detect valid shmem block
 //typedef struct { int id; key_t key; size_t size; uint32_t marker; } ShmHdr;
+
+//https://codereview.stackexchange.com/questions/101541/optional-base-class-template-to-get-conditional-data-members?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+template <bool SHARED
+struct ShmVars;
+template 
+struct ShmVars
+{
+    int id; key_t key;
+};
+
 template <bool SHARED = true>
 struct MemHdr
 {
 //    int id; key_t key;
-    template<bool SHARED_inner = SHARED>
-    typename std::enable_if<SHARED_inner, int>::type id;
-    template<bool SHARED_inner = SHARED>
-    typename std::enable_if<SHARED_inner, key_t>::type key;
+//    template<bool SHARED_inner = SHARED>
+//    typename std::enable_if<SHARED, int>::type id;
+//    template<bool SHARED_inner = SHARED>
+//    typename std::enable_if<SHARED, key_t>::type key;
     size_t size;
     uint32_t marker;
 
@@ -127,7 +136,7 @@ struct MemHdr
     typename std::enable_if<SHARED_inner, void*>::type shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
     {
         if ((size < 1) || (size >= 10e6)) throw std::runtime_error("shmalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
-        size += sizeof(ShmHdr<SHARED>);
+        size += sizeof(MemHdr<SHARED>);
         if (!key) key = (rand() << 16) | 0xbeef; //generate new (pseudo-random) key
         int shmid = shmget(key, size, 0666); // | IPC_CREAT); //create if !exist; clears to 0 upon creation
         bool existed = (shmid != -1);
@@ -136,9 +145,9 @@ struct MemHdr
         if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
         struct shmid_ds shminfo;
         if (shmctl(shmid, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
-        ShmHdr* ptr = static_cast<ShmHdr*>(shmat(shmid, NULL /*system choses adrs*/, 0)); //read/write access
+        MemHdr* ptr = static_cast<MemHdr*>(shmat(shmid, NULL /*system choses adrs*/, 0)); //read/write access
         DEBUG_MSG(BLUE_MSG << timestamp() << "shmalloc: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ", cre by pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR);
-        if (ptr == (ShmHdr*)-1) throw std::runtime_error(std::string(strerror(errno)));
+        if (ptr == (MemHdr*)-1) throw std::runtime_error(std::string(strerror(errno)));
         ptr->id = shmid;
         ptr->key = key;
         ptr->size = shminfo.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
@@ -150,9 +159,9 @@ struct MemHdr
     typename std::enable_if<!SHARED_inner, void*>::type shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
     {
         if ((size < 1) || (size >= 10e6)) throw std::runtime_error("shmalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
-        size += sizeof(ShmHdr<SHARED>);
+        size += sizeof(MemHdr<SHARED>);
         if (key) throw std::runtime_error("key not applicable to non-shared memory");
-        ShmHdr<SHARED>* ptr = static_cast<ShmHdr<SHARED>*>(malloc(size));
+        MemHdr<SHARED>* ptr = static_cast<MemHdr<SHARED>*>(malloc(size));
         DEBUG_MSG(CYAN_MSG << timestamp() << "shmalloc: malloc size " << size << " => " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
         if (!ptr) throw std::runtime_error(std::string(strerror(errno)));
         ptr->size = size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
@@ -162,8 +171,8 @@ struct MemHdr
     void* shmalloc(size_t size, SrcLine srcline = 0) { return shmalloc(size, 0, srcline); }
 
 //get shmem key:
-    template<bool SHARED_inner = SHARED>
-    typename std::enable_if<SHARED_inner, key_t>::type shmkey(void* addr) { return shmptr(addr, "shmkey")->key; }
+//    template<bool SHARED_inner = SHARED>
+    typename std::enable_if<SHARED, key_t>::type shmkey(void* addr) { return shmptr(addr, "shmkey")->key; }
 
 //get size:
     size_t shmsize(void* addr) { return shmptr(addr, "shmsize")->size; }
@@ -175,9 +184,9 @@ struct MemHdr
     template<bool SHARED_inner = SHARED>
     typename std::enable_if<SHARED_inner, void>::type shmfree(void* addr, bool debug_msg, SrcLine srcline = 0)
     {
-        ShmHdr* ptr = shmptr(addr, "shmfree");
+        MemHdr* ptr = shmptr(addr, "shmfree");
         DEBUG_MSG(CYAN_MSG << timestamp() << FMT("shmfree: adrs %p") << addr << FMT(" = ptr %p") << ptr << ENDCOLOR_ATLINE(srcline));
-        ShmHdr info = *ptr; //copy info before dettaching
+        MemHdr info = *ptr; //copy info before dettaching
 //    struct shmid_ds info;
 //    if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
         if (shmdt(ptr) == -1) throw std::runtime_error(strerror(errno));
@@ -193,11 +202,11 @@ struct MemHdr
         DEBUG_MSG(CYAN_MSG << timestamp() << "shmfree: freed " << FMT("key 0x%lx") << info.key << FMT(", id 0x%lx") << info.id << ", size " << info.size << ", cre pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR_ATLINE(srcline), debug_msg);
     }
     template<bool SHARED_inner = SHARED>
-    typename std::enable_if<!SHARED_inner, void*>::type shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
+    typename std::enable_if<!SHARED_inner, void>::type shmfree(void* addr, bool debug_msg, SrcLine srcline = 0)
     {
-        ShmHdr* ptr = shmptr(addr, "shmfree");
+        MemHdr* ptr = shmptr(addr, "shmfree");
         DEBUG_MSG(CYAN_MSG << timestamp() << FMT("shmfree: adrs %p") << addr << FMT(" = ptr %p") << ptr << ENDCOLOR_ATLINE(srcline));
-        ShmHdr info = *ptr; //copy info before dettaching
+        MemHdr info = *ptr; //copy info before dettaching
 //    struct shmid_ds info;
 //    if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
         ::free(ptr);
@@ -217,7 +226,7 @@ struct MemHdr
 template <typename TYPE, bool SHARED = true>
 struct shmdeleter
 { 
-    void operator() (TYPE* ptr) const { shmfree<SHARED>(ptr); }
+    void operator() (TYPE* ptr) const { MemHdr<SHARED>::shmfree(ptr); }
 //    {
 //        std::cout << "Call delete from function object...\n";
 //        delete p;
@@ -707,7 +716,8 @@ struct ShmAllocator
     {
         if (!count) return nullptr;
         if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
-        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
+//        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
+        void* const ptr = m_heap? MemHdr<false>::shmalloc(count * sizeof(TYPE), key, srcline): MemHdr<true>::shmalloc(count * sizeof(TYPE), key, srcline);
         DEBUG_MSG(YELLOW_MSG << timestamp() << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << FMT(" bytes for key 0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
         if (!ptr) throw std::bad_alloc();
         return static_cast<TYPE*>(ptr);
