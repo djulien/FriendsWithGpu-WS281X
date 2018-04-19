@@ -3,7 +3,7 @@ echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// Optional class member var example
+/// Conditional class member var example
 //
 
 //based on https://stackoverflow.com/questions/25492589/can-i-use-sfinae-to-selectively-define-a-member-variable-in-a-template-class?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
@@ -85,20 +85,20 @@ public:
 //class base_class
 //{
 //};
-template<typename Enable = void>
-class base_class;
+template<bool Enable> //= void>
+class base_class {};
 
 //std::enable_if<!SHARED_inner, void*>::type s
 //    typename std::enable_if<SHARED_inner, void>::type shmfree(void* addr, bool debug_msg, SrcLine srcline = 0)
 template<bool INCL>
-class base_class<std::enable_if_t<INCL>>
+class base_class<std::enable_if<INCL>>
 {
 public:
     int some_variable;
 };
 
 template<bool INCL>
-class base_class<std::enable_if_t<!INCL>>
+class base_class<std::enable_if<!INCL>>
 {
 public:
     // no variable
