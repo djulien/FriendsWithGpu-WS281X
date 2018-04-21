@@ -40,14 +40,14 @@
 // #undef SHMALLOC_DEBUG
 // #define SHMALLOC_DEBUG  ATOMIC_MSG
 #else
- #define DEBUG_MSG(...)  //noop
+ #define DEBUG_MSG(...)  {} //noop
 // #define SHMALLOC_DEBUG(msg)  //noop
 #endif
 
 
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// Low-level shamlloc/shmfree (malloc/free emulator)
+/// Low-level malloc/free emulator:
 //
 
 //#include <memory> //std::deleter
@@ -97,20 +97,13 @@ struct check
 };
 */
 
-//stash some info within shmem block returned to caller:
+#include <iostream> //std::cout, std::flush, std::ostream
+//#include <sstream>
+
+//stash some info within mem block returned to caller:
 #define SHM_MAGIC  0xfeedbeef //marker to detect valid shmem block
 //typedef struct { int id; key_t key; size_t size; uint32_t marker; } ShmHdr;
-
-//https://codereview.stackexchange.com/questions/101541/optional-base-class-template-to-get-conditional-data-members?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-template <bool SHARED
-struct ShmVars;
-template 
-struct ShmVars
-{
-    int id; key_t key;
-};
-
-template <bool SHARED = true>
+template <bool, typename = void>
 struct MemHdr
 {
 //    int id; key_t key;
@@ -120,105 +113,134 @@ struct MemHdr
 //    typename std::enable_if<SHARED, key_t>::type key;
     size_t size;
     uint32_t marker;
-
-//check if shmem ptr is valid:
-    static MemHdr* shmptr(void* addr, const char* func)
-    {
-        MemHdr* ptr = static_cast<MemHdr*>(addr); --ptr;
-        if (!((ptr->marker ^ SHM_MAGIC) & ~1)) return ptr;
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s: bad shmem pointer %p", func, addr);
-        throw std::runtime_error(buf);
+public:
+    void destroy() { ::free(this); } //CAUTION: data members not valid after
+    static friend std::ostream& operator<<(std::ostream& ostrm, const MemHdr& hdr) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << "memhdr{ size " << hdr.size << " }";
+        return ostrm;
     }
+//private:
+    MemHdr& desc() { return *this; } //dummy function for readability
+};
+//shared memory specialization:
+//remember shmem info also
+template <bool SHARED>
+struct MemHdr<SHARED, std::enable_if_t<SHARED>>
+{
+    int id;
+    key_t key;
+public:
+    void destroy() //CAUTION: data members not valid after
+    {
+        int svid = id; //copy id to stack
+        if (shmdt(this) == -1) throw std::runtime_error(strerror(errno));
+        struct shmid_ds shminfo;
+        if (shmctl(svid, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
+        if (!shminfo.shm_nattch) //no more procs attached, delete myself
+            if (shmctl(svid, IPC_RMID, NULL /*ignored*/)) throw std::runtime_error(strerror(errno));
+    }
+    static friend std::ostream& operator<<(std::ostream& ostrm, const MemHdr& hdr) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << "memhdr{ shared, " << FMT("key 0x%lx") << hdr.key << FMT(", id 0x%lx") << hdr.id << ", size " << hdr.size << " }";
+        return ostrm;
+    }
+};
+
+
+//check if mem ptr is valid:
+template <bool SHARED>
+static MemHdr<SHARED>* memptr(void* addr, const char* func)
+{
+    MemHdr<SHARED>* ptr = static_cast<MemHdr<SHARED>*>(addr);
+    if (ptr-- && !((ptr->marker ^ SHM_MAGIC) & ~1)) return ptr;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s: bad shmem pointer %p", func, addr);
+    throw std::runtime_error(buf);
+}
+
 
 //allocate memory:
-    template<bool SHARED_inner = SHARED>
-    typename std::enable_if<SHARED_inner, void*>::type shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
-    {
-        if ((size < 1) || (size >= 10e6)) throw std::runtime_error("shmalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
-        size += sizeof(MemHdr<SHARED>);
-        if (!key) key = (rand() << 16) | 0xbeef; //generate new (pseudo-random) key
-        int shmid = shmget(key, size, 0666); // | IPC_CREAT); //create if !exist; clears to 0 upon creation
-        bool existed = (shmid != -1);
-        if (!existed) shmid = shmget(key, size, 0666 | IPC_CREAT); //create if !exist; clears to 0 upon creation
-        DEBUG_MSG(CYAN_MSG << timestamp() << "shmalloc: cre shmget key " << FMT("0x%lx") << key << ", size " << size << ", existed? " << existed << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR_ATLINE(srcline));
-        if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
-        struct shmid_ds shminfo;
-        if (shmctl(shmid, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
-        MemHdr* ptr = static_cast<MemHdr*>(shmat(shmid, NULL /*system choses adrs*/, 0)); //read/write access
-        DEBUG_MSG(BLUE_MSG << timestamp() << "shmalloc: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ", cre by pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR);
-        if (ptr == (MemHdr*)-1) throw std::runtime_error(std::string(strerror(errno)));
-        ptr->id = shmid;
-        ptr->key = key;
-        ptr->size = shminfo.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
-        ptr->marker = SHM_MAGIC;
-        if (existed) ptr->marker ^= 1;
-        return ++ptr;
-    }
-    template<bool SHARED_inner = SHARED>
-    typename std::enable_if<!SHARED_inner, void*>::type shmalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
-    {
-        if ((size < 1) || (size >= 10e6)) throw std::runtime_error("shmalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
-        size += sizeof(MemHdr<SHARED>);
-        if (key) throw std::runtime_error("key not applicable to non-shared memory");
-        MemHdr<SHARED>* ptr = static_cast<MemHdr<SHARED>*>(malloc(size));
-        DEBUG_MSG(CYAN_MSG << timestamp() << "shmalloc: malloc size " << size << " => " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
-        if (!ptr) throw std::runtime_error(std::string(strerror(errno)));
-        ptr->size = size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
-        ptr->marker = SHM_MAGIC;
-        return ++ptr;
-    }
-    void* shmalloc(size_t size, SrcLine srcline = 0) { return shmalloc(size, 0, srcline); }
+//uses shared + non-shared specializations
+//template<bool SHARED>
+//typename std::enable_if<SHARED, void*>::type memalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
+template<bool SHARED>
+//typename std::enable_if<!SHARED, void*>::type memalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
+void* memalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
+{
+    if ((size < 1) || (size >= 10e6)) throw std::runtime_error("memalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
+    size += sizeof(MemHdr<SHARED>);
 
-//get shmem key:
+
+    if (!key) key = (rand() << 16) | 0xbeef; //generate new (pseudo-random) key
+    int shmid = shmget(key, size, 0666); // | IPC_CREAT); //create if !exist; clears to 0 upon creation
+    bool existed = (shmid != -1);
+    if (!existed) shmid = shmget(key, size, 0666 | IPC_CREAT); //create if !exist; clears to 0 upon creation
+    DEBUG_MSG(CYAN_MSG << timestamp() << "shmalloc: cre shmget key " << FMT("0x%lx") << key << ", size " << size << ", existed? " << existed << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR_ATLINE(srcline));
+    if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
+    struct shmid_ds shminfo;
+    if (shmctl(shmid, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
+    MemHdr* ptr = static_cast<MemHdr*>(shmat(shmid, NULL /*system choses adrs*/, 0)); //read/write access
+    DEBUG_MSG(BLUE_MSG << timestamp() << "shmalloc: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ", cre by pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR);
+    if (ptr == (MemHdr*)-1) throw std::runtime_error(std::string(strerror(errno)));
+    ptr->id = shmid;
+    ptr->key = key;
+    ptr->size = shminfo.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
+    ptr->marker = SHM_MAGIC;
+    if (existed) ptr->marker ^= 1;
+    return ++ptr;
+}
+    if (key) throw std::runtime_error("key not applicable to non-shared memory");
+    MemHdr<SHARED>* ptr = static_cast<MemHdr<SHARED>*>(malloc(size));
+    DEBUG_MSG(CYAN_MSG << timestamp() << "memalloc: size " << size << " => " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
+    if (!ptr) throw std::runtime_error(std::string(strerror(errno)));
+    ptr->size = size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
+    ptr->marker = SHM_MAGIC;
+    return ++ptr;
+}
+template<bool SHARED>
+svoid* memalloc(size_t size, SrcLine srcline = 0) { return memalloc<SHARED>(size, 0, srcline); }
+
+
+//get mem key:
 //    template<bool SHARED_inner = SHARED>
-    typename std::enable_if<SHARED, key_t>::type shmkey(void* addr) { return shmptr(addr, "shmkey")->key; }
+//typename std::enable_if<SHARED, key_t>::type shmkey(void* addr) { return shmptr(addr, "shmkey")->key; }
+template<bool SHARED>
+key_t memkey(void* addr) { return memptr<SHARED>(addr, "memkey")->key; }
 
 //get size:
-    size_t shmsize(void* addr) { return shmptr(addr, "shmsize")->size; }
+//size_t shmsize(void* addr) { return shmptr(addr, "shmsize")->size; }
+template<bool SHARED>
+size_t memsize(void* addr) { return memptr<SHARED>(addr, "memsize")->size; }
 
-//tell caller if new shm blk was created:
-    bool shmexisted(void* addr) { return (shmptr(addr, "shmexisted")->marker != SHM_MAGIC); }
+//tell caller if new mem blk was created:
+template<bool SHARED>
+bool existed(void* addr) { return (memptr<SHARED>(addr, "existed")->marker != SHM_MAGIC); }
 
-//dealloc shmem:
-    template<bool SHARED_inner = SHARED>
-    typename std::enable_if<SHARED_inner, void>::type shmfree(void* addr, bool debug_msg, SrcLine srcline = 0)
-    {
-        MemHdr* ptr = shmptr(addr, "shmfree");
-        DEBUG_MSG(CYAN_MSG << timestamp() << FMT("shmfree: adrs %p") << addr << FMT(" = ptr %p") << ptr << ENDCOLOR_ATLINE(srcline));
-        MemHdr info = *ptr; //copy info before dettaching
+//dealloc mem:
+//uses shared + non-shared specializations
+//template<bool SHARED_inner = SHARED>
+//template<bool SHARED>
+//typename std::enable_if<SHARED, void>::type memfree(void* addr, bool debug_msg, SrcLine srcline = 0)
+template<bool SHARED>
+//typename std::enable_if<!SHARED, void>::type memfree(void* addr, bool debug_msg, SrcLine srcline = 0)
+void memfree(void* addr, bool debug_msg, SrcLine srcline = 0)
+{
+    MemHdr<SHARED>* ptr = memptr<SHARED>(addr, "memfree");
+    DEBUG_MSG(CYAN_MSG << timestamp() << FMT("memfree: adrs %p") << addr << FMT(" = ptr %p") << ptr << ENDCOLOR_ATLINE(srcline));
+    MemHdr<SHARED> info = *ptr; //copy info before destroying
 //    struct shmid_ds info;
 //    if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
-        if (shmdt(ptr) == -1) throw std::runtime_error(strerror(errno));
-        ptr = 0; //CAUTION: can't use ptr after this point
+    ptr->destroy();
+    ptr = 0; //CAUTION: can't use ptr after this point
 //    DEBUG_MSG(CYAN_MSG << "shmfree: dettached " << ENDCOLOR); //desc();
 //    int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
 //    if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
 //    if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
-        struct shmid_ds shminfo;
-        if (shmctl(info.id, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
-        if (!shminfo.shm_nattch) //no more procs attached, delete it
-            if (shmctl(info.id, IPC_RMID, NULL /*ignored*/)) throw std::runtime_error(strerror(errno));
-        DEBUG_MSG(CYAN_MSG << timestamp() << "shmfree: freed " << FMT("key 0x%lx") << info.key << FMT(", id 0x%lx") << info.id << ", size " << info.size << ", cre pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR_ATLINE(srcline), debug_msg);
-    }
-    template<bool SHARED_inner = SHARED>
-    typename std::enable_if<!SHARED_inner, void>::type shmfree(void* addr, bool debug_msg, SrcLine srcline = 0)
-    {
-        MemHdr* ptr = shmptr(addr, "shmfree");
-        DEBUG_MSG(CYAN_MSG << timestamp() << FMT("shmfree: adrs %p") << addr << FMT(" = ptr %p") << ptr << ENDCOLOR_ATLINE(srcline));
-        MemHdr info = *ptr; //copy info before dettaching
-//    struct shmid_ds info;
-//    if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
-        ::free(ptr);
-        ptr = 0; //CAUTION: can't use ptr after this point
-//    DEBUG_MSG(CYAN_MSG << "shmfree: dettached " << ENDCOLOR); //desc();
-//    int shmid = shmget(key, 1, 0666); //use minimum size in case it changed
-//    if ((shmid != -1) && !shmctl(shmid, IPC_RMID, NULL /*ignored*/)) return; //successfully deleted
-//    if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
-        DEBUG_MSG(CYAN_MSG << timestamp() << "shmfree: freed size " << info.size << ENDCOLOR_ATLINE(srcline), debug_msg);
-    }
-    void shmfree(void* addr, SrcLine srcline = 0) { shmfree(addr, true, srcline); } //overload
-};
+    DEBUG_MSG(CYAN_MSG << timestamp() << "memfree: freed " << info.desc() << ENDCOLOR_ATLINE(srcline), debug_msg);
+}
+template<bool SHARED>
+void memfree(void* addr, SrcLine srcline = 0) { memfree<SHARED>(addr, true, srcline); } //overload
 
 
 //std::Deleter wrapper for shmfree:
@@ -226,7 +248,7 @@ struct MemHdr
 template <typename TYPE, bool SHARED = true>
 struct shmdeleter
 { 
-    void operator() (TYPE* ptr) const { MemHdr<SHARED>::shmfree(ptr); }
+    void operator() (TYPE* ptr) const { MemHdr<SHARED>::memfree(ptr); }
 //    {
 //        std::cout << "Call delete from function object...\n";
 //        delete p;

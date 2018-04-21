@@ -4,7 +4,7 @@
 #define _VECTOREX_H
 
 #include <vector>
-#include <memory> //std::allocator
+#include <memory> //std::allocator<>
 #include <string> //std::string
 #include <sstream> //std::stringstream
 #include <string.h> //strlen
@@ -18,7 +18,9 @@ public: //ctors
 //    static std::allocator<TYPE> def_alloc; //default allocator; TODO: is this needed?
 //    /*explicit*/ vector_ex() {}
 //    explicit vector_ex(std::size_t count, const std::allocator<TYPE>& alloc = def_alloc): std::vector<TYPE>(count, alloc) {}
-    explicit vector_ex(std::size_t count = 0, const ALLOC& alloc = ALLOC()): std::vector<TYPE>(count, alloc) {}
+//    explicit vector_ex(std::size_t count = 0, const ALLOC& alloc = ALLOC()): std::vector<TYPE>(count, alloc) {}
+    template<typename ... ARGS>
+    explicit vector_ex(ARGS&& ... args): std::vector<TYPE, ALLOC>(std::forward<ARGS>(args) ...)) {} //perfect fwd
 public: //extensions
     int find(const TYPE&& that)
     {

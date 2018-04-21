@@ -30,12 +30,13 @@
 #else
  #define DEBUG_MSG(msg)  {} //noop
  #define WANT_DEBUG(stmt)  {} //noop
- #include "msgcolors.h" //SrcLine, msg colors
+ #include "msgcolors.h" //still need SrcLine, msg colors
 #endif
 #ifndef MSGQUE_DETAILS
  #define MSGQUE_DETAILS  0
 #endif
 
+/*
 #ifdef IPC_THREAD
  #include "ipc.h" //IpcThread; out-of-proc threads)
  #define IFIPC(stmt)  stmt
@@ -49,6 +50,7 @@
 // #define memsize(ptr)  sizeof(*ptr)
 // typedef decltype(std::this_thread::get_id()) THRID;
 #endif
+*/
 
 //#if 1 //new def; shm-compatible
 //usage:
@@ -62,13 +64,26 @@
 //#define MULTI_PROCESS  -1
 //template <bool IPC>
 
-//safe for multi-threading (uses mutex):
 #ifndef PARAMS
  #define PARAMS  SRCLINE, [](auto& _)
 #endif
 
+//define template <bool, typename = void>
+class MsgQueBase
+{
+};
+
+template <bool INCL> //typename TYPE>
+struct data_members<INCL, std::enable_if_t<INCL>>
+{
+    int some_variable[3];
+    void hasit() { }
+};
+
+//safe for multi-threading (uses mutex):
 //template <int MAX_THREADS = 0> //typename THRID>
-class MsgQue//Base
+template <bool WANT_IPC = false>
+class MsgQue: public class MsgQueBase
 {
 public: //static methods
 #ifdef IPC_THREAD
