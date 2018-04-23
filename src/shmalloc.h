@@ -102,6 +102,7 @@ struct check
 
 //stash some info within mem block returned to caller:
 #define SHM_MAGIC  0xfeedbeef //marker to detect valid shmem block
+
 //typedef struct { int id; key_t key; size_t size; uint32_t marker; } ShmHdr;
 template <bool, typename = void>
 struct MemHdr
@@ -132,8 +133,8 @@ public:
 
 //shared memory (ipc) specialization:
 //remember shmem info also
-template <bool SHARED>
-struct MemHdr<SHARED, std::enable_if_t<SHARED>>
+template <bool IPC>
+struct MemHdr<IPC, std::enable_if_t<IPC>>
 {
     int id;
     key_t key;
@@ -177,10 +178,10 @@ public:
 
 
 //check if mem ptr is valid:
-template <bool SHARED>
-static MemHdr<SHARED>* memptr(void* addr, const char* func)
+template <bool IPC>
+static MemHdr<IPC>* memptr(void* addr, const char* func)
 {
-    MemHdr<SHARED>* ptr = static_cast<MemHdr<SHARED>*>(addr);
+    MemHdr<IPC>* ptr = static_cast<MemHdr<IPC>*>(addr);
     if (ptr-- && !((ptr->marker ^ SHM_MAGIC) & ~1)) return ptr;
     char buf[64];
     snprintf(buf, sizeof(buf), "%s: bad shmem pointer %p", func, addr);
@@ -192,14 +193,14 @@ static MemHdr<SHARED>* memptr(void* addr, const char* func)
 //uses shared + non-shared specializations
 //template<bool SHARED>
 //typename std::enable_if<SHARED, void*>::type memalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
-template<bool SHARED>
+template<bool IPC>
 //typename std::enable_if<!SHARED, void*>::type memalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
 void* memalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
 {
     if ((size < 1) || (size >= 10e6)) throw std::runtime_error("memalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
-    size += sizeof(MemHdr<SHARED>);
+    size += sizeof(MemHdr<IPC>);
     bool existed;
-    MemHdr<SHARED>* ptr = MemHdr<SHARED>::alloc(size, key, &existed);
+    MemHdr<IPC>* ptr = MemHdr<IPC>::alloc(size, key, &existed);
     if (!ptr) throw std::runtime_error(std::string(strerror(errno)));
     DEBUG_MSG(CYAN_MSG << timestamp() << "memalloc: alloc " << ptr->desc() << ENDCOLOR_ATLINE(srcline), debug_msg);
 //    DEBUG_MSG(BLUE_MSG << timestamp() << "shmalloc: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ", cre by pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR);
@@ -209,37 +210,37 @@ void* memalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
     ptr->marker = existed? (SHM_MAGIC ^ 1): SHM_MAGIC;
     return ++ptr;
 }
-template<bool SHARED>
-void* memalloc(size_t size, SrcLine srcline = 0) { return memalloc<SHARED>(size, 0, srcline); }
+template<bool IPC>
+void* memalloc(size_t size, SrcLine srcline = 0) { return memalloc<IPC>(size, 0, srcline); }
 
 
 //get mem key:
 //    template<bool SHARED_inner = SHARED>
 //typename std::enable_if<SHARED, key_t>::type shmkey(void* addr) { return shmptr(addr, "shmkey")->key; }
-template<bool SHARED>
-key_t memkey(void* addr) { return memptr<SHARED>(addr, "memkey")->key; }
+template<bool IPC>
+key_t memkey(void* addr) { return memptr<IPC>(addr, "memkey")->key; }
 
 //get size:
 //size_t shmsize(void* addr) { return shmptr(addr, "shmsize")->size; }
-template<bool SHARED>
-size_t memsize(void* addr) { return memptr<SHARED>(addr, "memsize")->size; }
+template<bool IPC>
+size_t memsize(void* addr) { return memptr<IPC>(addr, "memsize")->size; }
 
 //tell caller if new mem blk was created:
-template<bool SHARED>
-bool existed(void* addr) { return (memptr<SHARED>(addr, "existed")->marker != SHM_MAGIC); }
+template<bool IPC>
+bool existed(void* addr) { return (memptr<IPC>(addr, "existed")->marker != SHM_MAGIC); }
 
 //dealloc mem:
 //uses shared + non-shared specializations
 //template<bool SHARED_inner = SHARED>
 //template<bool SHARED>
 //typename std::enable_if<SHARED, void>::type memfree(void* addr, bool debug_msg, SrcLine srcline = 0)
-template<bool SHARED>
+template<bool IPC>
 //typename std::enable_if<!SHARED, void>::type memfree(void* addr, bool debug_msg, SrcLine srcline = 0)
 void memfree(void* addr, bool debug_msg, SrcLine srcline = 0)
 {
-    MemHdr<SHARED>* ptr = memptr<SHARED>(addr, "memfree");
+    MemHdr<IPC>* ptr = memptr<IPC>(addr, "memfree");
     DEBUG_MSG(CYAN_MSG << timestamp() << FMT("memfree: adrs %p") << addr << FMT(" = ptr %p") << ptr << ENDCOLOR_ATLINE(srcline));
-    MemHdr<SHARED> info = *ptr; //copy info before destroying
+    MemHdr<IPC> info = *ptr; //copy info before destroying
 //    struct shmid_ds info;
 //    if (shmctl(shmid, IPC_STAT, &info) == -1) throw std::runtime_error(strerror(errno));
     ptr->destroy();
@@ -250,16 +251,16 @@ void memfree(void* addr, bool debug_msg, SrcLine srcline = 0)
 //    if ((shmid == -1) && (errno == ENOENT)) return; //didn't exist
     DEBUG_MSG(CYAN_MSG << timestamp() << "memfree: freed " << info.desc() << ENDCOLOR_ATLINE(srcline), debug_msg);
 }
-template<bool SHARED>
-void memfree(void* addr, SrcLine srcline = 0) { memfree<SHARED>(addr, true, srcline); } //overload
+template<bool IPC>
+void memfree(void* addr, SrcLine srcline = 0) { memfree<IPC>(addr, true, srcline); } //overload
 
 
 //std::Deleter wrapper for memfree:
 //based on example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-template <typename TYPE, bool SHARED = true>
+template <typename TYPE, bool IPC = true>
 struct memdeleter
 { 
-    void operator() (TYPE* ptr) const { MemHdr<SHARED>::memfree(ptr); }
+    void operator() (TYPE* ptr) const { MemHdr<IPC>::memfree(ptr); }
 //    {
 //        std::cout << "Call delete from function object...\n";
 //        delete p;
@@ -269,31 +270,24 @@ struct memdeleter
 
 ///////////////////////////////////////////////////////////////////////////////
 ////
-/// Shared/non-shared memory management wrapper:
+/// Shared/non-shared memory wrapper:
 //
 
-#if 0
-template <bool SHARED = true>
+template <bool IPC = true>
 class Memory
 {
     void* m_ptr;
 public: //ctor/dtor
-    Memory(size_t size, int shmkey = 0, SrcLine srcline = 0)
-    {
-        m_ptr = SHARED? ::shmalloc(size, shmkey, srcline): malloc(size);
-    }
-    ~Memory
-    (
-        if (!m_ptr) return;
-        SHARED? ::shmfree(m_ptr): free(m_ptr);
-    )
+    Memory(size_t size, int shmkey = 0, SrcLine srcline = 0): m_ptr(memalloc<IPC>(size, shmkey, srcline)) {}
+    ~Memory() { /*if (m_ptr)*/ memfree<IPC>(m_ptr); }
 public: //operators
     operator void*() { return m_ptr; }
     void* operator->() { return m_ptr; }
-public:
-    static size_t memsize(void* ptr) { return ::shmsize(ptr); }
-}
-#endif
+public: //members
+    key_t memkey() { return memkey<IPC>(m_ptr); }
+    size_t memsize() { return memsize<IPC>(m_ptr); }
+    bool existed() { return existed<IPC>(m_ptr); }
+};
 
 
 ///////////////////////////////////////////////////////////////////////////////

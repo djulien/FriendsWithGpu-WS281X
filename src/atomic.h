@@ -4,22 +4,36 @@
 #ifndef _ATOMIC_H
 #define _ATOMIC_H
 
-#include <iostream> //std::cout, std::flush
-#include <mutex> //std::mutex, std::unique_lock
-#include "msgcolors.h" //SrcLine and colors (used with ATOMIC_MSG)
+//#include <iostream> //std::cout, std::flush
+//#include <mutex> //std::mutex, std::unique_lock
+//#include "msgcolors.h" //SrcLine and colors (used with ATOMIC_MSG)
 //#ifdef IPC_THREAD
 // #include "shmalloc.h" //put this before DEBUG_MSG() so it doesn't interfere if debug is turned on
 //#endif
 //#include <memory> //std::unique_ptr<>
 
 
-#ifdef ATOMIC_DEBUG
-// #include "ostrfmt.h" //FMT()
-// #include "elapsed.h" //timestamp()
- #define DEBUG_MSG(msg)  { std::cout << msg << "\n" << std::flush; }
-#else
- #define DEBUG_MSG(msg)  {} //noop
-#endif
+#include <iostream> //std::cout, std::flush
+
+//handle optional macro params:
+//see https://stackoverflow.com/questions/3046889/optional-parameters-with-c-macros?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+//for stds way to do it without ##: https://stackoverflow.com/questions/5588855/standard-alternative-to-gccs-va-args-trick?noredirect=1&lq=1
+#define USE_ARG3(one, two, three, ...)  three
+
+//use macro so any stmt can be nested within scoped lock:
+//CAUTION: recursive if IPC_THREAD is turned on with DEBUG for ShmPtr (in shmalloc.h)
+//use optional parameter to bypass lock (to avoid recursion deadlock on mutex)
+//#define ATOMIC(stmt)  { std::unique_lock<std::mutex, std::defer_lock> lock(atomic_mut); stmt; }
+//#define ATOMIC(stmt)  { LockOnce lock; stmt; }
+//#define ATOMIC(stmt)  { std::unique_ptr<LockOnce> lock(new LockOnce()); stmt; }
+#define ATOMIC_1ARG(stmt)  { /*InOut here("atomic-1arg")*/; LockOnce lock; stmt; }
+#define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; LockOnce lock(want_lock); stmt; }
+//#define ATOMIC_2ARGS(stmt, want_lock)  { InOut here("atomic-2args"); if (lock_once) LockOnce lock(want_lock); stmt; }
+#define ATOMIC(...)  USE_ARG3(__VA_ARGS__, ATOMIC_2ARGS, ATOMIC_1ARG) (__VA_ARGS__)
+
+#define ATOMIC_MSG_1ARG(msg)  ATOMIC(std::cout << msg << std::flush)
+#define ATOMIC_MSG_2ARGS(msg, want_lock)  ATOMIC(std::cout << msg << std::flush, want_lock)
+#define ATOMIC_MSG(...)  USE_ARG3(__VA_ARGS__, ATOMIC_MSG_2ARGS, ATOMIC_MSG_1ARG) (__VA_ARGS__)
 
 
 /*
@@ -83,11 +97,43 @@
 */
 
 
+/*
+#ifdef ATOMIC_DEBUG
+// #include "ostrfmt.h" //FMT()
+// #include "elapsed.h" //timestamp()
+// #define DEBUG_MSG(msg)  { std::cout << msg << "\n" << std::flush; }
+ #define DEBUG_MSG  ATOMIC_MSG
+#else
+ #define DEBUG_MSG(msg)  {} //noop
+#endif
+*/
+
+
+//    void paranoid(int limit = 10) { if (nested() > limit) throw std::runtime_error("inf loop?"); }
+public: //ctor/dtor
+    Thing(int limit = 0) { m_top = !depth(limit)++; MSG("thing ctor", m_top); } //!nested(limit)++); } //if (limit) paranoid(limit); }
+    ~Thing() { MSG("thing dtor", m_top); --depth(); }
+};
+
+
+#include <mutex> //std::mutex, std::unique_lock
+#include "msgcolors.h" //SrcLine and colors (used with ATOMIC_MSG)
+
+
 //atomic wrapper to iostream messages:
 //template <bool, typename = void>
 template <bool IPC = false>
-class LockOnce
+class LockOnce //: public TopOnly
 {
+//    bool m_top;
+    int& depth(int limit = 0)
+    {
+        static int count = 0;
+        if (limit && (count > limit)) throw std::runtime_error("inf loop?");
+        if (count < 0) throw std::runtime_error("nesting underflow");
+        return count;
+    }
+//    bool istop() const { return m_top; }
 //    static std::mutex m_mutex; //in-process mutex (all threads have same address space)
     std::unique_lock<std::mutex> m_lock;
 public: //ctor/dtor
@@ -97,18 +143,40 @@ public: //ctor/dtor
 private: //members
     void maybe_lock(bool want_lock)
     {
-        DEBUG_MSG("LockOnce: should i lock? " << (want_lock && !!m_lock.mutex()));
-        if (want_lock && m_lock.mutex()) m_lock.lock(); //only lock mutex if it is ready
+        bool istop = !depth(limit)++;
+        DEBUG_MSG("LockOnce: should i lock? " << (want_lock && istop && !!m_lock.mutex()));
+        if (want_lock && istop && m_lock.mutex()) m_lock.lock(); //only lock mutex if it is ready
     } 
-    static std::mutex& mutex() //use wrapper to avoid trailing static decl at global scope
+//local memory (non-ipc) specialization:
+    static std::enable_if<!IPC, std::mutex&> mutex() //use wrapper to avoid trailing static decl at global scope
     {
         static std::mutex m_mutex;
         return m_mutex;
     }
 //shared memory (ipc) specialization:
+    static std::enable_if<IPC, std::mutex&> mutex() //use wrapper to avoid trailing static decl at global scope
+    {
+//CAUTION: recursive; need to satisfy unique_lock<> on deeper levels without mutex ready yet
+//        static std::mutex m_mutex;
+//    static bool ready = false; //enum { None, Started, Ready } state = None;
+        static bool busy = false; //detect recursion
+        DEBUG_MSG("LockOnce: cre mutex: busy? " << busy);
+        if (busy) return *(std::mutex*)0; //placeholder mutex; NOTE: will segfault if caller tries to use this
+//    if (!ready /*state == Started*/) return *(std::mutex*)0; //placeholder mutex; NOTE: will segfault if caller tries to use it
+//    state = Started;
+        busy = true;
+        static ShmPtr_params override(SRCLINE, ATOMIC_MSG_SHMKEY, 0, false /*true*/, false); //don't re-init in other procs; don't lock debug msgs after shmfree() (shared mutex is gone)
+        static ShmPtr<std::mutex, /*ATOMIC_MSG_SHMKEY, 0, true,*/ false> m_mutex; //ipc mutex (must be in shared memory); static for persistence and defered init to avoid “static initialization order fiasco”
+//    m_mutex.debug_free = false; //don't lock debug msgs after shmfree() (shared mutex is gone)
+//    static std::mutex nested_mutex;
+//    state = Ready;
+        busy = false;
+        return *m_mutex.get(); //return real shared mutex; //(state == Ready)? *m_mutex.get(): *(std::mutex*)0; //nested_mutex;
+    }
 }; 
 
 
+/*
 //#ifdef ATOMIC_DEBUG
 class InOut
 {
@@ -124,29 +192,10 @@ private: //helpers
     }
 };
 //#endif
+*/
 
 
-//handle optional macro params:
-//see https://stackoverflow.com/questions/3046889/optional-parameters-with-c-macros?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-//for stds way to do it without ##: https://stackoverflow.com/questions/5588855/standard-alternative-to-gccs-va-args-trick?noredirect=1&lq=1
-#define USE_ARG3(one, two, three, ...)  three
-
-//use macro so any stmt can be nested within scoped lock:
-//CAUTION: recursive if IPC_THREAD is turned on with DEBUG for ShmPtr (in shmalloc.h)
-//use optional parameter to bypass lock (to avoid recursion deadlock on mutex)
-//#define ATOMIC(stmt)  { std::unique_lock<std::mutex, std::defer_lock> lock(atomic_mut); stmt; }
-//#define ATOMIC(stmt)  { LockOnce lock; stmt; }
-//#define ATOMIC(stmt)  { std::unique_ptr<LockOnce> lock(new LockOnce()); stmt; }
-#define ATOMIC_1ARG(stmt)  { InOut here("atomic-1arg"); LockOnce lock; stmt; }
-#define ATOMIC_2ARGS(stmt, want_lock)  { InOut here("atomic-2args"); LockOnce lock(want_lock); stmt; }
-#define ATOMIC(...)  USE_ARG3(__VA_ARGS__, ATOMIC_2ARGS, ATOMIC_1ARG) (__VA_ARGS__)
-
-#define ATOMIC_MSG_1ARG(msg)  ATOMIC(std::cout << msg << std::flush)
-#define ATOMIC_MSG_2ARGS(msg, want_lock)  ATOMIC(std::cout << msg << std::flush, want_lock)
-#define ATOMIC_MSG(...)  USE_ARG3(__VA_ARGS__, ATOMIC_MSG_2ARGS, ATOMIC_MSG_1ARG) (__VA_ARGS__)
-
-
-#ifdef IPC_THREAD
+#ifdef xIPC_THREAD
  #include "shmkeys.h"
  #include "shmalloc.h"
  #ifdef ATOMIC_DEBUG //kludge: restore DEBUG_MSG after shmalloc removes it
@@ -227,5 +276,5 @@ std::mutex& get_atomic_mut()
 #endif //def IPC_THREAD
 
 
-#undef DEBUG_MSG
+//#undef DEBUG_MSG
 #endif //ndef _ATOMIC_H
