@@ -138,6 +138,7 @@ public: //methods
 //
 
 #ifdef WANT_UNIT_TEST
+#undef WANT_UNIT_TEST //prevent recursion
 #include <iostream> //std::cout, std::flush
 //#include "ostrfmt.h" //FMT()
 #define DEBUG(msg)  { std::cout << msg << "\n" << std::flush; }

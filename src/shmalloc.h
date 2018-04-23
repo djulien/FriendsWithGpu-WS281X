@@ -32,9 +32,9 @@
 #include <memory> //std::shared_ptr<>
 
 #include "msgcolors.h" //SrcLine, msg colors
+#include "ostrfmt.h" //FMT()
 #ifdef SHMALLOC_DEBUG //CAUTION: recursive
  #include "atomic.h" //ATOMIC_MSG()
- #include "ostrfmt.h" //FMT()
  #include "elapsed.h" //timestamp()
  #define DEBUG_MSG  ATOMIC_MSG
 // #undef SHMALLOC_DEBUG
@@ -114,8 +114,14 @@ struct MemHdr
     size_t size;
     uint32_t marker;
 public:
+    static MemHdr* alloc(size_t& size, key_t key = 0, bool* existed = 0)
+    {
+        if (existed) existed = false;
+        if (key) throw std::runtime_error("key not applicable to non-shared memory");
+        return static_cast<MemHdr*>(::malloc(size));
+    }
     void destroy() { ::free(this); } //CAUTION: data members not valid after
-    static friend std::ostream& operator<<(std::ostream& ostrm, const MemHdr& hdr) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const MemHdr& hdr) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
     { 
         ostrm << "memhdr{ size " << hdr.size << " }";
         return ostrm;
@@ -123,7 +129,8 @@ public:
 //private:
     MemHdr& desc() { return *this; } //dummy function for readability
 };
-//shared memory specialization:
+
+//shared memory (ipc) specialization:
 //remember shmem info also
 template <bool SHARED>
 struct MemHdr<SHARED, std::enable_if_t<SHARED>>
@@ -131,6 +138,27 @@ struct MemHdr<SHARED, std::enable_if_t<SHARED>>
     int id;
     key_t key;
 public:
+    static MemHdr* alloc(size_t& size, key_t key = 0, bool* existed = 0)
+    {
+//        if (key) throw std::runtime_error("key not applicable to non-shared memory");
+//        return static_cast<MemHdr*>(::malloc(size));
+        bool dummy;
+        if (!existed) existed = &dummy;
+        if (!key) key = (rand() << 16) | 0xbeef; //generate new (pseudo-random) key
+        int shmid = shmget(key, size, 0666); // | IPC_CREAT); //create if !exist; clears to 0 upon creation
+        *existed = (shmid != -1);
+        if (shmid == -1) shmid = shmget(key, size, 0666 | IPC_CREAT); //create if !exist; clears to 0 upon creation
+        DEBUG_MSG(CYAN_MSG << timestamp() << "shmalloc: cre shmget key " << FMT("0x%lx") << key << ", size " << size << ", existed? " << *existed << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR_ATLINE(srcline));
+        if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
+        struct shmid_ds shminfo;
+        if (shmctl(shmid, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
+        size = shminfo.shm_segsz; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so give caller actual size
+        MemHdr* ptr = static_cast<MemHdr*>(shmat(shmid, NULL /*system choses adrs*/, 0)); //read/write access
+        if (ptr == (MemHdr*)-1) return 0; //throw std::runtime_error(std::string(strerror(errno)));
+        ptr->id = shmid;
+        ptr->key = key;
+        return ptr;
+    }
     void destroy() //CAUTION: data members not valid after
     {
         int svid = id; //copy id to stack
@@ -140,7 +168,7 @@ public:
         if (!shminfo.shm_nattch) //no more procs attached, delete myself
             if (shmctl(svid, IPC_RMID, NULL /*ignored*/)) throw std::runtime_error(strerror(errno));
     }
-    static friend std::ostream& operator<<(std::ostream& ostrm, const MemHdr& hdr) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const MemHdr& hdr) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
     { 
         ostrm << "memhdr{ shared, " << FMT("key 0x%lx") << hdr.key << FMT(", id 0x%lx") << hdr.id << ", size " << hdr.size << " }";
         return ostrm;
@@ -170,36 +198,19 @@ void* memalloc(size_t size, key_t key = 0, SrcLine srcline = 0)
 {
     if ((size < 1) || (size >= 10e6)) throw std::runtime_error("memalloc: bad size"); //throw std::bad_alloc(); //set reasonable limits
     size += sizeof(MemHdr<SHARED>);
-
-
-    if (!key) key = (rand() << 16) | 0xbeef; //generate new (pseudo-random) key
-    int shmid = shmget(key, size, 0666); // | IPC_CREAT); //create if !exist; clears to 0 upon creation
-    bool existed = (shmid != -1);
-    if (!existed) shmid = shmget(key, size, 0666 | IPC_CREAT); //create if !exist; clears to 0 upon creation
-    DEBUG_MSG(CYAN_MSG << timestamp() << "shmalloc: cre shmget key " << FMT("0x%lx") << key << ", size " << size << ", existed? " << existed << " => " << FMT("id 0x%lx") << shmid << ENDCOLOR_ATLINE(srcline));
-    if (shmid == -1) throw std::runtime_error(std::string(strerror(errno))); //failed to create or attach
-    struct shmid_ds shminfo;
-    if (shmctl(shmid, IPC_STAT, &shminfo) == -1) throw std::runtime_error(strerror(errno));
-    MemHdr* ptr = static_cast<MemHdr*>(shmat(shmid, NULL /*system choses adrs*/, 0)); //read/write access
-    DEBUG_MSG(BLUE_MSG << timestamp() << "shmalloc: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ", cre by pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR);
-    if (ptr == (MemHdr*)-1) throw std::runtime_error(std::string(strerror(errno)));
-    ptr->id = shmid;
-    ptr->key = key;
-    ptr->size = shminfo.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
-    ptr->marker = SHM_MAGIC;
-    if (existed) ptr->marker ^= 1;
-    return ++ptr;
-}
-    if (key) throw std::runtime_error("key not applicable to non-shared memory");
-    MemHdr<SHARED>* ptr = static_cast<MemHdr<SHARED>*>(malloc(size));
-    DEBUG_MSG(CYAN_MSG << timestamp() << "memalloc: size " << size << " => " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
+    bool existed;
+    MemHdr<SHARED>* ptr = MemHdr<SHARED>::alloc(size, key, &existed);
     if (!ptr) throw std::runtime_error(std::string(strerror(errno)));
+    DEBUG_MSG(CYAN_MSG << timestamp() << "memalloc: alloc " << ptr->desc() << ENDCOLOR_ATLINE(srcline), debug_msg);
+//    DEBUG_MSG(BLUE_MSG << timestamp() << "shmalloc: shmat id " << FMT("0x%lx") << shmid << " => " << FMT("%p") << ptr << ", cre by pid " << shminfo.shm_cpid << ", #att " << shminfo.shm_nattch << ENDCOLOR);
+//    DEBUG_MSG(CYAN_MSG << timestamp() << "memalloc: size " << size << " => " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
+//    ptr->size = shminfo.shm_segsz; //size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
     ptr->size = size; //NOTE: size will be rounded up to a multiple of PAGE_SIZE, so get actual size
-    ptr->marker = SHM_MAGIC;
+    ptr->marker = existed? (SHM_MAGIC ^ 1): SHM_MAGIC;
     return ++ptr;
 }
 template<bool SHARED>
-svoid* memalloc(size_t size, SrcLine srcline = 0) { return memalloc<SHARED>(size, 0, srcline); }
+void* memalloc(size_t size, SrcLine srcline = 0) { return memalloc<SHARED>(size, 0, srcline); }
 
 
 //get mem key:
@@ -243,10 +254,10 @@ template<bool SHARED>
 void memfree(void* addr, SrcLine srcline = 0) { memfree<SHARED>(addr, true, srcline); } //overload
 
 
-//std::Deleter wrapper for shmfree:
+//std::Deleter wrapper for memfree:
 //based on example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 template <typename TYPE, bool SHARED = true>
-struct shmdeleter
+struct memdeleter
 { 
     void operator() (TYPE* ptr) const { MemHdr<SHARED>::memfree(ptr); }
 //    {
@@ -597,7 +608,7 @@ public: //operators
 /// shmem ptr with auto-cleanup:
 //
 
-#pragma message("TODO: use named args")
+//#pragma message("TODO: use named args")
 //https://marcoarena.wordpress.com/2014/12/16/bring-named-parameters-in-modern-cpp/
 //TEST_F(SomeDiceGameConfig, JustTwoTurnsGame)
 //{
@@ -739,7 +750,7 @@ struct ShmAllocator
         if (!count) return nullptr;
         if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
 //        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
-        void* const ptr = m_heap? MemHdr<false>::shmalloc(count * sizeof(TYPE), key, srcline): MemHdr<true>::shmalloc(count * sizeof(TYPE), key, srcline);
+        void* const ptr = m_heap? memalloc<false>(count * sizeof(TYPE), key, srcline): memalloc<true>(count * sizeof(TYPE), key, srcline);
         DEBUG_MSG(YELLOW_MSG << timestamp() << "ShmAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << FMT(" bytes for key 0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
         if (!ptr) throw std::bad_alloc();
         return static_cast<TYPE*>(ptr);
@@ -748,7 +759,7 @@ struct ShmAllocator
     {
         DEBUG_MSG(YELLOW_MSG << timestamp() << "ShmAllocator: deallocate " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR_ATLINE(srcline));
         if (m_heap) m_heap->free(ptr);
-        else shmfree(ptr);
+        else memfree<true>(ptr);
     }
 //    std::shared_ptr<ShmHeap> m_heap; //allow heap to be shared between allocators
     ShmHeap* m_heap; //allow heap to be shared between allocators
@@ -944,6 +955,7 @@ public: //static helpers
 //
 
 #ifdef WANT_UNIT_TEST
+#undef WANT_UNIT_TEST //prevent recursion
 //#!/bin/bash -x
 //echo -e '\e[1;36m'; g++ -O3 -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++11 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 //#line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line); add "-E" to above to see raw src
@@ -999,6 +1011,7 @@ public:
 //
 
 #ifdef WANT_TEST1 //shm_obj test, single proc
+#pragma message("Test1")
 
 //#define MEMSIZE  rdup(10, 8)+8 + rdup(4, 8)+8
 //WithMutex<MemPool<MEMSIZE>> pool20;
@@ -1010,7 +1023,8 @@ MAKE_TYPENAME(MemPool<40>)
 MAKE_TYPENAME(WithMutex<MemPool<40>>)
 
 
-int main(int argc, const char* argv[])
+//int main(int argc, const char* argv[])
+void unit_test()
 {
     ATOMIC_MSG(PINK_MSG << timestamp() << "data space:" <<ENDCOLOR);
     void* ptr1 = pool20->alloc(10);
@@ -1053,7 +1067,7 @@ int main(int argc, const char* argv[])
     void* ptr9 = shmpool->alloc(1);
 //    shmfree(&shmpool);
 
-    return 0;
+//    return 0;
 }
 #endif
 
@@ -1064,6 +1078,7 @@ int main(int argc, const char* argv[])
 //
 
 #ifdef WANT_TEST2 //proxy example, multi-proc; BROKEN
+#pragma message("Test2")
 //#include "vectorex.h"
 //#include <unistd.h> //fork()
 //#include "ipc.h"
@@ -1096,7 +1111,8 @@ MAKE_TYPENAME(MemPool<300>)
 //#include "ipc.h" //IpcThread(), IpcPipe()
 //#include "elapsed.h" //timestamp()
 //#include <memory> //unique_ptr<>
-int main(int argc, const char* argv[])
+//int main(int argc, const char* argv[])
+void unit_test()
 {
 //    ShmKey key(12);
 //    std::cout << FMT("0x%lx\n") << key.m_key;
@@ -1220,7 +1236,7 @@ int main(int argc, const char* argv[])
     ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent (waiting to)": "child") << " exit" << ENDCOLOR);
     if (thread.isParent()) thread.join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
     else shmheaptr.reset((ShmHeap*)0); //don't call dtor for child
-    return 0;
+//    return 0;
 }
 #endif
 
@@ -1231,6 +1247,7 @@ int main(int argc, const char* argv[])
 //
 
 #ifdef WANT_TEST3 //generic shm usage pattern
+#pragma message("Test3")
 #ifndef IPC_THREAD
  #error "uncomment ipc.h near top for this test"
 #endif
@@ -1258,7 +1275,8 @@ MAKE_TYPENAME(WithMutex<TestObj COMMA true>)
 //template<typename TYPE>
 //TYPE& shmobj(typedef TYPE& Ref; //kludge: C++ doesn't like "&" on derivation line
 
-int main(int argc, const char* argv[])
+//int main(int argc, const char* argv[])
+void unit_test()
 {
 //    IpcPipe pipe; //create pipe descriptors < fork()
     IpcThread thread(SRCLINE);
@@ -1301,7 +1319,7 @@ int main(int argc, const char* argv[])
     ATOMIC_MSG(PINK_MSG << timestamp() << (thread.isParent()? "parent (waiting to)": "child") << " exit" << ENDCOLOR);
     if (thread.isParent()) thread.join(SRCLINE); //don't let parent go out of scope before child (parent calls testobj dtor, not child); NOTE: blocks until child state changes
 //    if (thread.isParent()) { testobj.~TestObj(); shmfree(&testobj, SRCLINE); } //only parent will destroy obj
-    return 0;
+//    return 0;
 }
 #endif
 
@@ -1312,6 +1330,7 @@ int main(int argc, const char* argv[])
 //
 
 #ifdef WANT_TEST4 //generic shm usage pattern
+#pragma message("Test4")
 //#include <memory> //unique_ptr<>
 #include "shmkeys.h"
 #include "critical.h"
@@ -1347,7 +1366,8 @@ public:
     std::cout << "here6\n";
 #endif
 
-int main(int argc, const char* argv[])
+//int main(int argc, const char* argv[])
+void unit_test()
 {
     ATOMIC_MSG(BLUE_MSG << timestamp() << "start test 4" << ENDCOLOR);
 //    ShmPtr_params(SRCLINE, 0x444decaf, 100, true); //!i && thread.isParent());
@@ -1379,7 +1399,7 @@ int main(int argc, const char* argv[])
         thread.allow_any(); //children might not execute in order
     }
     ATOMIC_MSG(BLUE_MSG << timestamp() << "finish" << ENDCOLOR);
-    return 0;
+//    return 0;
 }
 #endif
 

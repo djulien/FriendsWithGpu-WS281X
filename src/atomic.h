@@ -16,13 +16,13 @@
 #ifdef ATOMIC_DEBUG
 // #include "ostrfmt.h" //FMT()
 // #include "elapsed.h" //timestamp()
- #define DEBUG_MSG(msg)  std::cout << msg << "\n" << std::flush
+ #define DEBUG_MSG(msg)  { std::cout << msg << "\n" << std::flush; }
 #else
- #define DEBUG_MSG(msg)  //noop
+ #define DEBUG_MSG(msg)  {} //noop
 #endif
 
 
-//atomic wrapper to iostream messages:
+/*
 #ifdef IPC_THREAD
 // #include "shmkeys.h"
 // #include "shmalloc.h"
@@ -44,7 +44,7 @@
 //    LockOnce(): base_type(mutex(), std::defer_lock) { std::cout << "should i lock? " << &mutex() << "\n" << std::flush; } // ++recursion(); }
 //    ~LockOnce() {} //{ --recursion(); } //unlock when goes out of scope
     LockOnce(bool want_lock = true): m_lock(mutex(), std::defer_lock) { maybe_lock(want_lock); } // ++recursion(); }
-    ~LockOnce() { /*if (!m_need_unlock) m_lock.mutex()*/ } //{ --recursion(); } //unlock when goes out of scope
+    ~LockOnce() { /-*if (!m_need_unlock) m_lock.mutex()*-/ } //{ --recursion(); } //unlock when goes out of scope
  private: //members
     void maybe_lock(bool want_lock)
     {
@@ -80,6 +80,33 @@
  }; 
 // std::mutex LockOnce::m_mutex;
 #endif
+*/
+
+
+//atomic wrapper to iostream messages:
+//template <bool, typename = void>
+template <bool IPC = false>
+class LockOnce
+{
+//    static std::mutex m_mutex; //in-process mutex (all threads have same address space)
+    std::unique_lock<std::mutex> m_lock;
+public: //ctor/dtor
+//    LockOnce(bool ignored = false): m_lock(mutex()) {} //{ mutex().lock(); } //: base_type(mutex()) {}
+    LockOnce(bool want_lock = true): m_lock(mutex(), std::defer_lock) { maybe_lock(want_lock); } // ++recursion(); }
+    ~LockOnce() {} //mutex().unlock(); }
+private: //members
+    void maybe_lock(bool want_lock)
+    {
+        DEBUG_MSG("LockOnce: should i lock? " << (want_lock && !!m_lock.mutex()));
+        if (want_lock && m_lock.mutex()) m_lock.lock(); //only lock mutex if it is ready
+    } 
+    static std::mutex& mutex() //use wrapper to avoid trailing static decl at global scope
+    {
+        static std::mutex m_mutex;
+        return m_mutex;
+    }
+//shared memory (ipc) specialization:
+}; 
 
 
 //#ifdef ATOMIC_DEBUG
