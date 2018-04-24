@@ -1,4 +1,4 @@
-//printf-like formatter for ostreams
+//printf-like formatter for c++ ostreams
 
 #ifndef _OSTRMFMT_H
 #define _OSTRMFMT_H

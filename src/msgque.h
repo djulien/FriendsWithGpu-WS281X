@@ -1,11 +1,117 @@
 //simple msg que
 //uses mutex (shared) and cond var
-//for ipc, mutex + cond var need to be in shared memory; for threads, just needs to be in heap
-//this is designed for synchronous usage; msg que holds 1 int ( can be used as bitmap)
+//for ipc, needs to be in shared memory; for threads, just needs to be in heap
+//this is designed for synchronous usage; msg que only holds 1 int (can be used as bitmap)
 //template<int MAXLEN>
 //no-base class to share mutex across all template instances:
 //template<int MAXDEPTH>
 
+
+#ifndef _MSGQUE_H
+#define _MSGQUE_H
+
+#include <mutex>
+#include <condition_variable>
+#include <unistd.h> //fork, getpid()
+#include <thread> //std::this_thread
+//for example see http://en.cppreference.com/w/cpp/thread/condition_variable
+#include <type_traits> //std::decay<>, std::remove_reference<>, std::remove_pointer<>
+
+
+#ifdef MSGQUE_DEBUG
+ #define DEBUG_MSG  ATOMIC_MSG
+ #define WANT_DEBUG(stmt)  stmt
+#else
+ #define DEBUG_MSG(msg)  {} //noop
+ #define WANT_DEBUG(stmt)  {} //noop
+// #include "msgcolors.h" //still need SrcLine, msg colors
+#endif
+
+
+//conditional inheritance base:
+template <int, typename = void>
+class MsgQue_base
+{
+    /*volatile*/ int m_msg;
+    WANT_DEBUG(char m_name[20]); //store name directly in object; can't use char* because mapped address could vary between procs
+    SrcLine m_srcline;
+};
+
+//multi-threaded specialization:
+//need mutex + cond var for serialization
+template <int MAX_THREADs>
+class MsgQue_base<MAX_THREADs, std::enable_if_t<MAX_THREADs != 0>>
+//struct MsgQue_multi
+{
+    VOLATILE std::mutex m_mutex;
+    std::condition_variable m_condvar;
+    PreallocVector<decltype(thrid()) /*, MAX_THREADS*/> m_ids; //list of registered thread ids; NOTE: must be last
+//    decltype(thrid()) id_list[num_cpu()];
+public:
+//ipc specialization:
+    static std::enable_if<MAX_THREADs < 0, auto> thrid() { return getpid(); }
+//in-proc specialization:
+    static std::enable_if<MAX_THREADs > 0, auto> thrid() { return std::this_thread::get_id(); }
+};
+
+
+#ifndef PARAMS
+ #define PARAMS  SRCLINE, [](auto& _)
+#endif
+
+template <int MAX_THREADs = 0>
+class MsgQue: public MsgQue_base<MAX_THREADs> //std::conditional<THREADs != 0, MsgQue_multi, MsgQue_base>::type
+{
+public: //ctors/dtors
+//    explicit MsgQue(const char* name = 0, VOLATILE std::mutex& mutex = /*std::mutex()*/ shared_mutex): m_msg(0), m_mutex(mutex)
+//    explicit MsgQue(const char* name = 0): m_msg(0)
+//    struct CtorParams
+//    {
+        const char* name = 0;
+#ifdef IPC_THREAD //shmem handling info
+//        IFIPC(int shmkey = 0); //shmem handling info
+        int shmkey = 0; //shmem handling info
+//        int extra = 0;
+//        typedef decltype(IpcThread::get_id()) ThreadId;
+#else
+        const int shmkey = 0;
+//        typedef decltype(std::this_thread::get_id()) ThreadId;
+#endif
+        bool want_reinit = true;
+//        int max_threads = 4;
+//        bool debug_free = true;
+        SrcLine srcline = 0;
+    explicit MsgQue(SrcLine mySrcLine = 0, void (*get_params)(MsgQue&) = 0) //: m_msg(0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+    {
+//        /*static*/ struct CtorParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
+        if (mySrcLine) /*params.*/srcline = mySrcLine;
+        if (get_params) get_params(*this); //params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
+//        /*if (MSGQUE_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
+//        strncpy(m_name, "MsgQue-", sizeof(m_name));
+        IFIPC(m_ptr = static_cast<decltype(m_ptr)>(::shmalloc(sizeof(*m_ptr) /*+ Extra*/, shmkey, params.srcline))); //, SrcLine srcline = 0)
+        if (!m_ptr) return;
+        IFIPC(if (::shmexisted(m_ptr) && !want_reinit) return);
+        memset(m_ptr, 0, memsize(m_ptr)); //sizeof(*m_ptr) + EXTRA); //re-init (not needed first time)
+//        m_ptr->mutex.std::mutex();
+//        m_ptr->locked = false;
+//        m_ptr->data.TYPE();
+//        m_ptr->WithMutex<TYPE>(std::forward<ARGS>(args) ...);
+//        m_ptr->WithMutex<TYPE, AUTO_LOCK>(std::forward<ARGS>(args ...)); //pass args to TYPE's ctor (perfect fwding)
+        new (m_ptr) std::decay<decltype(*m_ptr)>(); //, srcline); //pass args to TYPE's ctor (perfect fwding)
+//        /*if (!ids->size())*/ m_ptr->ids.reserve(max_threads); //avoid extraneous copy ctors later
+        WANT_DEBUG(strncpy(m_ptr->name, (name && *name)? name: "(unnamed)", sizeof(m_ptr->name)));
+    }
+    ~MsgQue()
+    {
+        if (!m_ptr) return;
+        if (m_ptr->msg /*&& MSGQUE_DETAILS*/) DEBUG_MSG(RED_MSG << timestamp() << "MsgQue-" << m_ptr->name << ".dtor: !empty @exit " << FMT("0x%x") << m_ptr->msg << ENDCOLOR_ATLINE(srcline)) //benign, but might be caller bug so complain
+        else DEBUG_MSG(GREEN_MSG << timestamp() << "MsgQue-" << m_ptr->name << ".dtor: empty @exit" << ENDCOLOR_ATLINE(srcline));
+//        if (m_autodel) delete this;
+    }
+
+
+#endif //ndef _MSGQUE_H
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #ifndef _MSGQUE_H
 #define _MSGQUE_H
@@ -80,10 +186,11 @@ struct data_members<INCL, std::enable_if_t<INCL>>
     void hasit() { }
 };
 
+
 //safe for multi-threading (uses mutex):
 //template <int MAX_THREADS = 0> //typename THRID>
-template <bool WANT_IPC = false>
-class MsgQue: public class MsgQueBase
+template <int THREADS = 0> //bool WANT_IPC = false>
+class MsgQue: public Shm<THREADS > 0> //std::enable_if<class MsgQueBase
 {
 public: //static methods
 #ifdef IPC_THREAD
