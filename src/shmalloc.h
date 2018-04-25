@@ -280,16 +280,18 @@ struct memdeleter
 /// Shared/non-shared memory wrapper:
 //
 
-template <bool IPC = true>
-class Memory
+//pointer to block of shared memory:
+//can be heap or shmem
+template <typename TYPE = void, bool IPC = false>
+class MemPtr
 {
-    void* m_ptr;
+    TYPE* m_ptr;
 public: //ctor/dtor
-    Memory(size_t size, int shmkey = 0, SrcLine srcline = 0): m_ptr(memalloc<IPC>(size, shmkey, srcline)) {}
-    ~Memory() { /*if (m_ptr)*/ memfree<IPC>(m_ptr); }
+    MemPtr(size_t size, int shmkey = 0, SrcLine srcline = 0): m_ptr(static_cast<TYPE*>(memalloc<IPC>(size, shmkey, srcline))) {}
+    ~MemPtr() { /*if (m_ptr)*/ memfree<IPC>(m_ptr); }
 public: //operators
-    operator void*() { return m_ptr; }
-    void* operator->() { return m_ptr; }
+    operator TYPE*() { return m_ptr; }
+    TYPE* operator->() { return m_ptr; }
 public: //members
     key_t memkey() { return memkey<IPC>(m_ptr); }
     size_t memsize() { return memsize<IPC>(m_ptr); }

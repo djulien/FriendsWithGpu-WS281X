@@ -1,3 +1,5 @@
+//console msg:
+
 #ifndef _CONSOLE_MSG_H
 #define _CONSOLE_MSG_H
 

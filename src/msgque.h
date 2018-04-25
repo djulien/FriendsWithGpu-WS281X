@@ -30,23 +30,37 @@
 
 //conditional inheritance base:
 template <int, typename = void>
-class MsgQue_base
+class MsgQue_data
 {
     /*volatile*/ int m_msg;
     WANT_DEBUG(char m_name[20]); //store name directly in object; can't use char* because mapped address could vary between procs
     SrcLine m_srcline;
+//public:
+//    static int thrid() { return 0; }
+    struct CtorParams
+    {
+        const char* name = 0;
+        SrcLine srcline = 0;
+        const int shmkey = 0;
+    };
 };
 
 //multi-threaded specialization:
 //need mutex + cond var for serialization
 template <int MAX_THREADs>
-class MsgQue_base<MAX_THREADs, std::enable_if_t<MAX_THREADs != 0>>
+class MsgQue_data<MAX_THREADs, std::enable_if_t<MAX_THREADs != 0>>
 //struct MsgQue_multi
 {
     VOLATILE std::mutex m_mutex;
     std::condition_variable m_condvar;
-    PreallocVector<decltype(thrid()) /*, MAX_THREADS*/> m_ids; //list of registered thread ids; NOTE: must be last
-//    decltype(thrid()) id_list[num_cpu()];
+    PreallocVector<decltype(thrid()) /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
+    struct CtorParams
+    {
+        const char* name = 0;
+        SrcLine srcline = 0;
+        int shmkey = 0; //shmem handling info
+        bool want_reinit = true;
+    };
 public:
 //ipc specialization:
     static std::enable_if<MAX_THREADs < 0, auto> thrid() { return getpid(); }
@@ -60,35 +74,21 @@ public:
 #endif
 
 template <int MAX_THREADs = 0>
-class MsgQue: public MsgQue_base<MAX_THREADs> //std::conditional<THREADs != 0, MsgQue_multi, MsgQue_base>::type
+class MsgQue //: public MsgQue_base<MAX_THREADs> //std::conditional<THREADs != 0, MsgQue_multi, MsgQue_base>::type
 {
+    MemPtr<MsgQue_data<MAX_THREADs>> m_ptr;
 public: //ctors/dtors
 //    explicit MsgQue(const char* name = 0, VOLATILE std::mutex& mutex = /*std::mutex()*/ shared_mutex): m_msg(0), m_mutex(mutex)
 //    explicit MsgQue(const char* name = 0): m_msg(0)
-//    struct CtorParams
-//    {
-        const char* name = 0;
-#ifdef IPC_THREAD //shmem handling info
-//        IFIPC(int shmkey = 0); //shmem handling info
-        int shmkey = 0; //shmem handling info
-//        int extra = 0;
-//        typedef decltype(IpcThread::get_id()) ThreadId;
-#else
-        const int shmkey = 0;
-//        typedef decltype(std::this_thread::get_id()) ThreadId;
-#endif
-        bool want_reinit = true;
-//        int max_threads = 4;
-//        bool debug_free = true;
-        SrcLine srcline = 0;
     explicit MsgQue(SrcLine mySrcLine = 0, void (*get_params)(MsgQue&) = 0) //: m_msg(0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
     {
-//        /*static*/ struct CtorParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
+        /*static*/ struct CtorParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
         if (mySrcLine) /*params.*/srcline = mySrcLine;
-        if (get_params) get_params(*this); //params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
+        if (get_params) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
 //        /*if (MSGQUE_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
 //        strncpy(m_name, "MsgQue-", sizeof(m_name));
-        IFIPC(m_ptr = static_cast<decltype(m_ptr)>(::shmalloc(sizeof(*m_ptr) /*+ Extra*/, shmkey, params.srcline))); //, SrcLine srcline = 0)
+        new (&m_ptr) MemPtr(sizeof(*m_ptr), params.shmkey, params.srcline);
+//        m_ptr = static_cast<decltype(m_ptr)*>(::shmalloc(sizeof(*m_ptr) /*+ Extra*/, shmkey, params.srcline))); //, SrcLine srcline = 0)
         if (!m_ptr) return;
         IFIPC(if (::shmexisted(m_ptr) && !want_reinit) return);
         memset(m_ptr, 0, memsize(m_ptr)); //sizeof(*m_ptr) + EXTRA); //re-init (not needed first time)
