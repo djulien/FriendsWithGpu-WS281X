@@ -81,13 +81,14 @@ static bool isunique(const char* folder, const char* basename, const char* ext)
 //    if (get_params) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
 //    static std::map<const char*, const char*> exts;
     static struct { char name[32]; int count; } cached[10] = {0}; //base file name + #matching files
+    const auto cachend /*const*/ = cached + SIZEOF(cached);
     if (!ext) return false; //don't check if no extension
     size_t baselen = std::min<size_t>(ext - basename + 1, sizeof(cached->name)); //ext - basename;
 
 //    if (baselen <= sizeof(cached[0].name))
 //first check filename cache:
     auto cacheptr = cached; //NOTE: need initializer so compiler can deduce type
-    for (/*auto*/ cacheptr = cached; (cacheptr < cached + SIZEOF(cached)) && cacheptr->name[0]; ++cacheptr)
+    for (/*auto*/ cacheptr = cached; (cacheptr < cachend /*cached + SIZEOF(cached)*/) && cacheptr->name[0]; ++cacheptr)
 //    while ((++cacheptr < cached + SIZEOF(cached)) && cacheptr->name[0])
         if (!strncmp(basename, cacheptr->name, baselen)) return (cacheptr->count == 1);
 //        else std::cout << "cmp[" << (cacheptr - cached) << "] '" << cacheptr->name << "' vs. " << baselen << ":'" << basename << "'? " << strncmp(basename, cacheptr->name, baselen) << "\n" << std::flush;
@@ -111,7 +112,7 @@ static bool isunique(const char* folder, const char* basename, const char* ext)
             ++count;
         }
 //if there's enough room, cache results for later:
-    if (cacheptr < cached + SIZEOF(cached)) { strncpy(cacheptr->name, basename, baselen); cacheptr->count = count; }
+    if (cacheptr < cachend /*cached + SIZEOF(cached)*/) { strncpy(cacheptr->name, basename, baselen); cacheptr->count = count; }
 //    std::cout << "atline::isunique('" << folder << "', '" << basename << "', '" << ext << "') = [" << (cacheptr - cached) << "] '" << cacheptr->name << "', " << count << "\n" << std::flush;
     return (count == 1);
 }
@@ -168,7 +169,9 @@ public: //opeartors
 #endif //ndef _COLORS_H
 
 
-#ifdef UNIT_TEST
+#ifdef WANT_UNIT_TEST
+#undef WANT_UNIT_TEST //prevent recursion
+
 #include <iostream>
 #include "msgcolors.h"
 
@@ -179,12 +182,13 @@ void func(int a, SrcLine srcline = 0)
 }
 
 
-int main(int argc, const char* argv[])
+//int main(int argc, const char* argv[])
+void unit_test()
 {
     std::cout << BLUE_MSG << "start" << ENDCOLOR;
     func(1);
     func(2, SRCLINE);
-    return 0;
+//    return 0;
 }
 
-#endif //def UNIT_TEST
+#endif //def WANT_UNIT_TEST

@@ -50,3 +50,23 @@ private:
 };
 
 #endif //ndef _OSTRMFMT_H
+
+
+#ifdef WANT_UNIT_TEST
+#undef WANT_UNIT_TEST //prevent recursion
+
+#include "msgcolors.h"
+#include "ostrfmt.h"
+
+
+//int main(int argc, const char* argv[])
+void unit_test()
+{
+    int x;
+    std::cout << BLUE_MSG << FMT("hex 0x%x") << 42 << ENDCOLOR;
+    std::cout << BLUE_MSG << FMT("str4 %.4s") << "abcdefgh" << ENDCOLOR;
+    std::cout << BLUE_MSG << FMT("ptr %p") << &x << ENDCOLOR;
+//    return 0;
+}
+
+#endif //def WANT_UNIT_TEST

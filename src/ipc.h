@@ -3,7 +3,7 @@
 #ifndef _IPC_H
 #define _IPC_H
 
-#define IPC_THREAD //tell other modules to use ipc threads instead of in-proc threads
+//#define IPC_THREAD //tell other modules to use ipc threads instead of in-proc threads
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -12,6 +12,7 @@
 #include <vector> //std::vector<>
 #include <stdexcept> //std::runtime_error
 #include <memory> //std::shared_ptr<>
+#include <thread> //std::this_thread
 
 
 #ifdef IPC_DEBUG
@@ -21,19 +22,39 @@
  #include "msgcolors.h" //SrcLine, msg colors
  #define DEBUG_MSG  ATOMIC_MSG
 #else
- #define DEBUG_MSG(msg)  //noop
+ #define DEBUG_MSG(msg)  {} //noop
  #include "msgcolors.h" //SrcLine, msg colors
 #endif
 
 
+#ifndef WANT_IPC
+ #define WANT_IPC  true
+#endif
+
+
+template <bool, typename = void>
+class IpcPipe
+{
+public: //ctor/dtor
+    explicit IpcPipe(SrcLine srcline = 0) { DEBUG_MSG(BLUE_MSG << timestamp() << "!IpcPipe ctor" << ENDCOLOR_ATLINE(srcline)); }
+    ~IpcPipe() { DEBUG_MSG(BLUE_MSG << timestamp() << "!IpcPipe dtor" << ENDCOLOR); }
+public: //methods
+//no    const int Parent2Child = 0, Child2Parent = 1;
+    const int ReadEnd = 0, WriteEnd = 1;
+    void send(int value, SrcLine srcline = 0) { throw std:runtime_error("no pipe to send"); }
+    int rcv(SrcLine srcline = 0) { throw std:runtime_error("no pipe to rcv"); }
+};
+
+
 //ipc msgs:
 //NOTE: must be created before fork()
-class IpcPipe
+template <bool IPC = true> //default true, otherwise called probably wouldn't have #included this file
+class IpcPipe<IPC, std::enable_if_t<IPC>>
 {
 private: //data members
     int m_fd[2];
 //    bool m_open[2];
-public: //ctor
+public: //ctor/dtor
     explicit IpcPipe(SrcLine srcline = 0): m_fd{-1, -1} { DEBUG_MSG(BLUE_MSG << timestamp() << "IpcPipe ctor" << ENDCOLOR_ATLINE(srcline)); pipe(m_fd); } //m_open[0] = m_open[1] = true; } //create pipe descriptors < fork()
     ~IpcPipe() { pipe_close(ReadEnd); pipe_close(WriteEnd); DEBUG_MSG(BLUE_MSG << timestamp() << "IpcPipe dtor" << ENDCOLOR); }
 public: //methods
@@ -80,7 +101,76 @@ private: //helpers:
 };
 
 
-class IpcThread
+template <bool, typename = void>
+class IpcThread: public std::thread
+{
+public: //ctor/dtor
+    explicit IpcPipe(SrcLine srcline = 0) { DEBUG_MSG(BLUE_MSG << timestamp() << "!IpcThread ctor" << ENDCOLOR_ATLINE(srcline)); }
+    ~IpcPipe() { DEBUG_MSG(BLUE_MSG << timestamp() << "!IpcThread dtor" << ENDCOLOR); }
+public: //methods
+    typedef void (*_Callable)(void); //void* data); //TODO: make generic?
+//    template<typename _Callable, typename... _Args>
+//    explicit IpcThread(_Callable&& entpt, _Args&&... args)
+    explicit IpcThread(SrcLine srcline = 0): IpcThread(*new IpcPipe(srcline), srcline) {}
+    explicit IpcThread(_Callable/*&*/ entpt, SrcLine srcline = 0): IpcThread(entpt, *new IpcPipe(srcline), srcline) {}
+    explicit IpcThread(IpcPipe& pipe, SrcLine srcline = 0): m_anychild(false) //: m_pipe(pipe)
+    {
+        all.push_back(this); //keep track of instances; let caller use global collection
+        m_pid = fork();
+        m_pipe.reset(&pipe); //NOTE: must cre pipe < fork
+//        std::cout << "thread here: is parent? " << !!m_pid << ", me " << getpid() << "\n" << std::flush;
+//        const char* proctype = isChild()? "child": isError()? "error": "parent"; //isParent()? "parent": "child";
+#pragma message("there's a recursion problem here")
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "fork (" << proctype() << "): child pid = " << (isParent()? m_pid: getpid()) << ENDCOLOR_ATLINE(srcline));
+//        std::cout << "thread here2: is parent? " << !!m_pid << ", me " << getpid() << "\n" << std::flush;
+        if (isError()) throw std::runtime_error(strerror(errno)); //fork failed
+    }
+    explicit IpcThread(_Callable/*&*/ entpt, IpcPipe& pipe /*= IpcPipe()*/, SrcLine srcline = 0): IpcThread(pipe, srcline) //, _Args&&... args)
+    {
+        if (!isChild()) return; //parent or error
+        DEBUG_MSG(GREEN_MSG << timestamp() << "child " << getpid() << " calling entpt" << ENDCOLOR);
+        (*entpt)(/*args*/); //call child main()
+        DEBUG_MSG(RED_MSG << timestamp() << "child " << getpid() << " exit" << ENDCOLOR);
+        exit(0); //kludge; don't want to execute remainder of caller
+    }
+    ~IpcThread()
+    {
+        if (isParent()) join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+        auto inx = find(all.begin(), all.end(), this);
+        if (inx != all.end()) all.erase(inx);
+    }
+public: //std::thread emulation
+    typedef pid_t id;
+    static id get_id(void) { return getpid(); }
+//    IpcPipe& pipe() { return m_pipe; }
+public: //methods
+    bool isParent() const { return !isChild() && !isError(); } //(m_pid != 0); }
+    bool isChild() const { return (m_pid == 0); }
+    bool isError() const { return (m_pid == -1); }
+    const char* proctype() { return isChild()? "child": isError()? "error": "parent"; } //isParent()? "parent": "child";
+//    key_t ParentKeyGen(SrcLine srcline = 0) { return isParent()? 0: rcv(srcline); } //generate parent key
+    void send(int value, SrcLine srcline = 0) { m_pipe->send(value, srcline); }
+    int rcv(SrcLine srcline = 0) { return m_pipe->rcv(srcline); }
+    void allow_any() { m_anychild = true; } //m_pid = -1; } //allow any child to wake up join()
+    void join(SrcLine srcline = 0)
+    {
+        int status, waitfor = m_anychild? -1: m_pid;
+        if (!isParent()/* || isError()*/) throw std::runtime_error(/*RED_MSG*/ "join (!parent): no process to join" /*ENDCOLOR*/);
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "join: wait for pid " << waitfor << ENDCOLOR_ATLINE(srcline));
+        waitpid(waitfor, &status, /*options*/ 0); //NOTE: will block until child state changes
+    }
+
+//no    const int Parent2Child = 0, Child2Parent = 1;
+    const int ReadEnd = 0, WriteEnd = 1;
+    void send(int value, SrcLine srcline = 0) { throw std:runtime_error("no pipe to send"); }
+    int rcv(SrcLine srcline = 0) { throw std:runtime_error("no pipe to rcv"); }
+};
+
+
+//ipc msgs:
+//NOTE: must be created before fork()
+template <bool IPC = true> //default true, otherwise called probably wouldn't have #included this file
+class IpcThread<IPC, std::enable_if_t<IPC>>
 {
 public: //ctor/dtor
     typedef void (*_Callable)(void); //void* data); //TODO: make generic?

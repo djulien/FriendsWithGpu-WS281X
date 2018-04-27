@@ -1,4 +1,5 @@
 #!/bin/bash -x
+echo -e '\e[1;31m TODO: ipc, msgque, shmalloc, atomic \e[0m'
 echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O$OPT -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++14 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 
@@ -16,11 +17,11 @@ echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 
 #define NUM_WKERs  +4 //8 //use >0 for in-proc threads, <0 for ipc threads
 #define WANT_DETAILS  true //false //true
-#define IPC_DEBUG
 #define MSGQUE_DEBUG
-#define MSGQUE_DETAILS  true
+#define IPC_DEBUG
+//#define MSGQUE_DETAILS  true
 
-#define ABS(n)  (((n) < 0)? -(n): (n))
+//#define ABS(n)  (((n) < 0)? -(n): (n))
 
 
 //#include <iostream>
@@ -30,20 +31,26 @@ echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 //#include <exception>
 //#include <unistd.h> //getpid
 
+#define WANT_IPC  (NUM_WKERs < 0)
+//#if WANT_IPC
+// #define IF_IPC(stmt)  { stmt }
+//#else
+// #define IF_IPC(stmt)  {} //noop
+//#endif
 #include "msgcolors.h" //SrcLine, msg colors
 #include "ostrfmt.h" //FMT()
 #include "vectorex.h"
-#include "shmkeys.h"
+//#include "shmkeys.h"
 //#define SHM_KEY  0x4567feed
-#if NUM_WKERs < 0 //ipc
- #include "ipc.h" //needs to come first (to request Ipc versions of other classes)
-#endif
 //these ones need to come after ipc.h (#def IPC_THREAD):
 #include "elapsed.h" //timestamp()
 #include "atomic.h" //ATOMIC_MSG()
 //#define SHM_KEY  0x4567feed
 #include "msgque.h"
 //#define new_SHM(ignore)  new
+//#if WANT_IPC //NUM_WKERs < 0 //ipc
+// #include "ipc.h" //no-needs to come first (to request Ipc versions of other classes)
+//#endif
 
 
 #include <chrono>
@@ -65,7 +72,8 @@ void busy_msec(int msec)
 
 
 //#ifdef SHM_KEY //multi-process
-#if NUM_WKERs < 0 //ipc
+#if 0
+#if WANT_IPC //NUM_WKERs < 0 //ipc
 // #include "shmalloc.h"
 // #include "ipc.h" //needs to come first (to request Ipc versions of other classes)
  #define THREAD  IpcThread
@@ -171,6 +179,7 @@ private:
 template<> const char* WithMutex<vector_ex<std::thread::id>>::TYPENAME() { return "WithMutex<vector_ex<std::thread::id>>"; }
 // #endif //def IPC_THREAD
 #endif
+#endif
 
 
 #if 0
@@ -237,19 +246,28 @@ int processed = 0;
 //int main_waker = -1, wker_waker = -1;
 
 
-#define WKER_MSG(color, msg)  ATOMIC_MSG(color << timestamp() << "wker " << myid << " " << msg << ENDCOLOR)
+//#if WANT_IPC //NUM_WKERs < 0 //ipc
+#include "shmkeys.h"
+MsgQue<NUM_WKERs> mainq(PARAMS {_.name = "mainq"; _.shmkey = WANT_IPC? SHMKEY1: 0; }); ///*_.extra = 0*/; _.want_reinit = false; });
+MsgQue<NUM_WKERs> wkerq(PARAMS {_.name = "wkerq"; _.shmkey = WANT_IPC? SHMKEY2: 0; }); ///*_.extra = 0*/; _.want_reinit = false; });
+//#else
+//MsgQue<NUM_WKERs> mainq(PARAMS {_.name = "mainq"; }), wkerq(PARAMS {_.name = "wkerq"; }), 
+//#endif
+
+
+#define WKER_MSG(color, msg)  ATOMIC_MSG(color << timestamp() << "wker " << myinx << " " << msg << ENDCOLOR)
 #define WKER_DELAY  20
 void wker_main()
 {
     sleep(2); //give parent head start
-    int myid = thrid();
+    int myinx = MsgQue<NUM_WKERs>::thrinx();
     int frnum = 0;
     WKER_MSG(CYAN_MSG, "started, render " << frnum << " for " << WKER_DELAY << " msec");
     for (;;)
     {
         busy_msec(WKER_DELAY); //simulate render()
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "rendered " << frnum << ", now notify main");
-        mainq->send(1 << myid);
+        mainq->send(1 << myinx);
 
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "now wait for next req");
         frnum = wkerq->rcv(&MsgQue::not_wanted, frnum);
@@ -313,6 +331,8 @@ void wker_main()
 #endif 
 
 
+#include "ipc.h" //no-needs to come first (to request Ipc versions of other classes)
+
 //class ThreadSafe: public std::basic_ostream<char>
 //{
 //public:
@@ -325,7 +345,8 @@ void wker_main()
 #define MAIN_PRESENT_DELAY  33 //100
 int main()
 {
-    int myid = thrid();
+//    int myid = thrid();
+    int myinx = MsgQue<NUM_WKERs>::thrinx();
 #if 0 //calibrate
     std::cout << timestamp() << "start\n";
     for (volatile int i = 0; i < 200000; ++i); //NOTE: need volatile to prevent optimization; system calls allow threads to overlap; need real busy wait loop here
@@ -341,7 +362,7 @@ int main()
     return 0;
 #endif
     int frnum = 0;
-    std::vector<THREAD> wkers;
+    std::vector<Thread<WANT_IPC>> wkers;
     MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << mainq.get() << FMT(", &wkerq = %p") << wkerq.get());
 //    pending = 10;
     for (int n = 0; n < ABS(NUM_WKERs); ++n) wkers.emplace_back(wker_main);
@@ -357,7 +378,7 @@ int main()
         if (++frnum >= DURATION) frnum = -1; //break;
         const char* status = (frnum < 0)? "quit": "frreq";
         /*if (WANT_DETAILS)*/ MAIN_MSG(PINK_MSG, "encoded, now notify wkers (" << status << ") and finish render() for " << MAIN_PRESENT_DELAY << " msec");
-        wkerq->clear().send(frnum, true); //wake *all* wkers
+        wkerq.clear().send(frnum, true); //wake *all* wkers
 //        MAIN_MSG(PINK_MSG, "notified wkers (" << status << "), now finish render() for " << MAIN_PRESENT_DELAY << " msec");
         sleep_msec(MAIN_PRESENT_DELAY); //simulate render present()
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "presented");
@@ -365,7 +386,7 @@ int main()
     }
     for (auto& w: wkers) w.join(); //    std::vector<std::thread> wkers;
     MAIN_MSG(CYAN_MSG, "quit");
-    wkerq->clear(); //leave queue in empty state (benign; avoid warning)
+    wkerq.clear(); //leave queue in empty state (benign; avoid warning)
 }
 #if 0 //explicit mutex + cond var
 int main()

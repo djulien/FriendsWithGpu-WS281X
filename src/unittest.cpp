@@ -27,14 +27,17 @@ echo -e $CYAN; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -D__TEST_FILE__="\"${T
 //#define QUOTEME(M)       #M
 //#define INCLUDE_FILE(M)  QUOTEME(M##_impl_win.hpp)
 //#include INCLUDE_FILE(module)
+#include __TEST_FILE__ //include first time without unit test
 #define WANT_UNIT_TEST
-#include __TEST_FILE__
+#include __TEST_FILE__ //include unit test second time
 
-#define MSG(msg)  { std::cout << msg << "\n" << std::flush; }
+#ifndef MSG
+ #define MSG(msg)  { std::cout << msg << std::flush; }
+#endif
 
 int main(int argc, const char* argv[])
 {
-    MSG("testing " __TEST_FILE__ " ...");
+    MSG("testing " __TEST_FILE__ " ...\n");
     unit_test();
     return 0;
 }

@@ -19,6 +19,7 @@
 
 
 #ifdef MSGQUE_DEBUG
+// #include "atomic.h"
  #define DEBUG_MSG  ATOMIC_MSG
  #define WANT_DEBUG(stmt)  stmt
 #else
@@ -27,7 +28,16 @@
 // #include "msgcolors.h" //still need SrcLine, msg colors
 #endif
 
+#ifndef ABS
+ #define ABS(n)  (((n) < 0)? -(n): (n))
+#endif
 
+#ifndef WANT_IPC
+ #define WANT_IPC  false //default no ipc
+#endif
+
+
+>>>>>>>>>>>>>>>>>>
 //conditional inheritance base:
 template <int, typename = void>
 class MsgQue_data
@@ -39,33 +49,37 @@ class MsgQue_data
 //    static int thrid() { return 0; }
     struct CtorParams
     {
-        const char* name = 0;
+        WANT_DEBUG(const char* name = 0);
         SrcLine srcline = 0;
-        const int shmkey = 0;
+//        const int shmkey = 0;
     };
+        WANT_DEBUG(strncpy(m_ptr->name, (name && *name)? name: "(unnamed)", sizeof(m_ptr->name)));
 };
 
 //multi-threaded specialization:
-//need mutex + cond var for serialization
+//need mutex + cond var for serialization, shmem key for ipc
 template <int MAX_THREADs>
 class MsgQue_data<MAX_THREADs, std::enable_if_t<MAX_THREADs != 0>>
 //struct MsgQue_multi
 {
     VOLATILE std::mutex m_mutex;
     std::condition_variable m_condvar;
-    PreallocVector<decltype(thrid()) /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
+    typedef decltype(thrid()) THRID;
+    PreallocVector<THRID /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
+    THRID list_space[ABS(MAX_THREADs)];
     struct CtorParams
     {
         const char* name = 0;
         SrcLine srcline = 0;
         int shmkey = 0; //shmem handling info
-        bool want_reinit = true;
+        bool want_reinit = false; //true;
     };
+    explicit MsgQue_data(THRID* thrids): m_ids(list_space) {}
 public:
 //ipc specialization:
-    static std::enable_if<MAX_THREADs < 0, auto> thrid() { return getpid(); }
+    static std::enable_if<WANT_IPC(MAX_THREADs), auto> thrid() { return getpid(); }
 //in-proc specialization:
-    static std::enable_if<MAX_THREADs > 0, auto> thrid() { return std::this_thread::get_id(); }
+    static std::enable_if<!WANT_IPC(MAX_THREADs), auto> thrid() { return std::this_thread::get_id(); }
 };
 
 
@@ -73,10 +87,23 @@ public:
  #define PARAMS  SRCLINE, [](auto& _)
 #endif
 
+
 template <int MAX_THREADs = 0>
-class MsgQue //: public MsgQue_base<MAX_THREADs> //std::conditional<THREADs != 0, MsgQue_multi, MsgQue_base>::type
+class MsgQue //: public MsgQue_data<MAX_THREADs> //std::conditional<THREADs != 0, MsgQue_multi, MsgQue_base>::type
 {
     MemPtr<MsgQue_data<MAX_THREADs>> m_ptr;
+#if 0 //happens too early (before ctor), so can't pass in ctor params
+public: //mem mgmt
+    static void* operator new(size_t size, int shmkey = 0, SrcLine srcline = 0)
+    {
+        void* ptr = memalloc<MAX_THREADs < 0>(size + ABS(MAX_THREADs) * sizeof(decltype(thrid())), shmkey, srcline);
+        return ptr;
+    }
+    static void operator delete(void* ptr)
+    {
+        /*if (ptr)*/ memfree<MAX_THREADs < 0>(ptr);
+    }
+#endif
 public: //ctors/dtors
 //    explicit MsgQue(const char* name = 0, VOLATILE std::mutex& mutex = /*std::mutex()*/ shared_mutex): m_msg(0), m_mutex(mutex)
 //    explicit MsgQue(const char* name = 0): m_msg(0)
@@ -87,8 +114,9 @@ public: //ctors/dtors
         if (get_params) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
 //        /*if (MSGQUE_DETAILS)*/ { m_name = "MsgQue-"; m_name += (name && *name)? name: "(unnamed)"; }
 //        strncpy(m_name, "MsgQue-", sizeof(m_name));
-        new (&m_ptr) MemPtr(sizeof(*m_ptr), params.shmkey, params.srcline);
+//        new (&m_ptr) MemPtr(sizeof(*m_ptr), params.shmkey, params.srcline);
 //        m_ptr = static_cast<decltype(m_ptr)*>(::shmalloc(sizeof(*m_ptr) /*+ Extra*/, shmkey, params.srcline))); //, SrcLine srcline = 0)
+        m_ptr = memalloc<WANT_IPC(MAX_THREADs)>(size + ABS(MAX_THREADs) * sizeof(decltype(thrid())), params.shmkey, params.srcline);
         if (!m_ptr) return;
         IFIPC(if (::shmexisted(m_ptr) && !want_reinit) return);
         memset(m_ptr, 0, memsize(m_ptr)); //sizeof(*m_ptr) + EXTRA); //re-init (not needed first time)

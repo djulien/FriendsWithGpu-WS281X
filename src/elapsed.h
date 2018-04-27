@@ -79,3 +79,30 @@ std::string timestamp()
 }
 
 #endif //ndef _ELAPSED_H
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Unit tests:
+//
+
+#ifdef WANT_UNIT_TEST
+#undef WANT_UNIT_TEST //prevent recursion
+
+#include <iostream> //std::cout, std::flush
+#include "msgcolors.h"
+#include "elapsed.h"
+
+#ifndef MSG
+ #define MSG(msg)  { std::cout << msg << std::flush; }
+#endif
+
+//int main(int argc, const char* argv[])
+void unit_test()
+{
+    MSG(BLUE_MSG << timestamp() << "start" << ENDCOLOR);
+    sleep(2); //give parent head start
+    MSG(GREEN_MSG << timestamp() << "finish" << ENDCOLOR);
+//    return 0;
+}
+#endif //def WANT_UNIT_TEST
+//eof

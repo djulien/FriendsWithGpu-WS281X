@@ -4,7 +4,7 @@
 #define _SHMKEYS_H
 
 //shmem keys:
-//use consts to avoid the need to pass dynamic keys between procs (avoids rigid child proc protocols)
+//use consts to avoid the need to pass dynamic keys between procs (avoids extra child proc comm protocols)
 #define ATOMIC_MSG_SHMKEY  0x100DECAF
 #define HEAPPAGE_SHMKEY  0x200DECAF
 #define TESTOBJ_SHMKEY  0x300DECAF
