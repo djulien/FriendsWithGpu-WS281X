@@ -57,9 +57,9 @@ public:
 
 //void hello() { MSG("hello"); }
 
-//#define PARAMS(stmts)  [](auto& p){ srcline = SRCLINE; stmts; }
-#ifndef PARAMS
- #define PARAMS  SRCLINE, [](auto& _)
+//#define NAMED(stmts)  [](auto& p){ srcline = SRCLINE; stmts; }
+#ifndef NAMED
+ #define NAMED  SRCLINE, [&](auto& _)
 #endif
 class API
 {
@@ -156,7 +156,7 @@ private: //helpers
 
 
 //#include <typeinfo>
-//#define PARAMS(name)  [](auto& name)
+//#define NAMED(name)  [&](auto& name)
 #include <type_traits> //std::decay<>, std::remove_reference<>
 #include <iostream> //std::cout, std::flush
 int main(int argc, const char* argv[])
@@ -169,7 +169,7 @@ int main(int argc, const char* argv[])
         << "fpm " << sizeof(API::FuncParams) << ", "
         << "\n" << std::flush;
 
-    API A(PARAMS {});
+    API A(NAMED{});
 //    A.func(PARAMS(p) { p.i = 222; p.s = "strstrstr"; });
 
 //#define PARAMS(stmts)  [](auto& p){ std::string& s = p.s; int& i = p.i; bool& b = p.b; stmts; }
@@ -196,7 +196,7 @@ int main(int argc, const char* argv[])
 //#define func(stmts)  [](int& i, std::string& s, bool& b, other*& o, SrcLine& srcline) stmts
 //    A.func([] API_FUNC { i = 222; s = "strstrstr"; });
 //    A.func([] API_FUNC { i = 222; s = "strstrstr"; });
-    A.func(PARAMS { _.i = 222; _.s = "strstrstr"; });
+    A.func(NAMED{ _.i = 222; _.s = "strstrstr"; });
 //    A.func(mylambda);
 #if 0
     A.func([](auto& params)
@@ -216,14 +216,14 @@ int main(int argc, const char* argv[])
     };
 #endif
 //    A.func([] API_FUNC { i = 333; });
-    A.func(PARAMS { _.i = 333; });
+    A.func(NAMED{ _.i = 333; });
 
 //API X(stmt)  =>  API X(ctor(stmt));
 //    API B([] API_CTOR { i = 2; b = true; s = "str"; /*o = new other(4)*/; });
-    API B(PARAMS { _.i = 2; _.b = true; _.s = "str"; /*_.o = new other(4)*/; });
-    B.func(PARAMS {});
+    API B(NAMED{ _.i = 2; _.b = true; _.s = "str"; /*_.o = new other(4)*/; });
+    B.func(NAMED{});
 //    B.func([] API_FUNC { i = 55; });
-    B.func(PARAMS { _.i = 55; });
+    B.func(NAMED{ _.i = 55; });
 
     return 0;
 }

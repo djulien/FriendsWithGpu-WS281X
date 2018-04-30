@@ -1,5 +1,5 @@
 #!/bin/bash -x
-echo -e '\e[1;31m TODO: ipc, msgque, shmalloc, atomic \e[0m'
+echo -e '\e[1;31m TODO: msgque, shmalloc, atomic, fix ipc unit test with atomic() \e[0m'
 echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O$OPT -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++14 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 
@@ -246,13 +246,14 @@ int processed = 0;
 //int main_waker = -1, wker_waker = -1;
 
 
-//#if WANT_IPC //NUM_WKERs < 0 //ipc
-#include "shmkeys.h"
-MsgQue<NUM_WKERs> mainq(PARAMS {_.name = "mainq"; _.shmkey = WANT_IPC? SHMKEY1: 0; }); ///*_.extra = 0*/; _.want_reinit = false; });
-MsgQue<NUM_WKERs> wkerq(PARAMS {_.name = "wkerq"; _.shmkey = WANT_IPC? SHMKEY2: 0; }); ///*_.extra = 0*/; _.want_reinit = false; });
-//#else
-//MsgQue<NUM_WKERs> mainq(PARAMS {_.name = "mainq"; }), wkerq(PARAMS {_.name = "wkerq"; }), 
-//#endif
+#if WANT_IPC //NUM_WKERs < 0 //ipc
+ #include "shmkeys.h"
+ MsgQue<NUM_WKERs> mainq(PARAMS {_.name = "mainq"; _.shmkey = SHMKEY1; }); ///*_.extra = 0*/; _.want_reinit = false; });
+ MsgQue<NUM_WKERs> wkerq(PARAMS {_.name = "wkerq"; _.shmkey = SHMKEY2; }); ///*_.extra = 0*/; _.want_reinit = false; });
+#else
+ MsgQue<NUM_WKERs> mainq(PARAMS {_.name = "mainq"; });
+ MsgQue<NUM_WKERs> wkerq(PARAMS {_.name = "wkerq"; });
+#endif
 
 
 #define WKER_MSG(color, msg)  ATOMIC_MSG(color << timestamp() << "wker " << myinx << " " << msg << ENDCOLOR)
@@ -362,7 +363,7 @@ int main()
     return 0;
 #endif
     int frnum = 0;
-    std::vector<Thread<WANT_IPC>> wkers;
+    std::vector<IpcThread<WANT_IPC>> wkers;
     MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << mainq.get() << FMT(", &wkerq = %p") << wkerq.get());
 //    pending = 10;
     for (int n = 0; n < ABS(NUM_WKERs); ++n) wkers.emplace_back(wker_main);

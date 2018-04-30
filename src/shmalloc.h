@@ -280,7 +280,7 @@ struct memdeleter
 /// Shared/non-shared memory wrapper:
 //
 
-//pointer to block of shared memory:
+//pointer to block of memory:
 //can be heap or shmem
 template <typename TYPE = void, bool IPC = false>
 class MemPtr
@@ -660,8 +660,8 @@ bool ShmPtr_params::WantReInit;
 bool ShmPtr_params::DebugFree;
 ShmPtr_params defaults(SRCLINE); //"default"); //DRY kludge: set params to default values
 
-#ifndef PARAMS
- #define PARAMS  SRCLINE, [](auto& _)
+#ifndef NAMED
+ #define NAMED  SRCLINE, [&](auto& _)
 #endif
 
 //shmem ptr wrapper class:

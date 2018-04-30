@@ -17,15 +17,16 @@
 //for example see http://en.cppreference.com/w/cpp/thread/condition_variable
 #include <type_traits> //std::decay<>, std::remove_reference<>, std::remove_pointer<>
 
-
+#include "shmalloc.h"
+#include "srcline.h"
 #ifdef MSGQUE_DEBUG
-// #include "atomic.h"
+ #include "atomic.h"
+ #include "msgcolors.h"
  #define DEBUG_MSG  ATOMIC_MSG
  #define WANT_DEBUG(stmt)  stmt
 #else
  #define DEBUG_MSG(msg)  {} //noop
  #define WANT_DEBUG(stmt)  {} //noop
-// #include "msgcolors.h" //still need SrcLine, msg colors
 #endif
 
 #ifndef ABS
@@ -37,7 +38,6 @@
 #endif
 
 
->>>>>>>>>>>>>>>>>>
 //conditional inheritance base:
 template <int, typename = void>
 class MsgQue_data
@@ -83,8 +83,8 @@ public:
 };
 
 
-#ifndef PARAMS
- #define PARAMS  SRCLINE, [](auto& _)
+#ifndef NAMED
+ #define NAMED  SRCLINE, [&](auto& _)
 #endif
 
 
@@ -198,8 +198,8 @@ public: //ctors/dtors
 //#define MULTI_PROCESS  -1
 //template <bool IPC>
 
-#ifndef PARAMS
- #define PARAMS  SRCLINE, [](auto& _)
+#ifndef NAMEDS
+ #define NAMED  SRCLINE, [&](auto& _)
 #endif
 
 //define template <bool, typename = void>

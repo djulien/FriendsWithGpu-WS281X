@@ -14,6 +14,14 @@
 
 
 #include <iostream> //std::cout, std::flush
+#include <mutex> //std::mutex, std::unique_lock
+//#include "msgcolors.h" //SrcLine and colors (used with ATOMIC_MSG)
+
+
+#ifndef WANT_IPC
+ #define WANT_IPC  false //default no ipc
+#endif
+
 
 //handle optional macro params:
 //see https://stackoverflow.com/questions/3046889/optional-parameters-with-c-macros?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
@@ -26,8 +34,9 @@
 //#define ATOMIC(stmt)  { std::unique_lock<std::mutex, std::defer_lock> lock(atomic_mut); stmt; }
 //#define ATOMIC(stmt)  { LockOnce lock; stmt; }
 //#define ATOMIC(stmt)  { std::unique_ptr<LockOnce> lock(new LockOnce()); stmt; }
-#define ATOMIC_1ARG(stmt)  { /*InOut here("atomic-1arg")*/; LockOnce lock; stmt; }
-#define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; LockOnce lock(want_lock); stmt; }
+#define ATOMIC_1ARG(stmt)  { /*InOut here("atomic-1arg")*/; LockOnce<WANT_IPC> lock; stmt; }
+//#define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; LockOnce<WANT_IPC> lock(want_lock); stmt; }
+#define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; if (want_lock) ATOMIC_1ARG(stmt); }
 //#define ATOMIC_2ARGS(stmt, want_lock)  { InOut here("atomic-2args"); if (lock_once) LockOnce lock(want_lock); stmt; }
 #define ATOMIC(...)  USE_ARG3(__VA_ARGS__, ATOMIC_2ARGS, ATOMIC_1ARG) (__VA_ARGS__)
 
@@ -97,27 +106,15 @@
 */
 
 
-/*
 #ifdef ATOMIC_DEBUG
 // #include "ostrfmt.h" //FMT()
 // #include "elapsed.h" //timestamp()
 // #define DEBUG_MSG(msg)  { std::cout << msg << "\n" << std::flush; }
  #define DEBUG_MSG  ATOMIC_MSG
+ #include "msgcolors.h"
 #else
  #define DEBUG_MSG(msg)  {} //noop
 #endif
-*/
-
-
-//    void paranoid(int limit = 10) { if (nested() > limit) throw std::runtime_error("inf loop?"); }
-public: //ctor/dtor
-    Thing(int limit = 0) { m_top = !depth(limit)++; MSG("thing ctor", m_top); } //!nested(limit)++); } //if (limit) paranoid(limit); }
-    ~Thing() { MSG("thing dtor", m_top); --depth(); }
-};
-
-
-#include <mutex> //std::mutex, std::unique_lock
-#include "msgcolors.h" //SrcLine and colors (used with ATOMIC_MSG)
 
 
 //atomic wrapper to iostream messages:
@@ -138,27 +135,31 @@ class LockOnce //: public TopOnly
     std::unique_lock<std::mutex> m_lock;
 public: //ctor/dtor
 //    LockOnce(bool ignored = false): m_lock(mutex()) {} //{ mutex().lock(); } //: base_type(mutex()) {}
-    LockOnce(bool want_lock = true): m_lock(mutex(), std::defer_lock) { maybe_lock(want_lock); } // ++recursion(); }
+    explicit LockOnce(bool want_lock = true, int limit = 10): m_lock(mutex(), std::defer_lock) { maybe_lock(want_lock, limit); } // ++recursion(); }
     ~LockOnce() {} //mutex().unlock(); }
 private: //members
-    void maybe_lock(bool want_lock)
+    void maybe_lock(bool want_lock, int limit = 0)
     {
         bool istop = !depth(limit)++;
-        DEBUG_MSG("LockOnce: should i lock? " << (want_lock && istop && !!m_lock.mutex()));
-        if (want_lock && istop && m_lock.mutex()) m_lock.lock(); //only lock mutex if it is ready
+        want_lock &= istop && m_lock.mutex();
+        DEBUG_MSG(BLUE_MSG << "LockOnce: want lock? " << want_lock << ENDCOLOR, istop);
+        if (want_lock) m_lock.lock(); //only lock mutex if ready and caller wants lock
     } 
 //local memory (non-ipc) specialization:
-    static std::enable_if<!IPC, std::mutex&> mutex() //use wrapper to avoid trailing static decl at global scope
+    template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
+    static typename std::enable_if<!IPC_copy, std::mutex&>::type mutex() //use wrapper to avoid trailing static decl at global scope
     {
         static std::mutex m_mutex;
         return m_mutex;
     }
 //shared memory (ipc) specialization:
-    static std::enable_if<IPC, std::mutex&> mutex() //use wrapper to avoid trailing static decl at global scope
+    template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
+    static typename std::enable_if<IPC_copy, std::mutex&>::type mutex() //use wrapper to avoid trailing static decl at global scope
     {
 //CAUTION: recursive; need to satisfy unique_lock<> on deeper levels without mutex ready yet
 //        static std::mutex m_mutex;
 //    static bool ready = false; //enum { None, Started, Ready } state = None;
+#if 0 //TODO
         static bool busy = false; //detect recursion
         DEBUG_MSG("LockOnce: cre mutex: busy? " << busy);
         if (busy) return *(std::mutex*)0; //placeholder mutex; NOTE: will segfault if caller tries to use this
@@ -172,6 +173,11 @@ private: //members
 //    state = Ready;
         busy = false;
         return *m_mutex.get(); //return real shared mutex; //(state == Ready)? *m_mutex.get(): *(std::mutex*)0; //nested_mutex;
+#else
+//        static std::mutex m_mutex;
+//        return m_mutex;
+ #error "TODO"
+#endif
     }
 }; 
 
@@ -276,5 +282,34 @@ std::mutex& get_atomic_mut()
 #endif //def IPC_THREAD
 
 
-//#undef DEBUG_MSG
+#undef DEBUG_MSG
 #endif //ndef _ATOMIC_H
+
+
+///////////////////////////////////////////////////////////////////////////////
+////
+/// Unit tests:
+//
+
+#ifdef WANT_UNIT_TEST
+#undef WANT_UNIT_TEST //prevent recursion
+#include <iostream> //std::cout, std::flush
+//#include "ostrfmt.h" //FMT()
+//#include "msgcolors.h"
+
+const char* nested()
+{
+    ATOMIC_MSG("in nested\n");
+    ATOMIC_MSG("out nested\n");
+    return "nested";
+}
+
+//int main(int argc, const char* argv[])
+void unit_test()
+{
+    ATOMIC_MSG(BLUE_MSG << "start" << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << "test1 " << nested() << " done" << ENDCOLOR);
+//    return 0;
+}
+#endif //def WANT_UNIT_TEST
+//eof
