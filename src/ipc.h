@@ -313,11 +313,16 @@ public: //ctor/dtor
         IpcPipe& pipe = IpcPipe::none();
         SrcLine srcline = 0;
     };
-    explicit IpcThread(SrcLine mySrcLine = 0, void (*get_params)(CtorParams& params) = 0) //void (*get_params)(CtorParams&) = 0)
+//    explicit IpcThread(SrcLine mySrcLine = 0, void (*get_params)(CtorParams& params) = 0) //void (*get_params)(CtorParams&) = 0)
+    explicit IpcThread(SrcLine srcline = 0): IpcThread(srcline, [&](auto& _){}) {} //= 0) //void (*get_params)(struct FuncParams&) = 0)
+    template <typename CALLBACK>
+    explicit IpcThread(SrcLine mySrcLine /*= 0*/, CALLBACK&& get_params /*= 0*/) //void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
     {
         /*static*/ struct CtorParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
         if (mySrcLine) params.srcline = mySrcLine;
-        if (get_params != 0) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
+//        if (get_params != 0) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
+        auto thunk = [](auto arg, struct FuncParams& params){ /*(static_cast<decltype(callback)>(arg))*/ arg(params); }; //NOTE: must be captureless, so wrap it
+        thunk(get_params, params);
         new (this) IpcThread(params.entpt, params.pipe, params.srcline); //convert from named params to positional params
     }
     ~IpcThread()
@@ -523,88 +528,6 @@ void child_1sec() { MSG("child start 1 sec\n"); sleep_msec(1000); MSG("child end
 void sleep_1sec() { sleep_msec(1000); } // simulate expensive operation
 
 
-#if 0 //too complicated
-//see https://stackoverflow.com/questions/28746744/passing-lambda-as-function-pointer
-#include<type_traits>
-#include<utility>
-template<typename Callable>
-union storage
-{
-    storage() {}
-    std::decay_t<Callable> callable;
-};
-template<int, typename Callable, typename Ret, typename... Args>
-auto fnptr_(Callable&& c, Ret (*)(Args...))
-{
-    static bool used = false;
-    static storage<Callable> s;
-    using type = decltype(s.callable);
-    if (used) s.callable.~type();
-    new (&s.callable) type(std::forward<Callable>(c));
-    used = true;
-    return [](Args... args) -> Ret { return Ret(s.callable(args...)); };
-}
-template<typename Fn, int N = 0, typename Callable>
-Fn* fnptr(Callable&& c)
-{
-    return fnptr_<N>(std::forward<Callable>(c), (Fn*)nullptr);
-}
-void foo(void (*fn)()) { fn(); }
-void lambda_test()
-{
-    int i = 42;
-    auto fn = fnptr<void()>([i]{std::cout << i;});
-    foo(fn);  // compiles!
-}
-#endif
-#if 1 //better
-//see http://bannalia.blogspot.com/2016/07/passing-capturing-c-lambda-functions-as.html
-void do_something(void(*callback)(void*), void* callback_arg) { callback(callback_arg); }
-template <typename = void>
-class Something2
-{
-//    static auto thunk = [](void* arg){ (*static_cast<decltype(callback)*>(arg))(); }; //NOTE: thunk must be captureless
-//#define THUNK(cb)  [](void* arg){ (*static_cast<decltype(cb)*>(arg))(); } //NOTE: must be captureless, so wrap it
-public:
-    template <typename THUNK, typename CALLBACK>
-    static void do_something(THUNK&& callback, CALLBACK&& callback_arg) { callback(callback_arg); }
-
-    template <typename CALLBACK>
-    static void do_something2(CALLBACK&& callback_arg)
-    {
-//        decltype(callback_arg) callback = callback_arg;
-        auto callback = *callback_arg;
-        auto thunk = [](void* arg){ (*static_cast<decltype(callback)*>(arg))(); }; //NOTE: must be captureless, so wrap it
-        thunk(callback_arg);
-//        do_something(thunk, callback);
-    }
-};
-template <typename TYPE>
-auto thunk2 = [](TYPE&& arg){ (*arg)(); }; //NOTE: thunk must be captureless
-void lambda_test()
-{
-    MSG(PINK_MSG << "lamba test" << ENDCOLOR);
-    int num_callbacks = 0;
-//pass the lambda function as callback arg and provide captureless thunk as callback function pointer:
-    auto callback = [&](){ MSG("callback called " << ++num_callbacks << " times\n"); };
-
-    auto thunk = [](void* arg){ (*static_cast<decltype(callback)*>(arg))(); }; //NOTE: thunk must be captureless
-    do_something(thunk, &callback);
-    do_something(thunk, &callback);
-    do_something(thunk, &callback);
-//equiv to above using static members:
-    Something2<> s;
-    s.do_something(thunk, &callback);
-    s.do_something(thunk, &callback);
-    s.do_something(thunk, &callback);
-//equiv to above using buried thunk:
-    s.do_something2(&callback);
-    s.do_something2(&callback);
-    s.do_something2(&callback);
-}
-#endif
-
-
 //from http://en.cppreference.com/w/cpp/thread/thread/join
 void test_native_thread()
 {
@@ -640,8 +563,8 @@ void test_single(cb cb = 0)
 void test_multi(cb cb = 0)
 {
     MSG(PINK_MSG << "test multi " << (cb? "non": "in-") << "line" << ENDCOLOR);
-    IpcThread<true> thread(cb);
-//    IpcThread<true> thread(NAMED{ _.entpt = cb; });
+//    IpcThread<true> thread(cb);
+    IpcThread<true> thread(NAMED{ _.entpt = cb; });
     const char* color = thread.isParent()? PINK_MSG: BLUE_MSG;
     if (thread.isChild()) sleep_1sec(); //give parent head start
 
@@ -659,7 +582,7 @@ void thread_proc() { MSG(BLUE_MSG << timestamp() << "thread proc" << ENDCOLOR); 
 //int main(int argc, const char* argv[])
 void unit_test()
 {
-    lambda_test();
+//    lambda_test();
     test_native_thread();
 //    test_single(); //not supported
     test_single(thread_proc);

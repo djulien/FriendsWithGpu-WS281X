@@ -59,8 +59,9 @@ public:
 
 //#define NAMED(stmts)  [](auto& p){ srcline = SRCLINE; stmts; }
 #ifndef NAMED
- #define NAMED  SRCLINE, [&](auto& _)
+ #define NAMED  /*SRCLINE,*/ /*&*/ [&](auto& _)
 #endif
+
 class API
 {
 public: //member vars (caller can set these via ctor params):
@@ -96,13 +97,23 @@ public: //ctors/dtors
 //====
 //#define API_CTOR  (int& i, std::string& s, bool& b, SrcLine& srcline)
 //    explicit API(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
-    explicit API(SrcLine mySrcLine = 0, void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+//    explicit API(SrcLine mySrcLine = 0, void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+    explicit API(/*SrcLine srcline = 0*/): API(/*srcline,*/ NAMED{}) {} //= 0) //void (*get_params)(struct FuncParams&) = 0)
+    template <typename CALLBACK>
+    explicit API(/*SrcLine mySrcLine = 0,*/ CALLBACK&& get_params /*= 0*/) //void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
 //    explicit API(void (*get_params) API_CTOR = 0) //: i(0), b(false), srcline(0), o(nullptr)
 //#define ctor(stmts)  [](int& i, std::string& s, bool& b, SrcLine& srcline) stmts
     {
 //        CtorParams params = {i, b, s, o}; //allow caller to set my member vars
-        if (mySrcLine) srcline = mySrcLine;
-        if (get_params) get_params(*this); //(i, s, b, srcline); //(*this); //set member vars directly
+//        if (mySrcLine) srcline = mySrcLine;
+//        if (get_params != (CALLBACK&&)0) //get named params from caller
+//        {
+//            auto callback = *get_params;
+//            auto thunk = [](void* arg, API& params){ if (arg) (*static_cast<decltype(callback)*>(arg))(params); }; //NOTE: must be captureless, so wrap it
+        auto thunk = [](auto get_params, API& params){ /*(*static_cast<decltype(callback)*>(arg))*/ get_params(params); }; //NOTE: must be captureless, so wrap it
+//            get_params(*this); //(i, s, b, srcline); //(*this); //set member vars directly
+        thunk(get_params, *this); //get named params from caller
+//        }
 //        std::cout << "ctor: "; show(); std::cout << "\n" <<std::flush;
         MSG(BLUE_MSG << "ctor: " << show() << ENDCOLOR_ATLINE(srcline));
     }
@@ -124,14 +135,26 @@ public: //methods
 //    void func(void (*get_params)(struct FuncParams& p) = 0)
 //#define API_FUNC  (int& i, std::string& s, bool& b, SrcLine& srcline)
 //    void func(void (*get_params)(int& i, std::string& s, bool& b, SrcLine& srcline) = 0)
-    void func(SrcLine mySrcLine = 0, void (*get_params)(struct FuncParams&) = 0)
+//    void func(SrcLine mySrcLine = 0, void (*get_params)(struct FuncParams&) = 0)
+    void func(/*SrcLine srcline = 0*/) { func(/*srcline,*/ NAMED{}); } //= 0) //void (*get_params)(struct FuncParams&) = 0)
+    template <typename CALLBACK>
+    void func(/*SrcLine mySrcLine = 0,*/ CALLBACK&& get_params /*= 0*/) //void (*get_params)(struct FuncParams&) = 0)
+    {
+        /*static*/ struct FuncParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
+//        if (mySrcLine) params.srcline = mySrcLine;
+//        if (get_params != (CALLBACK&&)0) //get named params from caller
+//        {
+//        decltype(callback_arg) callback = callback_arg;
+//            auto callback = *get_params;
+//            auto thunk = [](void* arg, struct FuncParams& params){ if (arg) (*static_cast<decltype(callback)*>(arg))(params); }; //NOTE: must be captureless, so wrap it
+        auto thunk = [](auto get_params, struct FuncParams& params){ /*(static_cast<decltype(callback)>(arg))*/ get_params(params); }; //NOTE: must be captureless, so wrap it
+//        do_something(thunk, callback);
+//            get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
+        thunk(get_params, params); //get named params from caller
+//        }
 //    void func(void (*get_params) API_FUNC = 0)
 //#define func(stmts)  func([](int& i, std::string& s, bool& b, SrcLine& srcline) { stmts })
-    {
 //        hello();
-        /*static*/ struct FuncParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
-        if (mySrcLine) params.srcline = mySrcLine;
-        if (get_params) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
 //        func(params);
 //    }
 //    void func(FuncParams& params)
@@ -155,12 +178,96 @@ private: //helpers
 };
 
 
+#if 0 //too complicated
+//see https://stackoverflow.com/questions/28746744/passing-lambda-as-function-pointer
+#include<type_traits>
+#include<utility>
+template<typename Callable>
+union storage
+{
+    storage() {}
+    std::decay_t<Callable> callable;
+};
+template<int, typename Callable, typename Ret, typename... Args>
+auto fnptr_(Callable&& c, Ret (*)(Args...))
+{
+    static bool used = false;
+    static storage<Callable> s;
+    using type = decltype(s.callable);
+    if (used) s.callable.~type();
+    new (&s.callable) type(std::forward<Callable>(c));
+    used = true;
+    return [](Args... args) -> Ret { return Ret(s.callable(args...)); };
+}
+template<typename Fn, int N = 0, typename Callable>
+Fn* fnptr(Callable&& c)
+{
+    return fnptr_<N>(std::forward<Callable>(c), (Fn*)nullptr);
+}
+void foo(void (*fn)()) { fn(); }
+void lambda_test()
+{
+    int i = 42;
+    auto fn = fnptr<void()>([i]{std::cout << i;});
+    foo(fn);  // compiles!
+}
+#endif
+#if 1 //better
+//see http://bannalia.blogspot.com/2016/07/passing-capturing-c-lambda-functions-as.html
+void do_something(void(*callback)(void*), void* callback_arg) { callback(callback_arg); }
+template <typename = void>
+class Something2
+{
+//    static auto thunk = [](void* arg){ (*static_cast<decltype(callback)*>(arg))(); }; //NOTE: thunk must be captureless
+//#define THUNK(cb)  [](void* arg){ (*static_cast<decltype(cb)*>(arg))(); } //NOTE: must be captureless, so wrap it
+public:
+    template <typename THUNK, typename CALLBACK>
+    static void do_something(THUNK&& callback, CALLBACK&& callback_arg) { callback(callback_arg); }
+
+    template <typename CALLBACK>
+    static void do_something2(CALLBACK&& callback_arg)
+    {
+//        decltype(callback_arg) callback = callback_arg;
+        auto callback = *callback_arg;
+        auto thunk = [](void* arg){ (*static_cast<decltype(callback)*>(arg))(); }; //NOTE: must be captureless, so wrap it
+        thunk(callback_arg);
+//        do_something(thunk, callback);
+    }
+};
+//template <typename TYPE>
+//auto thunk2 = [](TYPE&& arg){ (*arg)(); }; //NOTE: thunk must be captureless
+void lambda_test()
+{
+    MSG(PINK_MSG << "lamba test" << ENDCOLOR);
+    int num_callbacks = 0;
+//pass the lambda function as callback arg and provide captureless thunk as callback function pointer:
+    auto callback = [&](){ MSG("callback called " << ++num_callbacks << " times\n"); };
+
+    auto thunk = [](void* arg){ (*static_cast<decltype(callback)*>(arg))(); }; //NOTE: thunk must be captureless
+    do_something(thunk, &callback);
+    do_something(thunk, &callback);
+    do_something(thunk, &callback);
+//equiv to above using static members:
+    Something2<> s;
+    s.do_something(thunk, &callback);
+    s.do_something(thunk, &callback);
+    s.do_something(thunk, &callback);
+//equiv to above using buried thunk:
+    s.do_something2(&callback);
+    s.do_something2(&callback);
+    s.do_something2(&callback);
+}
+#endif
+
+
 //#include <typeinfo>
 //#define NAMED(name)  [&](auto& name)
 #include <type_traits> //std::decay<>, std::remove_reference<>
 #include <iostream> //std::cout, std::flush
 int main(int argc, const char* argv[])
 {
+    lambda_test();
+
     std::cout << "api " << sizeof(API) << ", "
         << "str " << sizeof(std::string) << ", "
         << "int " << sizeof(int) << ", "
@@ -169,7 +276,7 @@ int main(int argc, const char* argv[])
         << "fpm " << sizeof(API::FuncParams) << ", "
         << "\n" << std::flush;
 
-    API A(NAMED{});
+    API A(NAMED{ _.srcline = SRCLINE; });
 //    A.func(PARAMS(p) { p.i = 222; p.s = "strstrstr"; });
 
 //#define PARAMS(stmts)  [](auto& p){ std::string& s = p.s; int& i = p.i; bool& b = p.b; stmts; }
@@ -196,7 +303,8 @@ int main(int argc, const char* argv[])
 //#define func(stmts)  [](int& i, std::string& s, bool& b, other*& o, SrcLine& srcline) stmts
 //    A.func([] API_FUNC { i = 222; s = "strstrstr"; });
 //    A.func([] API_FUNC { i = 222; s = "strstrstr"; });
-    A.func(NAMED{ _.i = 222; _.s = "strstrstr"; });
+    std::string my_str3 = "strstrstr";
+    A.func(NAMED{ _.i = 222; _.s = my_str3; _.srcline = SRCLINE; });
 //    A.func(mylambda);
 #if 0
     A.func([](auto& params)
@@ -216,14 +324,17 @@ int main(int argc, const char* argv[])
     };
 #endif
 //    A.func([] API_FUNC { i = 333; });
-    A.func(NAMED{ _.i = 333; });
+    A.func(NAMED{ _.i = 333; _.srcline = SRCLINE; });
 
 //API X(stmt)  =>  API X(ctor(stmt));
 //    API B([] API_CTOR { i = 2; b = true; s = "str"; /*o = new other(4)*/; });
-    API B(NAMED{ _.i = 2; _.b = true; _.s = "str"; /*_.o = new other(4)*/; });
-    B.func(NAMED{});
+    std::string my_str = "str";
+    API B(NAMED{ _.i = 2; _.b = true; _.s = my_str; /*_.o = new other(4)*/; _.srcline = SRCLINE; });
+    B.func(NAMED{ _.srcline = SRCLINE; });
 //    B.func([] API_FUNC { i = 55; });
-    B.func(NAMED{ _.i = 55; });
+    B.func(NAMED{ _.i = 55; _.srcline = SRCLINE; });
+//    B.func(SRCLINE, &(auto x = [&](auto& _){ _.i = 55; }));
+//#define NAMED  SRCLINE, auto cb = [&](auto& _), &cb
 
     return 0;
 }
