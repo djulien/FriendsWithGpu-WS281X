@@ -32,11 +32,11 @@ echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 //#include <unistd.h> //getpid
 
 #define WANT_IPC  (NUM_WKERs < 0)
-//#if WANT_IPC
-// #define IF_IPC(stmt)  { stmt }
-//#else
-// #define IF_IPC(stmt)  {} //noop
-//#endif
+#if WANT_IPC
+ #define IF_IPC(stmt)  { stmt }
+#else
+ #define IF_IPC(stmt)  {} //noop
+#endif
 #include "msgcolors.h" //SrcLine, msg colors
 #include "ostrfmt.h" //FMT()
 #include "vectorex.h"
@@ -51,6 +51,7 @@ echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 //#if WANT_IPC //NUM_WKERs < 0 //ipc
 // #include "ipc.h" //no-needs to come first (to request Ipc versions of other classes)
 //#endif
+#include "ipc.h"
 
 
 #include <chrono>
@@ -246,14 +247,14 @@ int processed = 0;
 //int main_waker = -1, wker_waker = -1;
 
 
-#if WANT_IPC //NUM_WKERs < 0 //ipc
+//#if WANT_IPC //NUM_WKERs < 0 //ipc
  #include "shmkeys.h"
- MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; _.shmkey = SHMKEY1; SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
- MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; _.shmkey = SHMKEY2; SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
-#else
- MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; SRCLINE; });
- MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; SRCLINE; });
-#endif
+ MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+ MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; IF_IPC(_.shmkey = SHMKEY2); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+//#else
+// MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; SRCLINE; });
+// MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; SRCLINE; });
+//#endif
 
 
 #define WKER_MSG(color, msg)  ATOMIC_MSG(color << timestamp() << "wker " << myinx << " " << msg << ENDCOLOR)
@@ -332,7 +333,7 @@ void wker_main()
 #endif 
 
 
-#include "ipc.h" //no-needs to come first (to request Ipc versions of other classes)
+//#include "ipc.h" //no-needs to come first (to request Ipc versions of other classes)
 
 //class ThreadSafe: public std::basic_ostream<char>
 //{

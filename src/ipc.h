@@ -314,12 +314,12 @@ public: //ctor/dtor
         SrcLine srcline = 0;
     };
 //    explicit IpcThread(SrcLine mySrcLine = 0, void (*get_params)(CtorParams& params) = 0) //void (*get_params)(CtorParams&) = 0)
-    explicit IpcThread(SrcLine srcline = 0): IpcThread(srcline, [&](auto& _){}) {} //= 0) //void (*get_params)(struct FuncParams&) = 0)
+    explicit IpcThread(/*SrcLine srcline = 0*/): IpcThread(/*srcline,*/ NAMED{ SRCLINE; }) {} //= 0) //void (*get_params)(struct FuncParams&) = 0)
     template <typename CALLBACK>
-    explicit IpcThread(SrcLine mySrcLine /*= 0*/, CALLBACK&& get_params /*= 0*/) //void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+    explicit IpcThread(/*SrcLine mySrcLine = 0,*/ CALLBACK&& get_params /*= 0*/) //void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
     {
         /*static*/ struct CtorParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
-        if (mySrcLine) params.srcline = mySrcLine;
+//        if (mySrcLine) params.srcline = mySrcLine;
 //        if (get_params != 0) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
         auto thunk = [](auto arg, struct FuncParams& params){ /*(static_cast<decltype(callback)>(arg))*/ arg(params); }; //NOTE: must be captureless, so wrap it
         thunk(get_params, params);

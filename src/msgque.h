@@ -23,10 +23,10 @@
  #include "atomic.h"
  #include "msgcolors.h"
  #define DEBUG_MSG  ATOMIC_MSG
- #define WANT_DEBUG(stmt)  stmt
+ #define IF_DEBUG(stmt)  stmt
 #else
  #define DEBUG_MSG(msg)  {} //noop
- #define WANT_DEBUG(stmt)  {} //noop
+ #define IF_DEBUG(stmt)  {} //noop
 #endif
 
 #ifndef ABS
@@ -42,24 +42,36 @@
 template <int, typename = void>
 class MsgQue_data
 {
-    /*volatile*/ int m_msg;
-    WANT_DEBUG(char m_name[20]); //store name directly in object; can't use char* because mapped address could vary between procs
+    IF_DEBUG(char m_name[20]); //store name directly in object; can't use char* because mapped address could vary between procs
     SrcLine m_srcline;
 //public:
 //    static int thrid() { return 0; }
     struct CtorParams
     {
-        WANT_DEBUG(const char* name = 0);
+        IF_DEBUG(const char* name = 0);
         SrcLine srcline = 0;
 //        const int shmkey = 0;
     };
-        WANT_DEBUG(strncpy(m_ptr->name, (name && *name)? name: "(unnamed)", sizeof(m_ptr->name)));
+public: //ctor/dtor
+    explicit MsgQue_data(/*SrcLine srcline = 0*/): MsgQue_data(/*srcline,*/ NAMED{ SRCLINE; }) {} //= 0) //void (*get_params)(struct FuncParams&) = 0)
+    template <typename CALLBACK>
+    explicit MsgQue_data(/*SrcLine mySrcLine = 0,*/ CALLBACK&& get_params /*= 0*/) //void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
+    {
+        /*static*/ struct CtorParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
+//        if (mySrcLine) params.srcline = mySrcLine;
+//        if (get_params != 0) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
+        auto thunk = [](auto get_params, struct FuncParams& params){ /*(static_cast<decltype(callback)>(arg))*/ get_params(params); }; //NOTE: must be captureless, so wrap it
+        thunk(get_params, params);
+        IF_DEBUG(strncpy(m_name, (params.name && *params.name)? params.name: "(unnamed)", sizeof(m_name)));
+        srcline = params.srcline;
+//        new (this) IpcThread(params.entpt, params.pipe, params.srcline); //convert from named params to positional params
+    }
 };
 
 //multi-threaded specialization:
 //need mutex + cond var for serialization, shmem key for ipc
 template <int MAX_THREADs>
-class MsgQue_data<MAX_THREADs, std::enable_if_t<MAX_THREADs != 0>>
+class MsgQue_data<MAX_THREADs, std::enable_if_t<MAX_THREADs != 0>>: public MsgQue_data
 //struct MsgQue_multi
 {
     VOLATILE std::mutex m_mutex;
@@ -67,7 +79,7 @@ class MsgQue_data<MAX_THREADs, std::enable_if_t<MAX_THREADs != 0>>
     typedef decltype(thrid()) THRID;
     PreallocVector<THRID /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
     THRID list_space[ABS(MAX_THREADs)];
-    struct CtorParams
+    struct CtorParams //: public CtorParams
     {
         const char* name = 0;
         SrcLine srcline = 0;
@@ -91,6 +103,8 @@ public:
 template <int MAX_THREADs = 0>
 class MsgQue //: public MsgQue_data<MAX_THREADs> //std::conditional<THREADs != 0, MsgQue_multi, MsgQue_base>::type
 {
+    /*volatile*/ int m_msg;
+//    typedef typename std::conditional<IPC, pid_t, std::thread*>::type PIDTYPE;
     MemPtr<MsgQue_data<MAX_THREADs>> m_ptr;
 #if 0 //happens too early (before ctor), so can't pass in ctor params
 public: //mem mgmt
@@ -715,6 +729,6 @@ std::mutex ShmMsgQue::m_mutex;
 
 
 //#undef malloc
-#undef WANT_DEBUG
+#undef IF_DEBUG
 #undef DEBUG_MSG
 #endif //ndef _MSGQUE_H
