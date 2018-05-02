@@ -33,8 +33,9 @@ private: //data
 
 //typedef struct { int line; } SRCLINE; //allow compiler to distinguish param types, prevent implicit conversion
 //typedef int SRCLINE;
-#define SRCLINE  __FILE__ ":" TOSTR(__LINE__)
+#define SRCLINE  _.srcline = __FILE__ ":" TOSTR(__LINE__)
 typedef const char* SrcLine; //allow compiler to distinguish param types, catch implicit conv
+struct { SrcLine srcline; } _; //kludge: global destination so SRCLINE can be used outside NAMED
 
 
 //struct UniqParams { const char* folder = 0; const char* basename = 0; const char* ext = 0; SrcLine srcline = SRCLINE; };

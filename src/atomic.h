@@ -113,7 +113,10 @@
  #define DEBUG_MSG  ATOMIC_MSG
  #include "msgcolors.h"
 #else
- #define DEBUG_MSG(msg)  {} //noop
+// #define DEBUG_MSG(msg)  {} //noop
+ #define DEBUG_MSG_1ARG(msg)  {} //noop
+ #define DEBUG_MSG_2ARGS(msg, want_lock)  {} //noop
+ #define DEBUG_MSG(...)  USE_ARG3(__VA_ARGS__, DEBUG_MSG_2ARGS, DEBUG_MSG_1ARG) (__VA_ARGS__)
 #endif
 
 

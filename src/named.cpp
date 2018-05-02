@@ -246,16 +246,16 @@ void lambda_test()
     auto thunk = [](void* arg){ (*static_cast<decltype(callback)*>(arg))(); }; //NOTE: thunk must be captureless
     do_something(thunk, &callback);
     do_something(thunk, &callback);
-    do_something(thunk, &callback);
+//    do_something(thunk, &callback);
 //equiv to above using static members:
     Something2<> s;
     s.do_something(thunk, &callback);
     s.do_something(thunk, &callback);
-    s.do_something(thunk, &callback);
+//    s.do_something(thunk, &callback);
 //equiv to above using buried thunk:
     s.do_something2(&callback);
     s.do_something2(&callback);
-    s.do_something2(&callback);
+//    s.do_something2(&callback);
 }
 #endif
 
@@ -276,7 +276,7 @@ int main(int argc, const char* argv[])
         << "fpm " << sizeof(API::FuncParams) << ", "
         << "\n" << std::flush;
 
-    API A(NAMED{ _.srcline = SRCLINE; });
+    API A(NAMED{ SRCLINE; });
 //    A.func(PARAMS(p) { p.i = 222; p.s = "strstrstr"; });
 
 //#define PARAMS(stmts)  [](auto& p){ std::string& s = p.s; int& i = p.i; bool& b = p.b; stmts; }
@@ -304,7 +304,7 @@ int main(int argc, const char* argv[])
 //    A.func([] API_FUNC { i = 222; s = "strstrstr"; });
 //    A.func([] API_FUNC { i = 222; s = "strstrstr"; });
     std::string my_str3 = "strstrstr";
-    A.func(NAMED{ _.i = 222; _.s = my_str3; _.srcline = SRCLINE; });
+    A.func(NAMED{ _.i = 222; _.s = my_str3; SRCLINE; });
 //    A.func(mylambda);
 #if 0
     A.func([](auto& params)
@@ -324,15 +324,15 @@ int main(int argc, const char* argv[])
     };
 #endif
 //    A.func([] API_FUNC { i = 333; });
-    A.func(NAMED{ _.i = 333; _.srcline = SRCLINE; });
+    A.func(NAMED{ _.i = 333; /*SRCLINE*/; });
 
 //API X(stmt)  =>  API X(ctor(stmt));
 //    API B([] API_CTOR { i = 2; b = true; s = "str"; /*o = new other(4)*/; });
     std::string my_str = "str";
-    API B(NAMED{ _.i = 2; _.b = true; _.s = my_str; /*_.o = new other(4)*/; _.srcline = SRCLINE; });
-    B.func(NAMED{ _.srcline = SRCLINE; });
+    API B(NAMED{ _.i = 2; _.b = true; _.s = my_str; /*_.o = new other(4)*/; SRCLINE; });
+    B.func(NAMED{ SRCLINE; });
 //    B.func([] API_FUNC { i = 55; });
-    B.func(NAMED{ _.i = 55; _.srcline = SRCLINE; });
+    B.func(NAMED{ _.i = 55; SRCLINE; });
 //    B.func(SRCLINE, &(auto x = [&](auto& _){ _.i = 55; }));
 //#define NAMED  SRCLINE, auto cb = [&](auto& _), &cb
 

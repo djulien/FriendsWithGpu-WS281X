@@ -84,7 +84,7 @@ public:
 
 
 #ifndef NAMED
- #define NAMED  SRCLINE, [&](auto& _)
+ #define NAMED  /*SRCLINE,*/ [&](auto& _)
 #endif
 
 
@@ -198,8 +198,8 @@ public: //ctors/dtors
 //#define MULTI_PROCESS  -1
 //template <bool IPC>
 
-#ifndef NAMEDS
- #define NAMED  SRCLINE, [&](auto& _)
+#ifndef NAMED
+ #define NAMED  /*SRCLINE,*/ [&](auto& _)
 #endif
 
 //define template <bool, typename = void>

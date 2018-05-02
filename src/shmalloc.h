@@ -661,7 +661,7 @@ bool ShmPtr_params::DebugFree;
 ShmPtr_params defaults(SRCLINE); //"default"); //DRY kludge: set params to default values
 
 #ifndef NAMED
- #define NAMED  SRCLINE, [&](auto& _)
+ #define NAMED  /*SRCLINE,*/ [&](auto& _)
 #endif
 
 //shmem ptr wrapper class:

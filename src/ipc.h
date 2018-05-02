@@ -276,7 +276,7 @@ public:
 
 
 #ifndef NAMED
- #define NAMED  SRCLINE, [&](auto& _)
+ #define NAMED  /*SRCLINE,*/ [&](auto& _)
 #endif
 
 template <bool IPC = true> //default true, otherwise caller probably wouldn't #include this file
@@ -564,7 +564,7 @@ void test_multi(cb cb = 0)
 {
     MSG(PINK_MSG << "test multi " << (cb? "non": "in-") << "line" << ENDCOLOR);
 //    IpcThread<true> thread(cb);
-    IpcThread<true> thread(NAMED{ _.entpt = cb; });
+    IpcThread<true> thread(NAMED{ _.entpt = cb; SRCLINE; });
     const char* color = thread.isParent()? PINK_MSG: BLUE_MSG;
     if (thread.isChild()) sleep_1sec(); //give parent head start
 

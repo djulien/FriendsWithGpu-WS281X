@@ -248,11 +248,11 @@ int processed = 0;
 
 #if WANT_IPC //NUM_WKERs < 0 //ipc
  #include "shmkeys.h"
- MsgQue<NUM_WKERs> mainq(PARAMS {_.name = "mainq"; _.shmkey = SHMKEY1; }); ///*_.extra = 0*/; _.want_reinit = false; });
- MsgQue<NUM_WKERs> wkerq(PARAMS {_.name = "wkerq"; _.shmkey = SHMKEY2; }); ///*_.extra = 0*/; _.want_reinit = false; });
+ MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; _.shmkey = SHMKEY1; SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+ MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; _.shmkey = SHMKEY2; SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
 #else
- MsgQue<NUM_WKERs> mainq(PARAMS {_.name = "mainq"; });
- MsgQue<NUM_WKERs> wkerq(PARAMS {_.name = "wkerq"; });
+ MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; SRCLINE; });
+ MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; SRCLINE; });
 #endif
 
 
