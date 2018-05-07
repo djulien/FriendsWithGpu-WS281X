@@ -15,7 +15,8 @@
 #include <unistd.h> //fork, getpid()
 #include <thread> //std::this_thread
 //for example see http://en.cppreference.com/w/cpp/thread/condition_variable
-#include <type_traits> //std::decay<>, std::remove_reference<>, std::remove_pointer<>
+#include <type_traits> //std::conditional<>, std::decay<>, std::remove_reference<>, std::remove_pointer<>
+#include <tr2/type_traits> //std::tr2::direct_bases<>, std::tr2::bases<>
 
 #include "shmalloc.h"
 #include "srcline.h"
@@ -23,14 +24,19 @@
  #include "atomic.h"
  #include "msgcolors.h"
  #define DEBUG_MSG  ATOMIC_MSG
- #define IF_DEBUG(stmt)  stmt
+ #define IF_DEBUG(stmt)  { stmt; }
 #else
  #define DEBUG_MSG(msg)  {} //noop
  #define IF_DEBUG(stmt)  {} //noop
 #endif
 
+
 #ifndef ABS
  #define ABS(n)  (((n) < 0)? -(n): (n))
+#endif
+
+#ifndef NAMED
+ #define NAMED  /*SRCLINE,*/ [&](auto& _)
 #endif
 
 #ifndef WANT_IPC
@@ -38,21 +44,186 @@
 #endif
 
 
-//conditional inheritance base:
-template <int, typename = void>
-class MsgQue_data
+//copy null-terminated string or as space allows:
+ char* strzcpy(char* dest, const char* src, size_t maxlen)
 {
+    if (maxlen)
+    {
+        size_t cpylen = src? std::min(strlen(src), maxlen - 1): 0;
+        if (cpylen) memcpy(dest, src, cpylen);
+        dest[cpylen] = '\0';
+    }
+    return dest;
+}
+
+
+//template<class BASE, class DERIVED>
+//BASE base_of(DERIVED BASE::*);
+
+
+//conditional inheritance plumbing:
+//from https://stackoverflow.com/questions/8709340/can-the-type-of-a-base-class-be-obtained-from-a-template-type-automatically
+//NOTE: compiler supposedly optimizes out empty base classes
+template <typename> //kludge: allow multiple definitions
+struct empty_base
+{
+public: //ctor/dtor
+    struct CtorParams {};
+//    explicit empty_base() {}
+//    empty_base() = default;
+//    template <class... Args>
+//    constexpr empty_base(Args&&...) {}
+//    template <typename ... ARGS> //perfect forward
+//    explicit empty_base(ARGS&& ... args) {} //: base(std::forward<ARGS>(args) ...)
+    explicit empty_base(const CtorParams& params) {}
+public: //operators
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const empty_base& mej) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+//        ostrm << ", empty";
+        return ostrm;
+    }
+};
+template <bool expr, typename TYPE>
+using inherit_if = std::conditional_t<expr, TYPE, empty_base<TYPE>>;
+
+
+//template <int MAX_THREADs = 0>
+class QueData: public empty_base<QueData> //: public MsgQue_data<MAX_THREADs> //std::conditional<THREADs != 0, MsgQue_multi, MsgQue_base>::type
+{
+protected: //members
     IF_DEBUG(char m_name[20]); //store name directly in object; can't use char* because mapped address could vary between procs
     SrcLine m_srcline;
-//public:
-//    static int thrid() { return 0; }
-    struct CtorParams
+public: //ctor/dtor
+    struct CtorParams //: public CtorParams
     {
         IF_DEBUG(const char* name = 0);
         SrcLine srcline = 0;
-//        const int shmkey = 0;
     };
+    explicit MsgQue(const CtorParams& params): m_srcline(params.srcline) { IF_DEBUG(strzcpy(m_name, params.name, sizeof(m_name))); }
+public: //operators
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const MultiProc& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << "MsgQue{" << eatch(2) << IF_DEBUG(", name '" << me.m_name << "'" <<) ", srcline " << me.m_srcline << "}";
+        return ostrm;
+    }
+};
+
+
+//multi-threading:
+//need mutex + cond var for serialization, shmem key for ipc
+template <int MAX_THREADs = 0>
+class MultiThreaded: public empty_base<MultiThreaded>
+{
+    typedef decltype(thrid()) THRID;
+protected: //members
+    VOLATILE std::mutex m_mutex;
+    std::condition_variable m_condvar;
+    PreallocVector<THRID /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
+    THRID list_space[ABS(MAX_THREADs)];
 public: //ctor/dtor
+//    struct CtorParams { int ivar = -1; SrcLine srcline = "here:0"; };
+    explicit MultiThreaded(const CtorParams& params): m_ids(list_space, ABS(MAX_THREADs)) {}
+public: //operators
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const MultiThreaded& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << ", ids(" << me.m_ids.count << "): " << me.m_ids.join(","); //<< static_cast<base_t>(me) << "}";
+        return ostrm;
+    }
+public: //methods
+//convert system-defined id into sequentially assigned index:
+    int thinx(THRID id = thrid())
+    {
+//        std::lock_guard<std::mutex> lock(m);
+        std::unique_lock<decltype(m_mutex)> scoped_lock(m_mutex);
+//NOTE: use op->() for shm safety with ipc
+        int ofs = m_ids.find(id);
+        if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR_NOLINE);
+        if (ofs == -1) { ofs = m_ids.size(); m_ids.push_back(id); } //ofs = ids.push_and_find(id);
+//    std::stringstream ss;
+//    ss << thrid;
+//    ss << THRID;
+//    ss << ofs;
+//    return ss.str();
+        ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << " => thr inx " << ofs << ENDCOLOR);
+        return ofs;
+    }
+public: //helpers
+//ipc specialization:
+    static std::enable_if<WANT_IPC, auto> thrid() { return getpid(); }
+//in-proc specialization:
+    static std::enable_if<!WANT_IPC, auto> thrid() { return std::this_thread::get_id(); }
+};
+
+
+//ipc specialization:
+//template <int MAX_THREADs = 0>
+class MultiProc: public empty_base<MultiProc>
+{
+protected: //members
+    int m_shmkey; //shmem handling info
+    bool m_want_reinit;
+public: //ctor/dtor
+    struct CtorParams //: public CtorParams
+    {
+        int shmkey = 0; //shmem handling info
+        bool want_reinit = false; //true;
+    };
+    explicit MultiProc(const CtorParams& params): m_shmkey(params.shmkey), m_want_reinit(params.want_reinit) {}
+public: //operators
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const MultiProc& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << ", shmkey " << me.m_shmkey << ", want_reinit " << me.m_want_reinit;
+        return ostrm;
+    }
+};
+
+
+MsgQue ~= shm_ptr<>, inner data ptr, op new + del
+
+template <int MAX_THREADs = 0>
+class MsgQue
+    public QueData, //unconditional base
+    public inherit_if<MAX_THREADs != 0, MultiThreaded<MAX_THREADs>>,
+    public inherit_if<MAX_THREADs < 0, MultiProc>
+{
+    using B0 = Base0;
+    using B1 = inherit_if<MAX_THREADs != 0, Base1>;
+    using B2 = inherit_if<MAX_THREADs < 0, Base2>;
+public: //ctor/dtor
+//    MyClass() = delete; //don't generate default ctor
+    struct CtorParams: public B0::CtorParams, public B1::CtorParams, public B2::CtorParams {};
+//    MyClass() = default;
+    explicit MyClass(): MyClass(NAMED{ /*SRCLINE*/; }) { MSG("ctor1"); }
+    template <typename CALLBACK> //accept any arg type (only want caller's lambda function)
+    explicit MyClass(CALLBACK&& named_params): MyClass(unpack(named_params), Unpacked{}) { MSG("ctor2"); }
+public: //operators
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const MyClass& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << "MyClass{" << eatch(2) << static_cast<B0>(me) << static_cast<B1>(me) << static_cast<B2>(me) << "}";
+        return ostrm;
+    }
+private: //helpers
+    struct Unpacked {}; //ctor disambiguation tag
+    explicit MyClass(const CtorParams& params, Unpacked): B0(static_cast<typename B0::CtorParams>(params)), B1(static_cast<typename B1::CtorParams>(params)), B2(static_cast<typename B2::CtorParams>(params))
+//    explicit MyClass(const CtorParams& params, Unpacked): B0((B0::CtorParams)params), B1((B1::CtorParams)params), B2((B2::CtorParams)params)
+    {
+        MSG("ctor unpacked: " << *this);
+    }
+    template <typename CALLBACK>
+    static struct CtorParams& unpack(CALLBACK&& named_params)
+    {
+        static struct CtorParams params; //need "static" to preserve address after return
+//        struct CtorParams params; //reinit each time; comment out for sticky defaults
+        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
+//        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
+        auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+        thunk(named_params, params);
+//        ret_params = params;
+//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
+        return params;
+    }
+};
+
     explicit MsgQue_data(/*SrcLine srcline = 0*/): MsgQue_data(/*srcline,*/ NAMED{ SRCLINE; }) {} //= 0) //void (*get_params)(struct FuncParams&) = 0)
     template <typename CALLBACK>
     explicit MsgQue_data(/*SrcLine mySrcLine = 0,*/ CALLBACK&& get_params /*= 0*/) //void (*get_params)(API&) = 0) //int& i, std::string& s, bool& b, SrcLine& srcline) = 0) //: i(0), b(false), srcline(0), o(nullptr)
@@ -68,41 +239,7 @@ public: //ctor/dtor
     }
 };
 
-//multi-threaded specialization:
-//need mutex + cond var for serialization, shmem key for ipc
-template <int MAX_THREADs>
-class MsgQue_data<MAX_THREADs, std::enable_if_t<MAX_THREADs != 0>>: public MsgQue_data
-//struct MsgQue_multi
-{
-    VOLATILE std::mutex m_mutex;
-    std::condition_variable m_condvar;
-    typedef decltype(thrid()) THRID;
-    PreallocVector<THRID /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
-    THRID list_space[ABS(MAX_THREADs)];
-    struct CtorParams //: public CtorParams
-    {
-        const char* name = 0;
-        SrcLine srcline = 0;
-        int shmkey = 0; //shmem handling info
-        bool want_reinit = false; //true;
-    };
-    explicit MsgQue_data(THRID* thrids): m_ids(list_space) {}
-public:
-//ipc specialization:
-    static std::enable_if<WANT_IPC(MAX_THREADs), auto> thrid() { return getpid(); }
-//in-proc specialization:
-    static std::enable_if<!WANT_IPC(MAX_THREADs), auto> thrid() { return std::this_thread::get_id(); }
-};
 
-
-#ifndef NAMED
- #define NAMED  /*SRCLINE,*/ [&](auto& _)
-#endif
-
-
-template <int MAX_THREADs = 0>
-class MsgQue //: public MsgQue_data<MAX_THREADs> //std::conditional<THREADs != 0, MsgQue_multi, MsgQue_base>::type
-{
     /*volatile*/ int m_msg;
 //    typedef typename std::conditional<IPC, pid_t, std::thread*>::type PIDTYPE;
     MemPtr<MsgQue_data<MAX_THREADs>> m_ptr;
