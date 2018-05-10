@@ -6,6 +6,8 @@
 //no-base class to share mutex across all template instances:
 //template<int MAXDEPTH>
 
+#define MSGQUE_DEBUG
+
 
 #ifndef _MSGQUE_H
 #define _MSGQUE_H
@@ -22,6 +24,7 @@
 #include "shmalloc.h"
 #include "srcline.h"
 #include "vectorex.h"
+#include "elapsed.h" //timestamp()
 #ifdef MSGQUE_DEBUG
  #include "atomic.h"
  #include "msgcolors.h"
@@ -236,13 +239,14 @@ class QueData<MAX_THREADs, true, false>: public QueData<MAX_THREADs, false, fals
 {
     typedef QueData<MAX_THREADs, false, false> base_t; //SELECTOR(1)>
 //no worky    typedef decltype(thrid()) THRID;
-    typedef std::thread::id THRID;
+//    typedef std::thread::id THRID;
 public: //helpers
 //    void yield() { m_condvar.wait(scoped_lock); //ignore spurious wakeups
 //ipc specialization:
 //    static std::enable_if<WANT_IPC, auto> thrid() { return getpid(); }
 //in-proc specialization:
-    static inline std::enable_if<!WANT_IPC, THRID> thrid() { return std::this_thread::get_id(); }
+    static inline std::enable_if<!WANT_IPC, std::thread::id /*auto*/> thrid() { return std::this_thread::get_id(); }
+    typedef decltype(thrid()) THRID;
 //private:
 protected: //members
     VOLATILE MutexWithFlag /*std::mutex*/ m_mutex;
@@ -250,8 +254,8 @@ protected: //members
     PreallocVector<THRID /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
     THRID list_space[ABS(MAX_THREADs)];
 public: //ctor/dtor
-//    struct CtorParams { int ivar = -1; SrcLine srcline = "here:0"; };
-    explicit QueData(const CtorParams& params): base_t((base_t::CtorParams)params), m_ids(list_space, ABS(MAX_THREADs)) {}
+    struct CtorParams: public base_t::CtorParams {}; //{ int ivar = -1; SrcLine srcline = "here:0"; };
+    explicit QueData(const CtorParams& params): base_t(/*(base_t::CtorParams)*/params), m_ids(list_space, ABS(MAX_THREADs)) {}
 public: //operators
     /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const QueData& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
     { 
@@ -279,9 +283,9 @@ private:
 #endif
 public: //methods
     template <typename CALLBACK>
-    int rcv(bool (MsgQue::*filter)(int val), int operand = 0, CALLBACK&& cb = 0, bool remove = false, SrcLine srcline = 0)
+    int rcv(bool (QueData::*filter)(int val), int operand = 0, CALLBACK&& cb = 0, bool remove = false, SrcLine srcline = 0)
     {
-        auto waitfor = [cb]() { m_condvar.wait(scoped_lock); if (cb) cb(); } //ignore spurious wakeups
+        auto waitfor = cb; //[cb, m_condvar&]() { m_condvar.wait(scoped_lock); if (cb) cb(); }; //ignore spurious wakeups
         return base_t::waitfor(filter, operand, waitfor, remove, srcline);
     }
 //convert system-defined id into sequentially assigned index:
@@ -318,7 +322,7 @@ public: //ctor/dtor
         int shmkey = 0; //shmem handling info
         bool want_reinit = false; //true;
     };
-    explicit QueData(const CtorParams& params): base_t((base_t::CtorParams)params), m_shmkey(params.shmkey), m_want_reinit(params.want_reinit) {}
+    explicit QueData(const CtorParams& params): base_t(/*(base_t::CtorParams)*/params), m_shmkey(params.shmkey), m_want_reinit(params.want_reinit) {}
 public:
     /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const QueData& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
     { 
@@ -475,7 +479,7 @@ public: //ctor/dtor
     template <typename CALLBACK> //accept any arg type (only want caller's lambda function)
     explicit MsgQue(CALLBACK&& named_params): MsgQue(unpack(named_params), Unpacked{}) { MSG("ctor2"); }
 public: //operators
-    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const QueData& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const MsgQue& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
     { 
 //        ostrm << "MyClass{" << eatch(2) << static_cast<B0>(me) << static_cast<B1>(me) << static_cast<B2>(me) << "}";
         ostrm << FMT("MsgQue{@%p ") << m_ptr << eatch(2) << *m_ptr << "}";
@@ -483,6 +487,7 @@ public: //operators
     }
 private: //helpers
     struct Unpacked {}; //ctor disambiguation tag
+    struct CtorParams: public decltype(*this) {};
 //    explicit MyClass(const CtorParams& params, Unpacked): B0(static_cast<typename B0::CtorParams>(params)), B1(static_cast<typename B1::CtorParams>(params)), B2(static_cast<typename B2::CtorParams>(params))
 //    explicit MyClass(const CtorParams& params, Unpacked): B0((B0::CtorParams)params), B1((B1::CtorParams)params), B2((B2::CtorParams)params)
     explicit MsgQue(const CtorParams& params, Unpacked): m_ptr(sizeof(*m_ptr), params.shmkey, params.srcline)

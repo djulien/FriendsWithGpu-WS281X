@@ -20,7 +20,7 @@ public: //ctors
 //    explicit vector_ex(std::size_t count, const std::allocator<TYPE>& alloc = def_alloc): std::vector<TYPE>(count, alloc) {}
 //    explicit vector_ex(std::size_t count = 0, const ALLOC& alloc = ALLOC()): std::vector<TYPE>(count, alloc) {}
     template<typename ... ARGS>
-    explicit vector_ex(ARGS&& ... args): std::vector<TYPE, ALLOC>(std::forward<ARGS>(args) ...)) {} //perfect fwd
+    explicit vector_ex(ARGS&& ... args): std::vector<TYPE, ALLOC>(std::forward<ARGS>(args) ...) {} //perfect fwd
 public: //extensions
     int find(const TYPE&& that)
     {

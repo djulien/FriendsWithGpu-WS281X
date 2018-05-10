@@ -111,7 +111,8 @@ struct check
 #define SHM_MAGIC  0xfeedbeef //marker to detect valid shmem block
 
 //typedef struct { int id; key_t key; size_t size; uint32_t marker; } ShmHdr;
-template <bool, typename = void>
+//template <bool, typename = void>
+template <bool IPC = false>
 struct MemHdr
 {
 //    int id; key_t key;
@@ -140,8 +141,10 @@ public:
 
 //shared memory (ipc) specialization:
 //remember shmem info also
-template <bool IPC>
-struct MemHdr<IPC, std::enable_if_t<IPC>>
+//template <bool IPC>
+//struct MemHdr<IPC, std::enable_if_t<IPC>>
+template <>
+struct MemHdr<true>: public MemHdr<false>
 {
     int id;
     key_t key;
@@ -286,16 +289,38 @@ template <typename TYPE = void, bool IPC = false>
 class MemPtr
 {
     TYPE* m_ptr;
+    bool m_persist;
 public: //ctor/dtor
-    MemPtr(size_t size, int shmkey = 0, SrcLine srcline = 0): m_ptr(static_cast<TYPE*>(memalloc<IPC>(size, shmkey, srcline))) {}
-    ~MemPtr() { /*if (m_ptr)*/ memfree<IPC>(m_ptr); }
+    explicit MemPtr(size_t size = 0, int shmkey = 0, bool persist = false, SrcLine srcline = 0): m_ptr(static_cast<TYPE*>(memalloc<IPC>(sizeof(TYPE) + size, shmkey, srcline))), m_persist(persist) {}
+    ~MemPtr() { /*if (m_ptr)*/ if (!m_persist) memfree<IPC>(m_ptr); }
+    template <typename CALLBACK> //accept any arg type (only want caller's lambda function)
+    explicit MemPtr(CALLBACK&& named_params): MemPtr(unpack(named_params), Unpacked{}) {}
+private: //named param helpers
+    struct Unpacked {}; //ctor disambiguation tag
+    struct CtorParams
+    {
+        size_t size = 0;
+        int shmkey = 0;
+        bool persist = false;
+        SrcLine srcline = 0;
+    };
+    MemPtr(const CtorParams& params, Unpacked): MemPtr(params.size, params.shmkey, params.persist, params.srcline) {}
+    template <typename CALLBACK>
+    static struct CtorParams& unpack(CALLBACK&& named_params)
+    {
+        static struct CtorParams params; //need "static" to preserve address after return
+        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
+        auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+        thunk(named_params, params);
+        return params;
+    }
 public: //operators
     operator TYPE*() { return m_ptr; }
     TYPE* operator->() { return m_ptr; }
 public: //members
-    key_t memkey() { return memkey<IPC>(m_ptr); }
-    size_t memsize() { return memsize<IPC>(m_ptr); }
-    bool existed() { return existed<IPC>(m_ptr); }
+    key_t memkey() { return ::memkey<IPC>(m_ptr); }
+    size_t memsize() { return ::memsize<IPC>(m_ptr); }
+    bool existed() { return ::existed<IPC>(m_ptr); }
 private:
 #if 1
 //helper class to ensure unlock() occurs after member function returns

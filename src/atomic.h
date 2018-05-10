@@ -1,6 +1,10 @@
 //atomic stmt wrapper:
 //wraps a thread- or ipc-safe critical section of code with a mutex lock/unlock
 
+//#define WANT_IPC  true
+//#define ATOMIC_DEBUG
+
+
 #ifndef _ATOMIC_H
 #define _ATOMIC_H
 
@@ -22,6 +26,16 @@
  #define WANT_IPC  false //default no ipc
 #endif
 
+#ifndef NAMED
+ #define NAMED  /*SRCLINE,*/ /*&*/ [&](auto& _)
+#endif
+
+
+//#if WANT_IPC
+#include "shmkeys.h"
+#include "shmalloc.h"
+//#endif
+
 
 //handle optional macro params:
 //see https://stackoverflow.com/questions/3046889/optional-parameters-with-c-macros?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
@@ -36,7 +50,7 @@
 //#define ATOMIC(stmt)  { std::unique_ptr<LockOnce> lock(new LockOnce()); stmt; }
 #define ATOMIC_1ARG(stmt)  { /*InOut here("atomic-1arg")*/; LockOnce<WANT_IPC> lock; stmt; }
 //#define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; LockOnce<WANT_IPC> lock(want_lock); stmt; }
-#define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; if (want_lock) ATOMIC_1ARG(stmt); }
+#define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; if (want_lock) ATOMIC_1ARG(stmt) else stmt; }
 //#define ATOMIC_2ARGS(stmt, want_lock)  { InOut here("atomic-2args"); if (lock_once) LockOnce lock(want_lock); stmt; }
 #define ATOMIC(...)  USE_ARG3(__VA_ARGS__, ATOMIC_2ARGS, ATOMIC_1ARG) (__VA_ARGS__)
 
@@ -125,7 +139,7 @@
 template <bool IPC = false>
 class LockOnce //: public TopOnly
 {
-//    bool m_top;
+//    bool m_istop;
     int& depth(int limit = 0)
     {
         static int count = 0;
@@ -133,13 +147,13 @@ class LockOnce //: public TopOnly
         if (count < 0) throw std::runtime_error("nesting underflow");
         return count;
     }
-//    bool istop() const { return m_top; }
+//    static inline bool istop() { return !depth(); }
 //    static std::mutex m_mutex; //in-process mutex (all threads have same address space)
     std::unique_lock<std::mutex> m_lock;
 public: //ctor/dtor
 //    LockOnce(bool ignored = false): m_lock(mutex()) {} //{ mutex().lock(); } //: base_type(mutex()) {}
     explicit LockOnce(bool want_lock = true, int limit = 10): m_lock(mutex(), std::defer_lock) { maybe_lock(want_lock, limit); } // ++recursion(); }
-    ~LockOnce() {} //mutex().unlock(); }
+    ~LockOnce() { --depth(); } //mutex().unlock(); }
 private: //members
     void maybe_lock(bool want_lock, int limit = 0)
     {
@@ -152,7 +166,11 @@ private: //members
     template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
     static typename std::enable_if<!IPC_copy, std::mutex&>::type mutex() //use wrapper to avoid trailing static decl at global scope
     {
+        static int ready = 0;
+        int wasready = ready;
         static std::mutex m_mutex;
+//        bool istop = !depth(limit)++;
+        DEBUG_MSG(CYAN_MSG << "LockOnce: " << FMT("heap mutex @%p,") << &m_mutex << " was ready? " << wasready << ENDCOLOR, !ready++);
         return m_mutex;
     }
 //shared memory (ipc) specialization:
@@ -177,9 +195,15 @@ private: //members
         busy = false;
         return *m_mutex.get(); //return real shared mutex; //(state == Ready)? *m_mutex.get(): *(std::mutex*)0; //nested_mutex;
 #else
-//        static std::mutex m_mutex;
-//        return m_mutex;
- #error "TODO"
+//        bool wasready = ready++;
+//        bool istop = !depth(limit)++;
+        static MemPtr<std::mutex, IPC> m_mutex(NAMED{ _.shmkey = ATOMIC_MSG_SHMKEY; _.persist = true; SRCLINE; }); //smart ptr to shmem
+        static int ready = m_mutex.existed(); //don't init if already there
+        int wasready = ready;
+        if (!ready++) new (m_mutex) std::mutex(); //placement new; init after shm alloc but before any nested DEBUG_MSG
+        DEBUG_MSG(CYAN_MSG << "LockOnce: " << FMT("shmem mutex @%p,") << &*m_mutex << " was ready? " << wasready << ENDCOLOR, ready == 1);
+        return *m_mutex;
+// #error "TODO"
 #endif
     }
 }; 
@@ -298,7 +322,7 @@ std::mutex& get_atomic_mut()
 #undef WANT_UNIT_TEST //prevent recursion
 #include <iostream> //std::cout, std::flush
 //#include "ostrfmt.h" //FMT()
-//#include "msgcolors.h"
+#include "msgcolors.h"
 
 const char* nested()
 {
