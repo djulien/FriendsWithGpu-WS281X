@@ -511,19 +511,97 @@ class MyClass: public MyClass<MAX_THREADs, std::enable_if<MAX_THREADs > 0, Multi
 #endif
 
 
+//partial specialization selector:
+//see https://stackoverflow.com/questions/11019232/how-can-i-specialize-a-c-template-for-a-range-of-integer-values/11019369
+//#define SELECTOR(VAL)  (((VAL) < 0)? -1: ((VAL) > 0)? 1: 0)
+//template <int VALUE, int WHICH = SELECTOR(VALUE)>
+#define IsMultiThreaded(nthreads)  ((nthreads) != 0)
+#define IsMultiProc(nthreads)  ((nthreads) < 0)
+template <int VALUE = 0, bool ISMT = IsMultiThreaded(VALUE), bool ISIPC = IsMultiProc(VALUE)>
+class OtherClass
+{
+public:
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const OtherClass& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << "OtherClass<" << VALUE << ">"; //", " << ISMT << ", " << ISIPC << ">";
+        return ostrm;
+    }
+};
+
+//specializations:
+template <int VAL>
+class OtherClass<VAL, true, false>: public OtherClass<VAL, false, false> //SELECTOR(1)>
+{
+public:
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const OtherClass& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+//        ostrm << "OtherClass<" << VAL << ", true, false>";
+        ostrm << (OtherClass<VAL, false, false>)me << ", true, false";
+        return ostrm;
+    }
+};
+template <int VAL>
+class OtherClass<VAL, true, true>: public OtherClass<VAL, false, true>  //SELECTOR(-1)>
+{
+public:
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const OtherClass& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+//        ostrm << "OtherClass<" << VAL << ", true, true>";
+        ostrm << (OtherClass<VAL, false, true>)me << ", true, true";
+        return ostrm;
+    }
+};
+
+
+// primary template handles false
+template<unsigned SIZE, bool IsBig = (SIZE > 256)>
+class circular_buffer {
+   unsigned char buffer[SIZE];
+   unsigned int head; // index
+   unsigned int tail; // index
+public:
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const circular_buffer& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << "cb<" << SIZE << ">";
+        return ostrm;
+    }
+};
+
+// specialization for true
+template<unsigned SIZE>
+class circular_buffer<SIZE, true> {
+   unsigned char buffer[SIZE];
+   unsigned char head; // index
+   unsigned char tail; // index
+public:
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const circular_buffer& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    { 
+        ostrm << "CB<" << SIZE << ">";
+        return ostrm;
+    }
+};
+
+
 int main(int argc, const char* argv[])
 {
     MyClass<> cx(); //what does this do?
     MSG("cx " << cx);
-
     MyClass<0> c0;
     MSG("c0 " << c0);
-
     MyClass<1> c1(NAMED{ _.ivar = 11; });
     MSG("c1 " << c1);
-
     MyClass<-1> c2(NAMED{ _.ivar = 22; _.bvar = false; _.svar = "bye"; SRCLINE; });
     MSG("c2 " << c2);
+
+    OtherClass<> xx;
+    OtherClass<0> x0;
+    OtherClass<1> x1;
+    OtherClass<-1> xn1;
+    MSG("xx " << xx << ", x0 " << x0 << ", x1" << x1 << ", xn1 " << xn1);
+
+    circular_buffer<8> cb8;
+    circular_buffer<1024> cb1k;
+    MSG("cb8 " << cb8 << ", cb1k " << cb1k);
 
     return 0;
 }

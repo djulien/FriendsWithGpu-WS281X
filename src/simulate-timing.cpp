@@ -248,9 +248,9 @@ int processed = 0;
 
 
 //#if WANT_IPC //NUM_WKERs < 0 //ipc
- #include "shmkeys.h"
- MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
- MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; IF_IPC(_.shmkey = SHMKEY2); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+#include "shmkeys.h"
+MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; IF_IPC(_.shmkey = SHMKEY2); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
 //#else
 // MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; SRCLINE; });
 // MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; SRCLINE; });
@@ -380,7 +380,7 @@ int main()
         if (++frnum >= DURATION) frnum = -1; //break;
         const char* status = (frnum < 0)? "quit": "frreq";
         /*if (WANT_DETAILS)*/ MAIN_MSG(PINK_MSG, "encoded, now notify wkers (" << status << ") and finish render() for " << MAIN_PRESENT_DELAY << " msec");
-        wkerq.clear().send(frnum, true); //wake *all* wkers
+        wkerq->clear()->send(frnum, true); //wake *all* wkers
 //        MAIN_MSG(PINK_MSG, "notified wkers (" << status << "), now finish render() for " << MAIN_PRESENT_DELAY << " msec");
         sleep_msec(MAIN_PRESENT_DELAY); //simulate render present()
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "presented");

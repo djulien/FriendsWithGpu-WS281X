@@ -296,6 +296,23 @@ public: //members
     key_t memkey() { return memkey<IPC>(m_ptr); }
     size_t memsize() { return memsize<IPC>(m_ptr); }
     bool existed() { return existed<IPC>(m_ptr); }
+private:
+#if 1
+//helper class to ensure unlock() occurs after member function returns
+//TODO: derive from unique_ptr<>
+    class unlock_later
+    {
+        TYPE* m_ptr;
+    public: //ctor/dtor to wrap lock/unlock
+        unlock_later(TYPE* ptr): m_ptr(ptr) { /*if (AUTO_LOCK)*/ m_ptr->m_mutex.lock(); }
+        ~unlock_later() { /*if (AUTO_LOCK)*/ m_ptr->m_mutex.unlock(); }
+    public:
+        inline TYPE* operator->() { return m_ptr; } //allow access to wrapped members
+//        inline operator TYPE() { return *m_ptr; } //allow access to wrapped members
+//        inline TYPE& base() { return *m_ptr; }
+//        inline TYPE& operator()() { return *m_ptr; }
+    };
+#endif
 };
 
 
