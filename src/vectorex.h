@@ -9,6 +9,7 @@
 #include <sstream> //std::stringstream
 #include <string.h> //strlen
 #include <thread> //std::this_thread
+#include <type_traits> //std::enable_if<>, std::is_same<>
 
 //extended vector:
 //adds find() and join() methods
@@ -34,7 +35,10 @@ public: //extensions
     {
         std::stringstream buf;
         for (auto it = this->begin(); it != this->end(); ++it)
-            buf << sep << *it;
+        {
+            buf << sep;
+            buf << *it;
+        }
 //        return this->size()? buf.str().substr(strlen(sep)): buf.str();
         if (!this->size()) buf << sep << if_empty; //"(empty)";
         return buf.str().substr(strlen(sep));
@@ -58,13 +62,23 @@ public: //extensions
 //vector that uses preallocated memory:
 //list memory immediately follows vector
 //NOTE about alignment: https://stackoverflow.com/questions/15593637/cache-aligned-stack-variables?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-template<typename TYPE, bool CTOR_DTOR = true> //, int SIZE>
+#pragma message("TODO: derive from above")
+template<typename TYPE, bool CTOR_DTOR = true, typename = void> //, int SIZE>
 class PreallocVector
 {
 //public: //members
 //    TYPE (&m_list)[];
     TYPE* m_list;
     struct { size_t count; TYPE list[0]; } m_data; //NOTE: need struct for alignment/packing; NOTE: must come last (preallocated data follows); //std::max(SIZE, 1)];
+//private: //kludge: std::thread::id no worky with operator<<()
+//    typedef std::is_same<std::decay<TYPE>, std::thread::id> isthread;
+//    template <typename TYPE_copy = TYPE>
+//    static TYPE tostr(TYPE_copy&& val) { return val; }
+//    static std::enable_if<!std::is_same<std::decay<TYPE_copy>, std::thread::id>::value, int> tostr(TYPE_copy&& val) { return val; }
+//thread::id specialization:
+//    template <typename TYPE_copy = TYPE>
+//    static std::enable_if<std::is_same<std::decay<TYPE_copy>, std::thread::id>::value, int> tostr(TYPE_copy&& val) { return (int)val; }
+//    static TYPE tostr(TYPE val) { return val; }
 public: //ctors
     template<typename ... ARGS>
     explicit PreallocVector(TYPE* list, size_t count = 0, ARGS&& ... args): m_data({0}), m_list(list)
@@ -101,7 +115,7 @@ public: //methods
 //        if (m_count >= SIZEOF(m_list)) throw std::runtime_error("PreallocVector: bad index");
         new (m_data.list + m_data.count++) TYPE(std::forward<ARGS>(args) ...); //placement new; perfect fwding
     }
-    TYPE& operator[](int inx)
+    TYPE& operator[](int inx) //const
     {
         if ((inx < 0) || (inx >= m_data.count)) throw std::runtime_error("PreallocVector: bad index");
         return m_data.list[inx];
@@ -116,17 +130,10 @@ public: //methods
     {
         std::stringstream buf;
         for (int inx = 0; inx < m_data.count; ++inx)
-            buf << sep << m_data.list[inx];
-        if (!this->size()) buf << sep << if_empty; //"(empty)";
-        return buf.str().substr(strlen(sep));
-    }
-//thread::id specialization:
-//(needed because operator<< no worky with std::thread::id)
-    std::enable_if<TYPE == std::thread::id, std::string> join(const char* sep = ",", const char* if_empty = "") const
-    {
-        std::stringstream buf;
-        for (int inx = 0; inx < m_data.count; ++inx)
-            buf << sep << (int)m_data.list[inx];
+        {
+            buf << sep;
+            buf << /*tostr*/ m_data.list[inx];
+        }
         if (!this->size()) buf << sep << if_empty; //"(empty)";
         return buf.str().substr(strlen(sep));
     }
@@ -139,6 +146,13 @@ public: //methods
         return retval;
     }
 };
+//thread::id partial specialization:
+//kludge: std::thread::id no worky with operator<<()
+//template <bool CTOR_DTOR> //= true>
+//class PreallocVector<std::thread::id, CTOR_DTOR>: public PreallocVector<std::thread::id, CTOR_DTOR, char>
+//{
+//    static int tostr(std::thread::id val) { return (int)val; }
+//};
 
 #endif //ndef _VECTOREX_H
 
@@ -164,8 +178,13 @@ public: //ctor/dtor
     ~IntObj() { NO_DEBUG("  int dtor " << m_value); }
 public: //operators
     operator int() { return m_value; }
-    bool operator==(const IntObj& that) { return that.m_value == this->m_value; }
+    bool operator==(const IntObj& that) const { return that.m_value == this->m_value; }
 //    std::ostream& operator<<(const IntObj& that)
+    friend std::ostream& operator<<(std::ostream& ostrm, const IntObj& val)
+    {
+        ostrm << val.m_value;
+        return ostrm;
+    }
 };
 
 template<typename TYPE>

@@ -51,7 +51,7 @@
 #endif
 
 #ifndef WANT_IPC
- #define WANT_IPC  false //default no ipc
+ #define WANT_IPC  IsMultiProc(MAX_THREADs) //false //default no ipc
 #endif
 
 #if WANT_IPC
@@ -88,6 +88,18 @@ char* strzcpy(char* dest, const char* src, size_t maxlen)
 //template<class BASE, class DERIVED>
 //BASE base_of(DERIVED BASE::*);
 
+
+//kludge: ostream::opeartor<<() doesn't work with std::thread::id, so convert to int:
+//class MyThreadId: public std::thread::id
+//{
+//public:
+//    operator int() const { return (int)*this; }
+//};
+std::ostream& operator<<(std::ostream& ostrm, std::thread::id thrid)
+{
+    ostrm << (int)thrid;
+    return ostrm;
+}
 
 //partial specialization selectors:
 #define IsMultiThreaded(num_threads)  ((num_threads) != 0)
@@ -179,8 +191,8 @@ public: //queue manip methods
     bool not_wanted(int val) { /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
 //    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
 //    struct RcvParams { bool (MsgQue::*filter)(int val) = 0, int operand = 0, bool remove = false, SrcLine srcline = SRCLINE; };
-//    template <typename CALLBACK>
-    int rcv(bool (QueData::*filter)(int val), int operand = 0, /*bool (*cb)(int)*/ decltype(wanted) cb = 0, bool remove = false, SrcLine srcline = 0)
+    template <typename CALLBACK>
+    int rcv(bool (QueData::*filter)(int val), int operand = 0, /*bool (*cb)() decltype(wanted) cb*/ CALLBACK&& cb = 0, bool remove = false, SrcLine srcline = 0)
 //    int rcv(SrcLine mySrcLine = 0, void (*get_params)(struct RcvParams&) = 0)
     {
 //        /*static*/ struct RcvParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
@@ -256,7 +268,7 @@ public: //helpers
 //ipc specialization:
 //    static std::enable_if<WANT_IPC, auto> thrid() { return getpid(); }
 //in-proc specialization:
-    static inline std::enable_if<!WANT_IPC, std::thread::id /*auto*/> thrid() { return std::this_thread::get_id(); }
+    static inline std::enable_if<!IsMultiProc(MAX_THREADs), std::thread::id /*auto*/> thrid() { return std::this_thread::get_id(); }
     typedef decltype(thrid()) THRID;
 //private:
 protected: //members
@@ -295,10 +307,10 @@ private:
 #endif
 public: //methods
     template <typename CALLBACK>
-    int rcv(bool (QueData::*filter)(int val), int operand = 0, CALLBACK&& cb = 0, bool remove = false, SrcLine srcline = 0)
+    int rcv(bool (base_t::*filter)(int val), int operand = 0, CALLBACK&& cb = 0, bool remove = false, SrcLine srcline = 0)
     {
         auto waitfor = cb; //[cb, m_condvar&]() { m_condvar.wait(scoped_lock); if (cb) cb(); }; //ignore spurious wakeups
-        return base_t::waitfor(filter, operand, waitfor, remove, srcline);
+        return base_t::rcv(filter, operand, waitfor, remove, srcline);
     }
 //convert system-defined id into sequentially assigned index:
     int thinx(THRID id = thrid())
@@ -491,7 +503,7 @@ class MsgQue //: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
 //    MemPtr<QueData<MAX_THREADs>, WANT_IPC> m_ptr;
 //    /*volatile*/ int m_msg;
 //    typedef typename std::conditional<IPC, pid_t, std::thread*>::type PIDTYPE;
-    MemPtr<ptr_type, WANT_IPC> m_ptr;
+    MemPtr<ptr_type, IsMultiProc(MAX_THREADs)> m_ptr;
 public: //ctor/dtor
 //    MyClass() = delete; //don't generate default ctor
 //    struct CtorParams: public B0::CtorParams, public B1::CtorParams, public B2::CtorParams {};
@@ -1182,8 +1194,9 @@ void sleep_msec(int msec)
 }
 
 
+#define MAX_THREADs  1
 #include "shmkeys.h"
-MsgQue<1> testq(NAMED{ _.name = "testq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+MsgQue<MAX_THREADs> testq(NAMED{ _.name = "testq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
  
 
 void child_proc()
