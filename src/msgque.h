@@ -25,11 +25,13 @@
 #include "srcline.h"
 #include "vectorex.h"
 #include "elapsed.h" //timestamp()
+#include "eatch.h"
+
 #ifdef MSGQUE_DEBUG
  #include "atomic.h"
  #include "msgcolors.h"
  #define DEBUG_MSG  ATOMIC_MSG
- #define IF_DEBUG(stmt)  { stmt; }
+ #define IF_DEBUG(stmt)  stmt //{ stmt; }
 #else
  #define DEBUG_MSG(msg)  {} //noop
  #define IF_DEBUG(stmt)  //noop
@@ -52,6 +54,12 @@
  #define WANT_IPC  false //default no ipc
 #endif
 
+#if WANT_IPC
+ #define IF_IPC(stmt)  stmt
+#else
+ #define IF_IPC(stmt)  //noop
+#endif
+
 #ifndef VOLATILE
  #define VOLATILE  //dummy keyword; not needed
 #endif
@@ -71,10 +79,10 @@ char* strzcpy(char* dest, const char* src, size_t maxlen)
 
 
 //polling needed for single-threaded caller:
-void sleep_msec(int msec)
-{
-    std::this_thread::sleep_for(std::chrono::milliseconds(msec));
-}
+//static void sleep_msec(int msec)
+//{
+//    std::this_thread::sleep_for(std::chrono::milliseconds(msec));
+//}
 
 
 //template<class BASE, class DERIVED>
@@ -99,6 +107,7 @@ protected: //members
     /*volatile*/ int m_msg;
     SrcLine m_srcline;
 public: //ctor/dtor
+//    struct Unpacked {}; //ctor disambiguation tag
     struct CtorParams //: public CtorParams
     {
         IF_DEBUG(const char* name = 0);
@@ -108,8 +117,8 @@ public: //ctor/dtor
     explicit QueData(const CtorParams& params): m_srcline(params.srcline), m_msg(params.msg) { IF_DEBUG(strzcpy(m_name, params.name, sizeof(m_name))); }
     ~QueData()
     {
-        if (m_msg) DETAILS_MSG(RED_MSG << timestamp() << "QueData-" << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR_ATLINE(srcline)) //benign, but might be caller bug so complain
-        else DEBUG_MSG(GREEN_MSG << timestamp() << "QueData-" << m_name << ".dtor: empty @exit" << ENDCOLOR_ATLINE(srcline));
+        if (m_msg) DETAILS_MSG(RED_MSG << timestamp() << "QueData-" << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR_ATLINE(m_srcline)) //benign, but might be caller bug so complain
+        else DEBUG_MSG(GREEN_MSG << timestamp() << "QueData-" << m_name << ".dtor: empty @exit" << ENDCOLOR_ATLINE(m_srcline));
     }
 public: //operators
     /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const QueData& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
@@ -227,6 +236,8 @@ public: //utility methods
     inline int thinx(decltype(thrid()) id = thrid()) { return 0; }
 private:
     static void yield() { sleep_msec(1); }
+//polling needed for single-threaded caller:
+    static void sleep_msec(int msec) { std::this_thread::sleep_for(std::chrono::milliseconds(msec)); }
 };
 
 
@@ -254,12 +265,13 @@ protected: //members
     PreallocVector<THRID /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
     THRID list_space[ABS(MAX_THREADs)];
 public: //ctor/dtor
+//    struct Unpacked {}; //ctor disambiguation tag
     struct CtorParams: public base_t::CtorParams {}; //{ int ivar = -1; SrcLine srcline = "here:0"; };
     explicit QueData(const CtorParams& params): base_t(/*(base_t::CtorParams)*/params), m_ids(list_space, ABS(MAX_THREADs)) {}
 public: //operators
     /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const QueData& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
     { 
-        ostrm << ", ids(" << me.m_ids.count << "): " << me.m_ids.join(",") << static_cast<base_t>(me);
+        ostrm << ", ids(" << me.m_ids.size() << "): " << me.m_ids.join(",") << static_cast<base_t>(me);
         return ostrm;
     }
 private:
@@ -307,6 +319,12 @@ public: //methods
     }
 };
 
+///*static*/ friend std::ostream& operator<<(std::ostream& ostrm, std::thread::id val) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+//{ 
+//    ostrm << val;
+//    return ostrm;
+//}
+
 
 //multi-process specialization:
 template <int MAX_THREADs>
@@ -317,6 +335,7 @@ protected: //members
     int m_shmkey; //shmem handling info
     bool m_want_reinit;
 public: //ctor/dtor
+//    struct Unpacked {}; //ctor disambiguation tag
     struct CtorParams: public base_t::CtorParams
     {
         int shmkey = 0; //shmem handling info
@@ -454,11 +473,12 @@ public: //operators
 //MsgQue ~= shm_ptr<>, inner data ptr, op new + del
 
 template <int MAX_THREADs = 0>
-class MsgQue: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
+class MsgQue //: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
 //    public QueData, //unconditional base
 //    public inherit_if<MAX_THREADs != 0, MultiThreaded<MAX_THREADs>>,
 //    public inherit_if<MAX_THREADs < 0, MultiProc>
 {
+    typedef QueData<MAX_THREADs> ptr_type;
 //    using B0 = Base0;
 //    using B1 = inherit_if<MAX_THREADs != 0, Base1>;
 //    using B2 = inherit_if<MAX_THREADs < 0, Base2>;
@@ -471,29 +491,31 @@ class MsgQue: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
 //    MemPtr<QueData<MAX_THREADs>, WANT_IPC> m_ptr;
 //    /*volatile*/ int m_msg;
 //    typedef typename std::conditional<IPC, pid_t, std::thread*>::type PIDTYPE;
+    MemPtr<ptr_type, WANT_IPC> m_ptr;
 public: //ctor/dtor
 //    MyClass() = delete; //don't generate default ctor
 //    struct CtorParams: public B0::CtorParams, public B1::CtorParams, public B2::CtorParams {};
 //    MyClass() = default;
-    explicit MsgQue(): MsgQue(NAMED{ /*SRCLINE*/; }) { MSG("ctor1"); }
+    explicit MsgQue(): MsgQue(NAMED{ /*SRCLINE*/; }) { DEBUG_MSG("ctor1"); }
     template <typename CALLBACK> //accept any arg type (only want caller's lambda function)
-    explicit MsgQue(CALLBACK&& named_params): MsgQue(unpack(named_params), Unpacked{}) { MSG("ctor2"); }
+    explicit MsgQue(CALLBACK&& named_params): MsgQue(unpack(named_params), Unpacked{}) { DEBUG_MSG("ctor2"); }
 public: //operators
     /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const MsgQue& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
     { 
 //        ostrm << "MyClass{" << eatch(2) << static_cast<B0>(me) << static_cast<B1>(me) << static_cast<B2>(me) << "}";
-        ostrm << FMT("MsgQue{@%p ") << m_ptr << eatch(2) << *m_ptr << "}";
+        ostrm << FMT("MsgQue{@%p ") << &*me.m_ptr << eatch(2) << *me.m_ptr << "}";
         return ostrm;
     }
+    ptr_type* operator->() { return m_ptr; }
 private: //helpers
     struct Unpacked {}; //ctor disambiguation tag
-    struct CtorParams: public decltype(*this) {};
+    struct CtorParams: public ptr_type::CtorParams {}; //decltype(*this) {};
 //    explicit MyClass(const CtorParams& params, Unpacked): B0(static_cast<typename B0::CtorParams>(params)), B1(static_cast<typename B1::CtorParams>(params)), B2(static_cast<typename B2::CtorParams>(params))
 //    explicit MyClass(const CtorParams& params, Unpacked): B0((B0::CtorParams)params), B1((B1::CtorParams)params), B2((B2::CtorParams)params)
-    explicit MsgQue(const CtorParams& params, Unpacked): m_ptr(sizeof(*m_ptr), params.shmkey, params.srcline)
+    explicit MsgQue(const CtorParams& params, Unpacked): m_ptr(NAMED{ _.shmkey = params.shmkey; _.persist = params.persist; _.srcline = params.srcline; })
     {
-        new (m_ptr) base_t((base_t::CtorParams)params);
-        MSG("ctor unpacked: " << FMT("%p") << m_ptr << " " << *m_ptr);
+        if (!m_ptr.existed()) new (m_ptr) /*decltype(*m_ptr)*/ ptr_type(params); //placement new; init after shm alloc but before usage; don't init if already there; 
+        DEBUG_MSG("ctor unpacked: " << FMT("%p") << &*m_ptr << " " << *m_ptr);
     }
     template <typename CALLBACK>
     static struct CtorParams& unpack(CALLBACK&& named_params)
@@ -1161,14 +1183,14 @@ void sleep_msec(int msec)
 
 
 #include "shmkeys.h"
-MsgQue<1> testq(NAMED {_.name = "testq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+MsgQue<1> testq(NAMED{ _.name = "testq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
  
 
 void child_proc()
 {
     sleep_msec(500);
     MSG("child start, send");
-    testq->send(NAMED{ msg = 1; SRCLINE; });
+    testq->send(NAMED{ _.msg = 1; SRCLINE; });
     int qe = testq->rcv(NAMED{ SRCLINE; });
     MSG(FMT("child rcv got 0x%x") << qe);
     MSG("child exit");
@@ -1185,7 +1207,7 @@ void unit_test()
 
     sleep_msec(500);
     MSG("main send 1");
-    testq->send(NAMED{ msg = 1; SRCLINE; })
+    testq->send(NAMED{ _.msg = 1; SRCLINE; });
     MSG("main join");
     child.join();
     MSG("done");

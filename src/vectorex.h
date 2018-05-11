@@ -8,6 +8,7 @@
 #include <string> //std::string
 #include <sstream> //std::stringstream
 #include <string.h> //strlen
+#include <thread> //std::this_thread
 
 //extended vector:
 //adds find() and join() methods
@@ -82,7 +83,7 @@ public: //ctors
             m_list[inx].~TYPE(); //call dtor
     }
 public: //methods
-    size_t size() { return m_data.count; }
+    size_t size() const { return m_data.count; }
     void reserve(size_t count)
     {
         if (!CTOR_DTOR) { m_data.count = count; return; } //caller will handle it
@@ -105,17 +106,27 @@ public: //methods
         if ((inx < 0) || (inx >= m_data.count)) throw std::runtime_error("PreallocVector: bad index");
         return m_data.list[inx];
     }
-    int find(const TYPE&& that)
+    int find(const TYPE&& that) const
     {
         for (int inx = 0; inx < m_data.count; ++inx)
             if (m_data.list[inx] == that) return inx;
         return -1;
     }
-    std::string join(const char* sep = ",", const char* if_empty = "")
+    std::string join(const char* sep = ",", const char* if_empty = "") const
     {
         std::stringstream buf;
         for (int inx = 0; inx < m_data.count; ++inx)
             buf << sep << m_data.list[inx];
+        if (!this->size()) buf << sep << if_empty; //"(empty)";
+        return buf.str().substr(strlen(sep));
+    }
+//thread::id specialization:
+//(needed because operator<< no worky with std::thread::id)
+    std::enable_if<TYPE == std::thread::id, std::string> join(const char* sep = ",", const char* if_empty = "") const
+    {
+        std::stringstream buf;
+        for (int inx = 0; inx < m_data.count; ++inx)
+            buf << sep << (int)m_data.list[inx];
         if (!this->size()) buf << sep << if_empty; //"(empty)";
         return buf.str().substr(strlen(sep));
     }
