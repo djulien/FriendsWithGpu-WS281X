@@ -32,12 +32,12 @@ echo -e $CYAN; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -D__TEST_FILE__="\"${T
 #include __TEST_FILE__ //include unit test second time
 
 #ifndef MSG
- #define MSG(msg)  { std::cout << msg << std::flush; }
+ #define MSG(msg)  { std::cout << msg << "\n" << std::flush; }
 #endif
 
 int main(int argc, const char* argv[])
 {
-    MSG("testing " __TEST_FILE__ " ...\n");
+    MSG("testing " __TEST_FILE__ " ...");
     unit_test();
     return 0;
 }

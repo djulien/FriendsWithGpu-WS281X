@@ -321,21 +321,33 @@ std::mutex& get_atomic_mut()
 #ifdef WANT_UNIT_TEST
 #undef WANT_UNIT_TEST //prevent recursion
 #include <iostream> //std::cout, std::flush
+#include <thread> //std::this_thread
 //#include "ostrfmt.h" //FMT()
 #include "msgcolors.h"
 
+void child_proc()
+{
+//    sleep_msec(500);
+    ATOMIC_MSG(BLUE_MSG << "child start" << ENDCOLOR);
+    for (int i = 0; i < 30; ++i)
+        ATOMIC_MSG(BLUE_MSG << "msg[" << i << "]" << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << "child exit" << ENDCOLOR);
+}
+
 const char* nested()
 {
-    ATOMIC_MSG("in nested\n");
-    ATOMIC_MSG("out nested\n");
+    ATOMIC_MSG(BLUE_MSG << "in nested" << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << "out nested" << ENDCOLOR);
     return "nested";
 }
 
 //int main(int argc, const char* argv[])
 void unit_test()
 {
-    ATOMIC_MSG(BLUE_MSG << "start" << ENDCOLOR);
-    ATOMIC_MSG(BLUE_MSG << "test1 " << nested() << " done" << ENDCOLOR);
+    std::thread child(child_proc);
+    ATOMIC_MSG(PINK_MSG << "start" << ENDCOLOR);
+    ATOMIC_MSG(PINK_MSG << "test1 " << nested() << " done" << ENDCOLOR);
+    child.join();
 //    return 0;
 }
 #endif //def WANT_UNIT_TEST
