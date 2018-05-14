@@ -1,5 +1,8 @@
 //std::vector extensions
 
+#define VECTOR_DEBUG
+
+
 #ifndef _VECTOREX_H
 #define _VECTOREX_H
 
@@ -10,6 +13,23 @@
 #include <string.h> //strlen
 #include <thread> //std::this_thread
 #include <type_traits> //std::enable_if<>, std::is_same<>
+
+#ifdef VECTOR_DEBUG
+ #include "atomic.h"
+ #include "msgcolors.h"
+ #include "elapsed.h" //timestamp()
+ #define DEBUG_MSG  ATOMIC_MSG
+ #define IF_DEBUG(stmt)  stmt //{ stmt; }
+#else
+ #define DEBUG_MSG(msg)  {} //noop
+ #define IF_DEBUG(stmt)  //noop
+#endif
+//#ifdef MSGQUE_DETAILS
+// #define DETAILS_MSG  DEBUG_MSG
+//#else
+// #define DETAILS_MSG(stmt)  {} //noop
+//#endif
+
 
 //extended vector:
 //adds find() and join() methods
@@ -85,6 +105,41 @@ struct FixedAlloc
     }  
     void deallocate(TYPE* const ptr, size_t count = 1) const noexcept {} //noop
 };
+
+
+#if 1 //example std::allocator
+//minimal stl allocator (C++11)
+//based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
+//NOTE: use a separate sttr for shm key/symbol mgmt
+template <class TYPE>
+struct ExampleAllocator  
+{  
+    typedef TYPE value_type;
+    ExampleAllocator() noexcept {} //default ctor; not required by STL
+    template<class OTHER>
+    ExampleAllocator(const ExampleAllocator<OTHER>& other) noexcept {} //converting copy ctor (more efficient than C++03)
+    template<class OTHER>
+    bool operator==(const ExampleAllocator<OTHER>& other) const noexcept { return true; }
+    template<class OTHER>
+    bool operator!=(const ExampleAllocator<OTHER>& other) const noexcept { return false; }
+    TYPE* allocate(const size_t count) const
+    {
+        if (!count) return nullptr;
+        if (count > static_cast<size_t>(-1) / sizeof(TYPE)) throw std::bad_array_new_length();
+        void* ptr = malloc(count);
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "ExampleAllocator: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << FMT(" bytes at %p") << ptr << ENDCOLOR);
+        if (!ptr) throw std::bad_alloc();
+        return static_cast<TYPE*>(ptr);
+    }  
+    void deallocate(TYPE* const ptr, size_t count = 1) const noexcept
+    {
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "ExampleAllocator: deallocate " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << " bytes at " << FMT("%p") << ptr << ENDCOLOR);
+        free(ptr);
+    }
+private:
+    static const char* TYPENAME();
+};
+#endif
 
 
 //#include "ostrfmt.h"
@@ -246,6 +301,10 @@ public: //operators
     }
 };
 
+template<>
+const char* ExampleAllocator<IntObj>::TYPENAME() { return "ExampleAllocator<IntObj>"; }
+
+
 template<typename TYPE>
 void test1(TYPE& vec)
 {
@@ -259,7 +318,8 @@ void test1(TYPE& vec)
     DEBUG("1 at: " << vec.find(1) << ", 5 at: " << vec.find(5) << ", new one[" << ofs << "]: " << vec[ofs]);
     DEBUG("all " << num + 3 << ": " << vec.join(", "));
 }
-    
+
+
 //int main(int argc, const char* argv[])
 void unit_test()
 {
@@ -268,15 +328,17 @@ void unit_test()
     vector_ex<vectype> vec1;
     test1(vec1);
 
+    typedef vector_ex<vectype, ExampleAllocator<vectype>> test_type;
+//    typedef PreallocVector<vectype, false> test_type;
 //    struct thing2 { PreallocVector<int, false> vec2; int values2[10]; thing2(): vec2(3, 1), values2({11, 22, 33, 44, 55, 66, 77, 88, 99, 1010}) {}; } thing2;
     vectype values2[10] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 1010};
-    PreallocVector<vectype, false> vec2(values2, 3, 1);
+    /*PreallocVector<vectype, false>*/ test_type vec2(values2, 3, 1);
 //    DEBUG(FMT("&list2[0] = %p") << &values2[0]);
     test1(vec2);
 
 //    struct thing3 { PreallocVector<int, true> vec3; int values3[10]; thing3(): vec3(3, 1), values3({11, 22, 33, 44, 55, 66, 77, 88, 99, 1010}) {}; } thing3;
     vectype values3[10] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 1010};
-    PreallocVector<vectype, true> vec3(values3, 3, 1);
+    /*PreallocVector<vectype, true>*/ test_type vec3(values3, 3, 1);
 //    DEBUG(FMT("&list3[0] = %p") << &values3[0]);
     test1(vec3);
 
