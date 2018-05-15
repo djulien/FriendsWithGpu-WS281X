@@ -75,38 +75,6 @@ public: //extensions
 //std::allocator<TYPE> vector_ex<TYPE>::def_alloc; //default allocator; TODO: is this needed?
 
 
-//minimal stl allocator (C++11)
-//based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
-template <typename TYPE>
-struct FixedAlloc
-{  
-    TYPE* m_list;
-    size_t m_limit;
-    typedef TYPE value_type;
-    FixedAlloc() noexcept {} //default ctor; not required by STL
-    template<class OTHER>
-    FixedAlloc(const FixedAlloc<OTHER>& other) noexcept {} //converting copy ctor (more efficient than C++03)
-    template<class OTHER>
-    FixedAlloc(TYPE* list, size_t limit = 0) noexcept: m_list(list), m_limit(limit) {} //converting copy ctor (more efficient than C++03)
-    template<class OTHER>
-    bool operator==(const FixedAlloc<OTHER>& other) const noexcept { return this == other; } //true; }
-    template<class OTHER>
-    bool operator!=(const FixedAlloc<OTHER>& other) const noexcept { return this != other; } //false; }
-    TYPE* allocate(const size_t count) const
-    {
-        if (!count) return nullptr;
-        if (count > /*static_cast<size_t>(-1) / sizeof(TYPE)*/ m_limit) throw std::bad_array_new_length();
-//        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
-//            void* const ptr = m_heap? memalloc<false>(count * sizeof(TYPE), key, srcline): memalloc<true>(count * sizeof(TYPE), key, srcline);
-//            DEBUG_MSG(YELLOW_MSG << timestamp() << "FixedAlloc: allocated " << count << " " << TYPENAME() << "(s) * " << sizeof(TYPE) << FMT(" bytes for key 0x%lx") << key << " from " << (m_heap? "custom": "heap") << " at " << FMT("%p") << ptr << ENDCOLOR);
-//            if (!ptr) throw std::bad_alloc();
-//            return static_cast<TYPE*>(ptr);
-        return m_list;
-    }  
-    void deallocate(TYPE* const ptr, size_t count = 1) const noexcept {} //noop
-};
-
-
 #if 1 //example std::allocator
 //minimal stl allocator (C++11)
 //based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
@@ -142,6 +110,53 @@ private:
 #endif
 
 
+//minimal stl allocator (C++11)
+//based on example at: https://msdn.microsoft.com/en-us/library/aa985953.aspx
+template <typename TYPE> //, bool CTOR_DTOR = true>
+struct FixedAlloc: public ExampleAllocator<TYPE>
+{
+    typedef ExampleAllocator<TYPE> base_t;
+//    typedef TYPE value_type;
+//    FixedAlloc() noexcept {} //default ctor; not required by STL
+//    template<class OTHER>
+//    FixedAlloc(const FixedAlloc<OTHER>& other) noexcept {} //converting copy ctor (more efficient than C++03)
+//    template<class OTHER>
+    template<typename ... ARGS>
+    FixedAlloc(size_t limit = 0, ARGS&& ... args) noexcept: FixedAlloc(m_data.list, limit, std::forward<ARGS>(args) ...) {}
+    template<typename ... ARGS>
+    FixedAlloc(TYPE* list, size_t limit = 0, ARGS&& ... args) noexcept: base_t(std::forward<ARGS>(args) ...), m_list(list), m_limit(limit) {}
+    template<class OTHER>
+    bool operator==(const FixedAlloc<OTHER>& other) const noexcept { return this == other; } //true; }
+    template<class OTHER>
+    bool operator!=(const FixedAlloc<OTHER>& other) const noexcept { return this != other; } //false; }
+    TYPE* allocate(const size_t count) const
+    {
+        if (!count) return nullptr;
+        if (count > /*static_cast<size_t>(-1) / sizeof(TYPE)*/ m_limit) throw std::bad_array_new_length();
+//        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
+//            void* const ptr = m_heap? memalloc<false>(count * sizeof(TYPE), key, srcline): memalloc<true>(count * sizeof(TYPE), key, srcline);
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "FixedAlloc: allocated " << count << " " << TYPENAME() << "(s) at " << FMT("%p") << m_list << ENDCOLOR);
+//            if (!ptr) throw std::bad_alloc();
+//            return static_cast<TYPE*>(ptr);
+//        if (CTOR_DTOR)
+//            for (size_t inx = 0; inx < count; ++inx)
+//                new (m_list + inx) TYPE(std::forward<ARGS>(args) ...); //placement new; perfect fwding
+        return m_list;
+    }  
+    void deallocate(TYPE* const ptr, size_t count = 1) const noexcept //noop
+    {
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "ExampleAllocator: deallocate " << count << " " << TYPENAME() << "(s) at " << FMT("%p") << ptr << " (not really)" << ENDCOLOR);
+//        if (CTOR_DTOR)
+//            for (size_t inx = 0; inx < m_data.count; ++inx)
+//                m_list[inx].~TYPE(); //call dtor
+    }
+private:
+    TYPE* m_list;
+    size_t m_limit;
+    struct { /*size_t count*/; TYPE list[0]; } m_data; //NOTE: need struct for alignment/packing; NOTE: must come last (preallocated data follows); //std::max(SIZE, 1)];
+};
+
+
 //#include "ostrfmt.h"
 //#include <iostream> //std::cout, std::flush
 //#define DEBUG(msg)  { std::cout << msg << "\n" << std::flush; }
@@ -154,25 +169,31 @@ class PreallocVector: public vector_ex<TYPE, ALLOC> //vector_ex<TYPE>::FixedAllo
 {
     typedef vector_ex<TYPE, ALLOC> base_t; //vector_ex<TYPE>::FixedAlloc> base_t; //PreallocVector::FixedAlloc<TYPE>> base_t;
 //preallocated list:
-    TYPE* m_list;
-    struct { size_t count; TYPE list[0]; } m_data; //NOTE: need struct for alignment/packing; NOTE: must come last (preallocated data follows); //std::max(SIZE, 1)];
+//    TYPE* m_list;
+//    struct { size_t count; TYPE list[0]; } m_data; //NOTE: need struct for alignment/packing; NOTE: must come last (preallocated data follows); //std::max(SIZE, 1)];
 public: //ctors
     template<typename ... ARGS>
-    explicit PreallocVector(size_t count = 0, ARGS&& ... args): PreallocVector(&m_data.list[0], count, std::forward<ARGS>(args) ...) {}
+    explicit PreallocVector(size_t count, ARGS&& ... args, ALLOC alloc = ALLOC(count)): base_t(/*std::forward<ARGS>(args) ...,*/ alloc) { init(); }
     template<typename ... ARGS>
-    explicit PreallocVector(TYPE* list, size_t count = 0, ARGS&& ... args): base_t(count, std::forward<ARGS>(args) ..., ALLOC(list, count)), m_data({0}), m_list(list)
+    explicit PreallocVector(TYPE* list, size_t count, ARGS&& ... args, ALLOC alloc = ALLOC(list, count)): base_t(/*std::forward<ARGS>(args) ...,*/ alloc) { init(); }
+    ~PreallocVector() { clup(); }
+private:
+    void init()
     {
 //        DEBUG(FMT("&list[0]  = %p") << &m_list[0] << ", sizeof list = " << sizeof(m_list));
         if (!CTOR_DTOR) return; //caller will handle it
-        for (size_t inx = 0; inx < m_data.count; ++inx)
-            new (m_data.list + inx) TYPE(std::forward<ARGS>(args) ...); //placement new; perfect fwding
+        DEBUG_MSG(CYAN_MSG << timestamp() << "PreallocVector: call ctor on " << capacity() << " " << TYPENAME() << "(s)" << ENDCOLOR);
+        for (size_t inx = 0; inx < capacity(); ++inx)
+            new (&this[inx]) TYPE(std::forward<ARGS>(args) ...); //placement new; perfect fwding
     }
-    ~PreallocVector()
+    void clup()
     {
         if (!CTOR_DTOR) return; //caller will handle it
-        for (size_t inx = 0; inx < m_data.count; ++inx)
-            m_list[inx].~TYPE(); //call dtor
+        DEBUG_MSG(CYAN_MSG << timestamp() << "PreallocVector: call dtor on " << capacity() << " " << TYPENAME() << "(s)" << ENDCOLOR);
+        for (size_t inx = 0; inx < capacity(); ++inx)
+            this[inx].~TYPE(); //call dtor
     }
+//    ALLOC& m_alloc;
 };
 #if 0
 #pragma message("TODO: derive from above")
@@ -328,8 +349,8 @@ void unit_test()
     vector_ex<vectype> vec1;
     test1(vec1);
 
-    typedef vector_ex<vectype, ExampleAllocator<vectype>> test_type;
-//    typedef PreallocVector<vectype, false> test_type;
+//    typedef vector_ex<vectype, ExampleAllocator<vectype>> test_type;
+    typedef PreallocVector<vectype, false> test_type;
 //    struct thing2 { PreallocVector<int, false> vec2; int values2[10]; thing2(): vec2(3, 1), values2({11, 22, 33, 44, 55, 66, 77, 88, 99, 1010}) {}; } thing2;
     vectype values2[10] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 1010};
     /*PreallocVector<vectype, false>*/ test_type vec2(values2, 3, 1);
