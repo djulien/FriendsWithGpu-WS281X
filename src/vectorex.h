@@ -126,9 +126,9 @@ struct FixedAlloc: public ExampleAllocator<TYPE>
     template<typename ... ARGS>
     FixedAlloc(TYPE* list, size_t limit = 0, ARGS&& ... args) noexcept: base_t(std::forward<ARGS>(args) ...), m_list(list), m_limit(limit) {}
     template<class OTHER>
-    bool operator==(const FixedAlloc<OTHER>& other) const noexcept { return this == other; } //true; }
+    bool operator==(const FixedAlloc<OTHER>& other) const noexcept { return this == &other; } //true; }
     template<class OTHER>
-    bool operator!=(const FixedAlloc<OTHER>& other) const noexcept { return this != other; } //false; }
+    bool operator!=(const FixedAlloc<OTHER>& other) const noexcept { return this != &other; } //false; }
     TYPE* allocate(const size_t count) const
     {
         if (!count) return nullptr;
@@ -154,6 +154,7 @@ private:
     TYPE* m_list;
     size_t m_limit;
     struct { /*size_t count*/; TYPE list[0]; } m_data; //NOTE: need struct for alignment/packing; NOTE: must come last (preallocated data follows); //std::max(SIZE, 1)];
+    static const char* TYPENAME();
 };
 
 
@@ -168,32 +169,39 @@ template<typename TYPE, bool CTOR_DTOR = true, typename ALLOC = FixedAlloc<TYPE>
 class PreallocVector: public vector_ex<TYPE, ALLOC> //vector_ex<TYPE>::FixedAlloc>
 {
     typedef vector_ex<TYPE, ALLOC> base_t; //vector_ex<TYPE>::FixedAlloc> base_t; //PreallocVector::FixedAlloc<TYPE>> base_t;
+    static ALLOC& default_alloc() //kludge: substitute in default allocator at run-time
+    {
+        static ALLOC dummy;
+        return dummy;
+    }
 //preallocated list:
 //    TYPE* m_list;
 //    struct { size_t count; TYPE list[0]; } m_data; //NOTE: need struct for alignment/packing; NOTE: must come last (preallocated data follows); //std::max(SIZE, 1)];
 public: //ctors
     template<typename ... ARGS>
-    explicit PreallocVector(size_t count, ARGS&& ... args, ALLOC alloc = ALLOC(count)): base_t(/*std::forward<ARGS>(args) ...,*/ alloc) { init(); }
+    explicit PreallocVector(size_t count, ARGS&& ... args, const ALLOC& alloc = default_alloc()): base_t(/*std::forward<ARGS>(args) ...,*/ (alloc != default_alloc)? alloc: ALLOC(count)) { init(std::forward<ARGS>(args) ...); }
     template<typename ... ARGS>
-    explicit PreallocVector(TYPE* list, size_t count, ARGS&& ... args, ALLOC alloc = ALLOC(list, count)): base_t(/*std::forward<ARGS>(args) ...,*/ alloc) { init(); }
+    explicit PreallocVector(TYPE* list, size_t count, ARGS&& ... args, const ALLOC& alloc = default_alloc()): base_t(/*std::forward<ARGS>(args) ...,*/ (alloc != default_alloc)? alloc: ALLOC(list, count)) { init(std::forward<ARGS>(args) ...); }
     ~PreallocVector() { clup(); }
 private:
-    void init()
+    template<typename ... ARGS>
+    void init(ARGS&& ... args)
     {
 //        DEBUG(FMT("&list[0]  = %p") << &m_list[0] << ", sizeof list = " << sizeof(m_list));
         if (!CTOR_DTOR) return; //caller will handle it
-        DEBUG_MSG(CYAN_MSG << timestamp() << "PreallocVector: call ctor on " << capacity() << " " << TYPENAME() << "(s)" << ENDCOLOR);
-        for (size_t inx = 0; inx < capacity(); ++inx)
-            new (&this[inx]) TYPE(std::forward<ARGS>(args) ...); //placement new; perfect fwding
+        DEBUG_MSG(CYAN_MSG << timestamp() << "PreallocVector: call ctor on " << base_t::capacity() << " " << TYPENAME() << "(s)" << ENDCOLOR);
+//        for (size_t inx = 0; inx < base_t::capacity(); ++inx)
+//            new (&this[inx]) TYPE(std::forward<ARGS>(args) ...); //placement new; perfect fwding
     }
     void clup()
     {
         if (!CTOR_DTOR) return; //caller will handle it
-        DEBUG_MSG(CYAN_MSG << timestamp() << "PreallocVector: call dtor on " << capacity() << " " << TYPENAME() << "(s)" << ENDCOLOR);
-        for (size_t inx = 0; inx < capacity(); ++inx)
-            this[inx].~TYPE(); //call dtor
+        DEBUG_MSG(CYAN_MSG << timestamp() << "PreallocVector: call dtor on " << base_t::capacity() << " " << TYPENAME() << "(s)" << ENDCOLOR);
+//        for (size_t inx = 0; inx < base_t::capacity(); ++inx)
+//            base_t[inx].~TYPE(); //call dtor
     }
 //    ALLOC& m_alloc;
+    static const char* TYPENAME();
 };
 #if 0
 #pragma message("TODO: derive from above")

@@ -46,6 +46,10 @@
  #define ABS(n)  (((n) < 0)? -(n): (n))
 #endif
 
+#ifndef MAX
+ #define MAX(a, b)  (((a) < (b))? (a): (b))
+#endif
+
 #ifndef NAMED
  #define NAMED  /*SRCLINE,*/ [&](auto& _)
 #endif
@@ -119,19 +123,32 @@ class MsgQue //: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
 public: //utility methods
 //in-proc specialization:
 //    static inline std::enable_if<!IsMultiProc(MAX_THREADs), std::thread::id /*auto*/> thrid() { return std::this_thread::get_id(); }
-    static inline /*auto*/ std::string thrid()
+    static inline /*auto*/ const std::string& thrid_str()
     {
         std::stringstream ss;
         ss << std::this_thread::get_id(); //kludge: doesn't seem to serialize correctly so convert to string
+        DEBUG_MSG(BLUE_MSG << "thrid-thread " << ss.str() << ENDCOLOR);
         return ss.str();
     }
 //ipc specialization:
     template <bool ISMT_copy = ISMT, bool ISIPC_copy = ISIPC> //for function specialization
-    static inline std::enable_if<!ISMT_copy || ISIPC_copy, /*pid_t*/ /*auto*/ std::string> thrid()
+    static inline std::enable_if<!ISMT_copy || ISIPC_copy, /*pid_t*/ /*auto*/ const std::string&> thrid_str()
     {
         std::stringstream ss;
         ss << getpid(); //kludge: to be consistent with non-specialized version
+        DEBUG_MSG(BLUE_MSG << "thrid-proc " << ss.str() << ENDCOLOR);
         return ss.str();
+    }
+    static inline const std::string& thrid()
+    {
+        std::string retval = thrid_str();
+        if (retval.find_first_not_of("0123456789") == std::string::npos) //all numeric; put it in hex
+        {
+            std::stringstream ss;
+            ss << "0x" << std::hex << retval;
+            retval = ss.str();
+        }
+        return retval;
     }
 //    static inline auto thrid() { return getpid(); }
 //no worky    typedef decltype(thrid()) THRID;
@@ -157,10 +174,10 @@ private:
 //class MultiThreaded: public empty_mixin<MultiThreaded>
 //always present, might not be used (simpler than conditional defines)
         VOLATILE MutexWithFlag /*std::mutex*/ m_mutex;
-        std::unique_lock<VOLATILE std::mutex>* m_ulk;
+        std::unique_lock<VOLATILE std::mutex>* m_ulk; //only needed by wait on condvar
         std::condition_variable m_condvar;
         PreallocVector<THRID /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
-        THRID list_space[ABS(MAX_THREADs)];
+        THRID list_space[MAX(ABS(MAX_THREADs), 1)]; //allow space for at least main thread
     public: //ctor/dtor
 //    struct Unpacked {}; //ctor disambiguation tag
 //        explicit QueData(): QueData(NAMED{ /*SRCLINE*/; }) { DEBUG_MSG("ctor1"); }
@@ -177,7 +194,7 @@ private:
             int shmkey = 0; //shmem handling info
             bool want_reinit = false; //true;
         };
-        explicit QueData(const CtorParams& params, Unpacked): m_srcline(params.srcline), m_msg(params.msg), m_ulk(0), m_ids(list_space, ABS(MAX_THREADs)) { IF_DEBUG(strzcpy(m_name, params.name, sizeof(m_name))); }
+        explicit QueData(const CtorParams& params, Unpacked): m_srcline(params.srcline), m_msg(params.msg), m_ulk(0), m_ids(list_space, SIZEOF(list_space) /*ABS(MAX_THREADs)*/) { IF_DEBUG(strzcpy(m_name, params.name, sizeof(m_name))); }
         ~QueData()
         {
             if (m_msg) DETAILS_MSG(RED_MSG << timestamp() << "QueData-" << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR_ATLINE(m_srcline)) //benign, but might be caller bug so complain
@@ -257,7 +274,7 @@ private:
 //        std::unique_lock<VOLATILE std::mutex> scoped_lock(m_ptr->mutex);
 //        scoped_lock lock;
 //        m_condvar.wait(scoped_lock());
-            /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_ptr->name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
+            /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
 //            while (!(this->*filter)(operand)) busycb? busycb(): yield(); //m_ptr->condvar.wait(scoped_lock); //ignore spurious wakeups
 //            auto waitfor = busycb; //[cb, m_condvar&]() { m_condvar.wait(scoped_lock); if (cb) cb(); }; //ignore spurious wakeups
 //            return base_t::rcv(filter, operand, waitfor, remove, srcline);
@@ -306,11 +323,13 @@ private:
 //        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
             return rcv(params.filter, params.operand, /*params.busycb,*/ params.remove, params.srcline);
         }
+//specialization no worky, so do it all the time:
 //convert system-defined id into sequentially assigned index:
-        inline int thinx(THRID id = thrid()) { return 0; }
+//        inline int thinx(THRID id = thrid()) { return 0; } //only one possible value if no threads
 //in-proc/ipc specialization:
-        template <bool ISMT_copy = ISMT> //for function specialization
-        std::enable_if<ISMT_copy, int> thrinx(THRID id = thrid())
+//        template <bool ISMT_copy = ISMT> //for function specialization
+//        std::enable_if<ISMT_copy, int> thrinx(THRID id = thrid())
+        int thrinx(THRID id = thrid())
         {
 //        std::lock_guard<std::mutex> lock(m);
 //        std::unique_lock<decltype(m_mutex)> scoped_lock(m_mutex);
@@ -323,7 +342,7 @@ private:
 //    ss << THRID;
 //    ss << ofs;
 //    return ss.str();
-            ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << FMT("', thread id 0x%lx") << id << " => thr inx " << ofs << ENDCOLOR);
+            ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << "', thread id " << id << " => thr inx " << ofs << ENDCOLOR);
             return ofs;
         }
 #if 1
