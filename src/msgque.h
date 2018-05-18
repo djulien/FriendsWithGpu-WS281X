@@ -20,6 +20,7 @@
 #include <type_traits> //std::conditional<>, std::decay<>, std::remove_reference<>, std::remove_pointer<>
 #include <tr2/type_traits> //std::tr2::direct_bases<>, std::tr2::bases<>
 #include <chrono> //std::chrono
+#include <string> //std::stol()
 
 #include "shmalloc.h"
 #include "srcline.h"
@@ -93,6 +94,7 @@ char* strzcpy(char* dest, const char* src, size_t maxlen)
 //BASE base_of(DERIVED BASE::*);
 
 
+#if 0
 //kludge: ostream::opeartor<<() doesn't work with std::thread::id, so convert to int:
 //class MyThreadId: public std::thread::id
 //{
@@ -104,6 +106,8 @@ std::ostream& operator<<(std::ostream& ostrm, std::thread::id thrid)
     ostrm << thrid;
     return ostrm;
 }
+#endif
+
 
 //partial specialization selectors:
 #define IsMultiThreaded(num_threads)  ((num_threads) != 0)
@@ -120,62 +124,76 @@ template <int MAX_THREADs = 0, bool ISMT = IsMultiThreaded(MAX_THREADs), bool IS
 class MsgQue //: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
 {
     struct Unpacked {}; //ctor disambiguation tag
-public: //utility methods
 //in-proc specialization:
 //    static inline std::enable_if<!IsMultiProc(MAX_THREADs), std::thread::id /*auto*/> thrid() { return std::this_thread::get_id(); }
-    static inline /*auto*/ const std::string& thrid_str()
+//    static inline std::stringstream& ss(bool init = false)
+//    {
+//        static std::stringstream sstrm; //need "static" to preserve data after return to caller
+//        if (init) std::stringstream().swap(sstrm); //{ sstrm.str(""); sstram.clear(); } //std::string()); //.clear(); //https://stackoverflow.com/questions/20731/how-do-you-clear-a-stringstream-variable
+//        return sstrm;
+//    }
+    static inline /*auto*/ /*const*/ std::string& thrid_str()
     {
+        static std::string retval; //need "static" to preserve data after return to caller
         std::stringstream ss;
         ss << std::this_thread::get_id(); //kludge: doesn't seem to serialize correctly so convert to string
-        DEBUG_MSG(BLUE_MSG << "thrid-thread " << ss.str() << ENDCOLOR);
-        return ss.str();
+        retval = ss.str();
+//        DEBUG_MSG(BLUE_MSG << "thrid-thread " << retval << ENDCOLOR);
+        return retval;
     }
 //ipc specialization:
     template <bool ISMT_copy = ISMT, bool ISIPC_copy = ISIPC> //for function specialization
-    static inline std::enable_if<!ISMT_copy || ISIPC_copy, /*pid_t*/ /*auto*/ const std::string&> thrid_str()
+    static inline std::enable_if<!ISMT_copy || ISIPC_copy, /*pid_t*/ /*auto*/ /*const*/ std::string&> thrid_str()
     {
-        std::stringstream ss;
+        static std::string retval; //need "static" to preserve data after return to caller
+        std::stringstream ss; 
         ss << getpid(); //kludge: to be consistent with non-specialized version
-        DEBUG_MSG(BLUE_MSG << "thrid-proc " << ss.str() << ENDCOLOR);
-        return ss.str();
+        retval = ss.str();
+//        DEBUG_MSG(BLUE_MSG << "thrid-proc " << retval << ENDCOLOR);
+        return retval;
     }
+public: //utility methods
+//kludge: wrap specialization functions so caller sees uniform type:
     static inline const std::string& thrid()
     {
-        std::string retval = thrid_str();
+        std::string& retval = thrid_str(); //NOTE: ref to "static", preserves data after return to caller
+#if 0 //not too useful
         if (retval.find_first_not_of("0123456789") == std::string::npos) //all numeric; put it in hex
         {
             std::stringstream ss;
-            ss << "0x" << std::hex << retval;
+            ss << "0x" << std::hex << std::stoll(retval);
             retval = ss.str();
         }
+#endif
         return retval;
     }
 //    static inline auto thrid() { return getpid(); }
 //no worky    typedef decltype(thrid()) THRID;
 //    typedef std::thread::id THRID;
 //    static std::enable_if<WANT_IPC, auto> thrid() { return getpid(); }
-    typedef /*decltype(thrid())*/ std::string THRID;
+    typedef /*decltype(thrid())*/ std::string THRID; //caller wants concrete type :()
 //private:
 //    static void yield() { sleep_msec(1); }
 //polling needed for single-threaded caller:
     static void sleep_msec(int msec) { std::this_thread::sleep_for(std::chrono::milliseconds(msec)); }
 private:
-//actual que data is wrapped in smart ptr so it can be placed in sh mem rather than heap:
+//wrap que data in smart ptr so it can be placed in sh mem rather than heap:
     class QueData
     {
 //    protected: //members
     private: //members
         IF_DEBUG(char m_name[20]); //store name directly in object; can't use char* because mapped address could vary between procs
-        /*volatile*/ int m_msg;
+        /*volatile*/ int m_msgs;
         SrcLine m_srcline;
 //multi-threading specialization:
 //need mutex + cond var for thread serialization, shmem key for ipc
 //use operator-> to auto-lock during methods
 //class MultiThreaded: public empty_mixin<MultiThreaded>
-//always present, might not be used (simpler than conditional defines)
-        VOLATILE MutexWithFlag /*std::mutex*/ m_mutex;
-        std::unique_lock<VOLATILE std::mutex>* m_ulk; //only needed by wait on condvar
+//kludge: always present, might not be used (simpler than conditional defines, avoids specialization problems)
+//        VOLATILE MutexWithFlag /*std::mutex*/ m_mutex;
+        VOLATILE std::mutex m_mutex;
         std::condition_variable m_condvar;
+        std::unique_lock</*VOLATILE std::mutex*/ decltype(m_mutex)>* m_ulk; //kludge: expose for wait on condvar
         PreallocVector<THRID /*, MAX_THREADS*/> m_ids; //list of registered thread ids; no-NOTE: must be last data member
         THRID list_space[MAX(ABS(MAX_THREADs), 1)]; //allow space for at least main thread
     public: //ctor/dtor
@@ -188,34 +206,35 @@ private:
         struct CtorParams //: public CtorParams
         {
             IF_DEBUG(const char* name = 0);
-            int msg = 0;
+            int msgs = 0;
             SrcLine srcline = 0;
 //multi-process specialization:
-            int shmkey = 0; //shmem handling info
-            bool want_reinit = false; //true;
+//kludge: always present, might not be used (simpler than conditional defines, avoids specialization problems)
+//            int shmkey = 0; //shmem handling info
+//            bool want_reinit = false; //true;
         };
-        explicit QueData(const CtorParams& params, Unpacked): m_srcline(params.srcline), m_msg(params.msg), m_ulk(0), m_ids(list_space, SIZEOF(list_space) /*ABS(MAX_THREADs)*/) { IF_DEBUG(strzcpy(m_name, params.name, sizeof(m_name))); }
+        explicit QueData(const CtorParams& params, Unpacked): m_srcline(params.srcline), m_msgs(params.msgs), m_ulk(0), m_ids(list_space, SIZEOF(list_space) /*ABS(MAX_THREADs)*/) { IF_DEBUG(strzcpy(m_name, params.name, sizeof(m_name))); }
         ~QueData()
         {
-            if (m_msg) DETAILS_MSG(RED_MSG << timestamp() << "QueData-" << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msg << ENDCOLOR_ATLINE(m_srcline)) //benign, but might be caller bug so complain
+            if (m_msgs) DETAILS_MSG(RED_MSG << timestamp() << "QueData-" << m_name << ".dtor: !empty @exit " << FMT("0x%x") << m_msgs << ENDCOLOR_ATLINE(m_srcline)) //benign, but might be caller bug so complain
             else DEBUG_MSG(GREEN_MSG << timestamp() << "QueData-" << m_name << ".dtor: empty @exit" << ENDCOLOR_ATLINE(m_srcline));
         }
     public: //operators
         /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const QueData& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
         { 
 //        ostrm << "MsgQue<" << MAX_THREADs << ">{" << eatch(2) << IF_DEBUG(", name '" << me.m_name << "'" <<) ", msg " << FMT("0x%x") << me.m_msg << ", srcline " << me.m_srcline << "}";
-            ostrm << eatch(2) << IF_DEBUG(", name '" << me.m_name << "'" <<) ", msg " << FMT("0x%x") << me.m_msg << ", srcline " << me.m_srcline;
+            ostrm << eatch(2) << IF_DEBUG(", name '" << me.m_name << "'" <<) ", msg " << FMT("0x%x") << me.m_msgs << ", srcline " << me.m_srcline;
             ostrm << ", ids(" << me.m_ids.size() << "): " << me.m_ids.join(",", "(none)"); //only for multi-threaded
 //            ostrm << ", shmkey " << me.m_shmkey << ", want_reinit " << me.m_want_reinit; //only for multi-proc
             return ostrm;
         }
-        inline QueData* operator->() { return this; } //placeholder for smart pointer in derived class
-    public: //queue manip methods
+        inline QueData* operator->() { return this; } //placeholder for smart pointer specialization
+    public: //queue manip methods; NOTE: caller is reponsible for surrounding lock/unlock, or automatic thru operator->()
         QueData* clear()
         {
 //        scoped_lock lock;
 //        std::unique_lock<VOLATILE std::mutex> scoped_lock(m_ptr->mutex);
-            m_msg = 0;
+            m_msgs = 0;
             return this; //fluent
         }
 //    MsgQue& send(SrcLine mySrcLine = 0, void (*get_params)(struct SendParams&) = 0)
@@ -228,44 +247,26 @@ private:
 //        scoped_lock lock;
 //        std::unique_lock<VOLATILE std::mutex> scoped_lock(m_ptr->mutex);
 //        if (m_count >= MAXLEN) throw new Error("MsgQue.send: queue full (" MAXLEN ")");
-            if (m_msg & msg) throw "QueData.send: msg already queued"; // + tostr(msg) + " already queued");
-            m_msg |= msg; //use bitmask for multiple msgs
-            if (!(m_msg & msg)) throw "QueData.send: msg enqueue failed"; // + tostr(msg) + " failed");
-        /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".send " << FMT("0x%x") << msg /*<< " to " << (broadcast? "all": "one")*/ << ", now qued " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
+            if (m_msgs & msg) throw "QueData.send: msg already queued"; // + tostr(msg) + " already queued");
+            m_msgs |= msg; //use bitmask for multiple msgs
+            if (!(m_msgs & msg)) throw "QueData.send: msg enqueue failed"; // + tostr(msg) + " failed");
+        /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".send " << FMT("0x%x") << msg /*<< " to " << (broadcast? "all": "one")*/ << ", now qued " << FMT("0x%x") << m_msgs << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
             if (!broadcast) m_condvar.notify_one(); //wake main thread
             else m_condvar.notify_all(); //wake *all* wker threads
             return this; //fluent
         }
-        struct SendParams
-        {
-            int msg = 0; //initial queue contents
-            bool broadcast = false; //send to all listeners when new msg arrives
-            SrcLine srcline = 0; //SRCLINE; //debug call stack
-        }; //FuncParams() { s = "none"; i = 999; b = true; }}; // FuncParams;
-//    MsgQue* send(int msg, /*bool broadcast = false,*/ SrcLine srcline = 0)
-        template <typename CALLBACK>
-        QueData* send(CALLBACK&& named_params)
-        {
-            /*static*/ struct SendParams params; //reinit each time; comment out for sticky defaults
-//        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
-//        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
-            auto thunk = [](auto get_params, struct SendParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
-            thunk(named_params, params);
-//        ret_params = params;
-//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
-            return send(params.msg, /*params.broadcast,*/ params.srcline);
-        }
 //rcv filters:
-        bool any(int ignored) { DETAILS_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " want any" << ENDCOLOR); return m_msg; }
-        bool wanted(int val) { /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return m_msg == val; }
-        bool not_wanted(int val) { /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << FMT("0x%x") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return m_msg != val; }
+//        bool any(int ignored) { DETAILS_MSG(BLUE_MSG << timestamp() << FMT("msgs 0x%x,") << m_msg << " wanted any" << ENDCOLOR); return (m_msg |= 0); }
+//        bool wanted(int val) { /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << FMT("msgs 0x%x,") << m_msg << " wanted " << FMT("0x%x") << val << "? " << (m_msg == val) << ENDCOLOR); return (m_msg == val); }
+//        bool not_wanted(int val) { /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << FMT("msgs 0x%x,") << m_msg << " !wanted " << FMT("0x%x") << val << "? " << (m_msg != val) << ENDCOLOR); return (m_msg != val); }
 //no worky:    typedef decltype(wanted) cbFilter;
-        typedef bool (QueData::*QueFilter)(int);
+//        typedef bool (QueData::*QueFilter)(int);
 //        typedef void (QueData::*QueBusy)(void);
 //    bool any(int ignored) { return true; } //don't use this (doesn't work due to spurious wakeups)
 //    struct RcvParams { bool (MsgQue::*filter)(int val) = 0, int operand = 0, bool remove = false, SrcLine srcline = SRCLINE; };
 //        template <typename CALLBACK>
-        int rcv(/*bool (QueData::*filter)(int val)*/ QueFilter filter = &QueData::any, int operand = 0, /*bool (*cb)() decltype(wanted) cb*/ /*CALLBACK&& busycb = 0,*/ bool remove = false, SrcLine srcline = 0)
+//        int rcv(/*bool (QueData::*filter)(int val)*/ QueFilter filter = &QueData::any, int operand = 0, /*bool (*cb)() decltype(wanted) cb*/ /*CALLBACK&& busycb = 0,*/ bool remove = false, SrcLine srcline = 0)
+        int rcv(int wanted = 0, int unwanted = 0, /*bool (*cb)() decltype(wanted) cb*/ /*CALLBACK&& busycb = 0,*/ bool remove = false, SrcLine srcline = 0)
 //    int rcv(SrcLine mySrcLine = 0, void (*get_params)(struct RcvParams&) = 0)
         {
 //        /*static*/ struct RcvParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
@@ -274,15 +275,28 @@ private:
 //        std::unique_lock<VOLATILE std::mutex> scoped_lock(m_ptr->mutex);
 //        scoped_lock lock;
 //        m_condvar.wait(scoped_lock());
-            /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".rcv: op " << FMT("0x%x") << operand << ", msg " << FMT("0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
+//            /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".rcv: wanted " << FMT("0x%x") << wanted << FMT(", unwanted 0x%x") << unwanted << FMT(", msg 0x%x") << m_msg << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
 //            while (!(this->*filter)(operand)) busycb? busycb(): yield(); //m_ptr->condvar.wait(scoped_lock); //ignore spurious wakeups
 //            auto waitfor = busycb; //[cb, m_condvar&]() { m_condvar.wait(scoped_lock); if (cb) cb(); }; //ignore spurious wakeups
 //            return base_t::rcv(filter, operand, waitfor, remove, srcline);
-            while (!(this->*filter)(operand)) //ignore spurious wakeups
+//            while (!(this->*filter)(operand)) //ignore spurious wakeups
+//            int mask = wanted | ~unwanted;
+            for (;;)
+            {
+                /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".rcv: wanted " << FMT("0x%x") << wanted << FMT(", unwanted 0x%x") << unwanted << FMT(", msgs 0x%x") << m_msgs << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
+// wanted  unwanted  return?
+//    0         0     msgs != 0   (any)
+//   !0         0     (msgs & wanted) != 0
+//    0        !0     (msgs & unwanted) == 0          or maybe (msgs & !unwanted) != 0 ??
+//   !0        !0     (msgs & wanted) && !(msgs & unwanted)
+//   !0     ~wanted   msgs == wanted      //exact match
+                if (wanted == ~unwanted) { if (m_msgs == wanted) break; }
+                else if (m_msgs && (m_msgs & wanted) && !(m_msgs & unwanted)) break;
                 if (m_ulk) m_condvar.wait(*m_ulk); //scoped_lock);
                 else sleep_msec(1); //cooperative multi-tasking (caller must update queue)
-            int retval = m_msg;
-            if (remove) m_msg = 0;
+            }
+            int retval = m_msgs;
+            if (remove) m_msgs = 0; //m_msgs &= ~wanted | unwanted;
             return retval;
 #if 0
         auto_ptr<SDL_LockedMutex> lock_HERE(mutex.cast); //SDL_LOCK(mutex));
@@ -299,13 +313,60 @@ private:
         return data;
 #endif
         }
+//specialization no worky, so do it all the time:
+//convert system-defined id into sequentially assigned index:
+//        inline int thinx(THRID id = thrid()) { return 0; } //only one possible value if no threads
+//in-proc/ipc specialization:
+//        template <bool ISMT_copy = ISMT> //for function specialization
+//        std::enable_if<ISMT_copy, int> thrinx(THRID id = thrid())
+        int thrinx(THRID id = thrid())
+        {
+//        std::lock_guard<std::mutex> lock(m);
+//        std::unique_lock<decltype(m_mutex)> scoped_lock(m_mutex);
+//NOTE: use op->() for shm safety with ipc
+            int ofs = m_ids.find_or_push(id);
+//            if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR_NOLINE);
+//            if (ofs == -1) ofs = m_ids.push_and_find(id); //{ ofs = m_ids.size(); m_ids.push_back(id); } //ofs = ids.push_and_find(id);
+//    std::stringstream ss;
+//    ss << thrid;
+//    ss << THRID;
+//    ss << ofs;
+//    return ss.str();
+            ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << "', thread id " << id << " => thr inx " << ofs << ENDCOLOR);
+            return ofs;
+        }
+public: //named param variations:
+//    MsgQue* send(int msg, /*bool broadcast = false,*/ SrcLine srcline = 0)
+        struct SendParams
+        {
+            int msg = 1<<0; //msg# to send
+            bool broadcast = false; //send to all listeners when new msg arrives
+            SrcLine srcline = 0; //SRCLINE; //debug call stack
+        }; //FuncParams() { s = "none"; i = 999; b = true; }}; // FuncParams;
+        template <typename CALLBACK>
+        QueData* send(CALLBACK&& named_params)
+        {
+            /*static*/ struct SendParams params; //reinit each time; comment out for sticky defaults
+//        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
+//        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
+            auto thunk = [](auto get_params, struct SendParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+            thunk(named_params, params);
+//        ret_params = params;
+//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
+            return send(params.msg, /*params.broadcast,*/ params.srcline);
+        }
         struct RcvParams
         {
+#if 0
 //        bool (QueData::*filter)(int val); //check for matching queue entry
-            QueFilter filter = &QueData::wanted; //check for matching queue entry
+            QueFilter filter = &QueData::any; //wanted; //check for matching queue entry
             int operand = 0; //filter operand
 //        bool (*cb)(int) = 0; //additional logic when queue is busy
 //        decltype(wanted) cb = 0; //additional logic when queue is busy
+#else
+            int wanted = 0; //filter for wanted msgs
+            int unwanted = 0; //filter for unwanted msgs
+#endif
 //            QueBusy busycb = 0; //additional logic when queue is busy
             bool remove = false; //remove queue entry when received
             SrcLine srcline = 0; //debug call stack
@@ -321,29 +382,8 @@ private:
             thunk(named_params, params);
 //        ret_params = params;
 //        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
-            return rcv(params.filter, params.operand, /*params.busycb,*/ params.remove, params.srcline);
-        }
-//specialization no worky, so do it all the time:
-//convert system-defined id into sequentially assigned index:
-//        inline int thinx(THRID id = thrid()) { return 0; } //only one possible value if no threads
-//in-proc/ipc specialization:
-//        template <bool ISMT_copy = ISMT> //for function specialization
-//        std::enable_if<ISMT_copy, int> thrinx(THRID id = thrid())
-        int thrinx(THRID id = thrid())
-        {
-//        std::lock_guard<std::mutex> lock(m);
-//        std::unique_lock<decltype(m_mutex)> scoped_lock(m_mutex);
-//NOTE: use op->() for shm safety with ipc
-            int ofs = m_ids.find(id);
-            if (ofs != -1) throw std::runtime_error(RED_MSG "thrid: duplicate thread id" ENDCOLOR_NOLINE);
-            if (ofs == -1) { ofs = m_ids.size(); m_ids.push_back(id); } //ofs = ids.push_and_find(id);
-//    std::stringstream ss;
-//    ss << thrid;
-//    ss << THRID;
-//    ss << ofs;
-//    return ss.str();
-            ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << "', thread id " << id << " => thr inx " << ofs << ENDCOLOR);
-            return ofs;
+//            return rcv(params.filter, params.operand, /*params.busycb,*/ params.remove, params.srcline);
+            return rcv(params.wanted, params.unwanted, /*params.busycb,*/ params.remove, params.srcline);
         }
 #if 1
     private:
@@ -357,7 +397,7 @@ private:
         public: //ctor/dtor to wrap lock/unlock
 //            unlock_after(QueData* ptr): m_ptr(ptr) { DEBUG_MSG("lock now"); /*if (AUTO_LOCK)*/ m_ptr->m_mutex.lock(); }
 //            ~unlock_after() { DEBUG_MSG("unlock later"); /*if (AUTO_LOCK)*/ m_ptr->m_mutex.unlock(); }
-            unlock_after(QueData* ptr): m_ptr(ptr) { DEBUG_MSG("lock now"); m_ptr->m_ulk = new std::unique_lock<VOLATILE std::mutex>(ptr->mutex); }
+            unlock_after(QueData* ptr): m_ptr(ptr) { DEBUG_MSG("lock now"); m_ptr->m_ulk = new decltype(*m_ptr->m_ulk)(ptr->m_mutex); } //std::unique_lock<VOLATILE std::mutex>(ptr->mutex); }
             ~unlock_after() { DEBUG_MSG("unlocked after"); delete m_ptr->m_ulk; m_ptr->m_ulk = 0; }
         public:
             inline QueData* operator->() { return this; } //allow access to wrapped members
@@ -408,7 +448,7 @@ private: //helpers
     explicit MsgQue(const CtorParams& params, Unpacked): m_ptr(NAMED{ _.shmkey = params.shmkey; _.persist = params.persist; _.srcline = params.srcline; })
     {
         if (!m_ptr.existed() || params.want_reinit) new (m_ptr) /*decltype(*m_ptr)*/ QueData(params, Unpacked{}); //placement new; init after shm alloc but before usage; don't init if already there; 
-        DEBUG_MSG(CYAN_MSG << "MsgQue ctor (unpacked): " << FMT("%p") << &*m_ptr << FMT(", shmkey 0x%x") << params.shmkey << ", persist " << params.persist << ", reinit " << params.want_reinit << ", " << *m_ptr << ENDCOLOR);
+        DEBUG_MSG(CYAN_MSG << "MsgQue ctor (unpacked): " << FMT("@%p") << &*m_ptr << FMT(", shmkey 0x%x") << params.shmkey << ", persist " << params.persist << ", reinit " << params.want_reinit << ", " << *m_ptr << ENDCOLOR);
     }
     template <typename CALLBACK>
     static struct CtorParams& unpack(CALLBACK&& named_params)
@@ -1515,12 +1555,13 @@ std::mutex ShmMsgQue::m_mutex;
 #include <iostream> //std::cout, std::flush
 #include <thread> //std::this_thread
 #include <chrono> //std::chrono
+#include "atomic.h"
 #include "msgcolors.h"
 #include "elapsed.h" //timestamp()
 
-#ifndef MSG
- #define MSG(msg)  { std::cout << timestamp() << msg << "\n" << std::flush; }
-#endif
+//#ifndef MSG
+// #define MSG(msg)  { std::cout << timestamp() << msg << "\n" << std::flush; }
+//#endif
 
 
 void sleep_msec(int msec)
@@ -1532,16 +1573,17 @@ void sleep_msec(int msec)
 #define MAX_THREADs  1
 #include "shmkeys.h"
 MsgQue<MAX_THREADs> testq(NAMED{ _.name = "testq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
- 
+template<> const char* PreallocVector<std::string>::TYPENAME() { return "PreallocVector<std::string>"; }
+template<> const char* FixedAlloc<std::string>::TYPENAME() { return "FixedAlloc<std::string>"; }
 
 void child_proc()
 {
     sleep_msec(500);
-    MSG("child start, send");
+    ATOMIC_MSG(PINK_MSG << timestamp() << "child start, send" << ENDCOLOR);
     testq->send(NAMED{ _.msg = 1<<0; SRCLINE; });
-    int qe = testq->rcv(NAMED{ SRCLINE; });
-    MSG(FMT("child rcv got 0x%x") << qe);
-    MSG("child exit");
+    int qret = testq->rcv(NAMED{ _.wanted = 1<<1; SRCLINE; }); //don't rcv msg just sent
+    ATOMIC_MSG(BLUE_MSG << timestamp() << FMT("child rcv got 0x%x") << qret << ENDCOLOR);
+    ATOMIC_MSG(PINK_MSG << timestamp() << "child exit" << ENDCOLOR);
 }
 
 
@@ -1549,19 +1591,19 @@ void child_proc()
 void unit_test()
 {
     std::thread child(child_proc);
-    std::string thrid = testq.thrid();
-    int thrinx = testq->thrinx();
-    MSG("main start, thrid " << thrid << ", thrinx " << thrinx);
-    MSG("rcv");
-    int qe = testq->rcv(NAMED{ SRCLINE; });
-    MSG(FMT("main rcv got 0x%x") << qe);
+//    std::string thrid = testq.thrid();
+//    int thrinx = testq->thrinx();
+    ATOMIC_MSG(PINK_MSG << timestamp() << "main start, thrid " << testq.thrid() << ", thrinx " << testq->thrinx() << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << timestamp() << "rcv" << ENDCOLOR);
+    int qret = testq->rcv(NAMED{ SRCLINE; });
+    ATOMIC_MSG(BLUE_MSG << timestamp() << FMT("main rcv got 0x%x") << qret << ENDCOLOR);
 
     sleep_msec(500);
-    MSG("main send 1");
-    testq->send(NAMED{ _.msg = 1<<0; SRCLINE; });
-    MSG("main join");
+    ATOMIC_MSG(BLUE_MSG << timestamp() << "main send 1" << ENDCOLOR);
+    testq->send(NAMED{ _.msg = 1<<1; SRCLINE; });
+    ATOMIC_MSG(BLUE_MSG << timestamp() << "main join" << ENDCOLOR);
     child.join();
-    MSG("done");
+    ATOMIC_MSG(PINK_MSG << timestamp() << "done" << ENDCOLOR);
 
 //    return 0;
 }

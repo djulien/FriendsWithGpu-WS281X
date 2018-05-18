@@ -1,6 +1,6 @@
 //std::vector extensions
 
-#define VECTOR_DEBUG
+//#define VECTOR_DEBUG
 
 
 #ifndef _VECTOREX_H
@@ -73,14 +73,14 @@ public: //debug
 public: //extensions
 //    template <typename TYPE_copy = TYPE> //universal ref
 //    int find(/*const*/ TYPE_copy&& that)
-    int find(const TYPE& that) //rvalue ref only
+    int find(const TYPE& that) const //rvalue ref only
     {
 //        for (auto& val: *this) if (val == that) return &that - this;
         for (auto it = this->begin(); it != this->end(); ++it)
             if (*it == that) return it - this->begin();
         return -1;
     }
-    std::string join(const char* sep = ",", const char* if_empty = "")
+    std::string join(const char* sep = ",", const char* if_empty = "") const
     {
         std::stringstream buf;
         for (auto it = this->begin(); it != this->end(); ++it)
@@ -98,6 +98,14 @@ public: //extensions
     {
         int retval = /*this->*/size();
         /*this->*/push_back(that);
+        if (find(that) != retval) throwprintf("found entry at %d rather than %d", find(that), retval);
+        return retval;
+    }
+    template <typename TYPE_copy = TYPE> //universal ref (lvalue or rvalue)
+    int find_or_push(/*const*/ TYPE_copy&& that)
+    {
+        int retval = /*this->*/find(that);
+        if (retval == -1) retval = push_and_find(that);
         return retval;
     }
 };
