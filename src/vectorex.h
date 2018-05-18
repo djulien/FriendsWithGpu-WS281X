@@ -53,18 +53,27 @@ const char* bufprintf(SrcLine srcline, ...)
 
 //extended vector:
 //adds find() and join() methods
+//info about universal refs: https://isocpp.org/blog/2012/11/universal-references-in-c11-scott-meyers
 template<typename TYPE, class ALLOC = std::allocator<TYPE>>
 class vector_ex: public std::vector<TYPE, ALLOC>
 {
+    typedef std::vector<TYPE, ALLOC> base_t;
 public: //ctors
 //    static std::allocator<TYPE> def_alloc; //default allocator; TODO: is this needed?
 //    /*explicit*/ vector_ex() {}
 //    explicit vector_ex(std::size_t count, const std::allocator<TYPE>& alloc = def_alloc): std::vector<TYPE>(count, alloc) {}
 //    explicit vector_ex(std::size_t count = 0, const ALLOC& alloc = ALLOC()): std::vector<TYPE>(count, alloc) {}
     template<typename ... ARGS>
-    explicit vector_ex(ARGS&& ... args): std::vector<TYPE, ALLOC>(std::forward<ARGS>(args) ...) {} //perfect fwd
+    explicit vector_ex(ARGS&& ... args): base_t(std::forward<ARGS>(args) ...) {} //perfect fwd
+public: //debug
+    void reserve(size_t count) { DEBUG_MSG(BLUE_MSG << "reserve " << count << ENDCOLOR); base_t::reserve(count); }
+    size_t size() const { DEBUG_MSG(BLUE_MSG << "size " << base_t::size() << ENDCOLOR); return base_t::size(); }
+    template <typename TYPE_copy = TYPE> //universal ref (lvalue or rvalue)
+    void push_back(/*const*/ TYPE_copy&& that) { DEBUG_MSG(BLUE_MSG << "push back " << that << ENDCOLOR); base_t::push_back(that); }
 public: //extensions
-    int find(const TYPE&& that)
+//    template <typename TYPE_copy = TYPE> //universal ref
+//    int find(/*const*/ TYPE_copy&& that)
+    int find(const TYPE& that) //rvalue ref only
     {
 //        for (auto& val: *this) if (val == that) return &that - this;
         for (auto it = this->begin(); it != this->end(); ++it)
@@ -84,10 +93,11 @@ public: //extensions
         return buf.str().substr(strlen(sep));
     }
 //atomic push + find operation (if wrapped with mutex/lock):
-    int push_and_find(const TYPE&& that)
+    template <typename TYPE_copy = TYPE> //universal ref (lvalue or rvalue)
+    int push_and_find(/*const*/ TYPE_copy&& that)
     {
-        int retval = this->size();
-        this->push_back(that);
+        int retval = /*this->*/size();
+        /*this->*/push_back(that);
         return retval;
     }
 };
@@ -142,9 +152,9 @@ struct FixedAlloc: public ExampleAllocator<TYPE>
 //    FixedAlloc(const FixedAlloc<OTHER>& other) noexcept {} //converting copy ctor (more efficient than C++03)
 //    template<class OTHER>
     template<typename ... ARGS>
-    FixedAlloc(size_t limit = 0, ARGS&& ... args) noexcept: FixedAlloc(m_data.list, limit, std::forward<ARGS>(args) ...) {}
+    FixedAlloc(size_t limit = 0, ARGS&& ... args) noexcept: FixedAlloc(m_data.list, limit, std::forward<ARGS>(args) ...) { DEBUG_MSG(BLUE_MSG << "fixed alloc !list " << limit << ENDCOLOR); }
     template<typename ... ARGS>
-    FixedAlloc(TYPE* list, size_t limit = 0, ARGS&& ... args) noexcept: base_t(std::forward<ARGS>(args) ...), m_list(list), m_limit(limit), m_alloc(0) {}
+    FixedAlloc(TYPE* list, size_t limit = 0, ARGS&& ... args) noexcept: base_t(std::forward<ARGS>(args) ...), m_list(list), m_limit(limit), m_alloc(0) { DEBUG_MSG(BLUE_MSG << "fixed alloc list " << limit << ENDCOLOR); }
     template<class OTHER>
     bool operator==(const FixedAlloc<OTHER>& other) const noexcept { return this == &other; } //true; }
     template<class OTHER>
@@ -152,8 +162,8 @@ struct FixedAlloc: public ExampleAllocator<TYPE>
     TYPE* allocate(const size_t count) //const
     {
         if (!count) return nullptr;
-        if (m_alloc) throw "bad alloc: already allocated"; //std::bad_alloc();
         if (count > /*static_cast<size_t>(-1) / sizeof(TYPE)*/ m_limit) throwprintf("FixedAlloc: bad alloc length %d vs. allowed limit %d", count, m_limit); //throw std::bad_array_new_length();
+        if (m_alloc) throwprintf("bad alloc: already allocated"); //std::bad_alloc();
 //        void* const ptr = m_heap? m_heap->alloc(count * sizeof(TYPE), key, srcline): shmalloc(count * sizeof(TYPE), key, srcline);
 //            void* const ptr = m_heap? memalloc<false>(count * sizeof(TYPE), key, srcline): memalloc<true>(count * sizeof(TYPE), key, srcline);
         DEBUG_MSG(YELLOW_MSG << timestamp() << "FixedAlloc: allocated " << count << " " << TYPENAME() << "(s) at " << FMT("%p") << m_list << ENDCOLOR);
@@ -168,7 +178,7 @@ struct FixedAlloc: public ExampleAllocator<TYPE>
     void deallocate(TYPE* const ptr, size_t count = 1) //const noexcept //noop
     {
         if (count != m_alloc) throwprintf("bad partial dealloc: %d of %d", count, m_alloc); //throw std::bad_alloc(); //should be all or nothing
-        DEBUG_MSG(YELLOW_MSG << timestamp() << "ExampleAllocator: deallocate " << count << " " << TYPENAME() << "(s) at " << FMT("%p") << ptr << " (not really)" << ENDCOLOR);
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "FixedAlloc: non-deallocate " << count << " " << TYPENAME() << "(s) at " << FMT("%p") << ptr << " (not really)" << ENDCOLOR);
 //        if (CTOR_DTOR)
 //            for (size_t inx = 0; inx < m_data.count; ++inx)
 //                m_list[inx].~TYPE(); //call dtor
@@ -203,10 +213,10 @@ class PreallocVector: public vector_ex<TYPE, ALLOC> //vector_ex<TYPE>::FixedAllo
 //    struct { size_t count; TYPE list[0]; } m_data; //NOTE: need struct for alignment/packing; NOTE: must come last (preallocated data follows); //std::max(SIZE, 1)];
 public: //ctors
     template<typename ... ARGS>
-    explicit PreallocVector(size_t count, ARGS&& ... args, const ALLOC& alloc = default_alloc()): base_t(std::forward<ARGS>(args) ..., (alloc != default_alloc())? alloc: ALLOC(count)) { init(count); } //std::forward<ARGS>(args) ...); }
+    explicit PreallocVector(size_t count, ARGS&& ... args, const ALLOC& alloc = default_alloc()): base_t(std::forward<ARGS>(args) ..., (alloc != default_alloc())? alloc: ALLOC(count)) { DEBUG_MSG(BLUE_MSG << "prealloc ctor1" << ENDCOLOR); init(count); } //std::forward<ARGS>(args) ...); }
     template<typename ... ARGS>
-    explicit PreallocVector(TYPE* list, size_t count, ARGS&& ... args, const ALLOC& alloc = default_alloc()): base_t(std::forward<ARGS>(args) ..., (alloc != default_alloc())? alloc: ALLOC(list, count)) { init(count); } //std::forward<ARGS>(args) ...); }
-    ~PreallocVector() { clup(); }
+    explicit PreallocVector(TYPE* list, size_t count, ARGS&& ... args, const ALLOC& alloc = default_alloc()): base_t(std::forward<ARGS>(args) ..., (alloc != default_alloc())? alloc: ALLOC(list, count)) { DEBUG_MSG(BLUE_MSG << "prealloc ctor2" << ENDCOLOR); init(count); } //std::forward<ARGS>(args) ...); }
+    ~PreallocVector() { DEBUG_MSG(BLUE_MSG << "dtor" << ENDCOLOR); clup(); }
 private:
 //    template<typename ... ARGS>
     void init(size_t count) //ARGS&& ... args)
@@ -334,7 +344,9 @@ public: //methods
 #undef WANT_UNIT_TEST //prevent recursion
 #include <iostream> //std::cout, std::flush
 //#include "ostrfmt.h" //FMT()
-#define DEBUG(msg)  { std::cout << msg << "\n" << std::flush; }
+#include "atomic.h"
+#include "msgcolors.h"
+#define DEBUG(msg)  ATOMIC_MSG(msg) //{ std::cout << msg << "\n" << std::flush; }
 #define NO_DEBUG(msg)  {}
 
 class IntObj
@@ -364,41 +376,50 @@ const char* PreallocVector<IntObj, FixedAlloc<IntObj>>::TYPENAME() { return "Pre
 
 
 template<typename TYPE>
-void test1(TYPE& vec)
+void test1(TYPE& vec, bool want_reserve = true)
 {
-    DEBUG("initial: " << vec.join(", ", "(empty)") << ", sizeof: " << sizeof(vec));
+    DEBUG(BLUE_MSG << "initial: " << vec.join(", ", "(empty)") << ", sizeof: " << sizeof(vec) << ENDCOLOR);
     size_t num = vec.size();
     vec.push_back(3);
     vec.push_back(1);
     vec.push_back(4);
-    vec.reserve(8);
+    if (want_reserve) vec.reserve(8);
     int ofs = vec.push_and_find(-2);
-    DEBUG("1 at: " << vec.find(1) << ", 5 at: " << vec.find(5) << ", new one[" << ofs << "]: " << vec[ofs]);
-    DEBUG("all " << num + 4 << ": " << vec.join(", "));
+    DEBUG("1 at: " << vec.find(1) << ", 5 at: " << vec.find(5) << ", new one[" << ofs << "]: " << vec[ofs] << ENDCOLOR);
+    DEBUG("all " << num + 4 << ": " << vec.join(", ") << ENDCOLOR);
 }
 
 
 //int main(int argc, const char* argv[])
 void unit_test()
 {
+    DEBUG(PINK_MSG << "vect<IntObj>" << ENDCOLOR);
 //    typedef int vectype;
     typedef IntObj vectype;
     vector_ex<vectype> vec1;
     test1(vec1);
 
-//    typedef vector_ex<vectype, ExampleAllocator<vectype>> test_type;
-    typedef PreallocVector<vectype/*, false*/> test_type;
+    DEBUG(PINK_MSG << "vect<IntObj,ExAlloc>" << ENDCOLOR);
 //    struct thing2 { PreallocVector<int, false> vec2; int values2[10]; thing2(): vec2(3, 1), values2({11, 22, 33, 44, 55, 66, 77, 88, 99, 1010}) {}; } thing2;
-    vectype values2[10] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 1010};
-    /*PreallocVector<vectype, false>*/ test_type vec2(values2, 3, 1);
+//    vectype values2[10] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 1010};
+//    /*PreallocVector<vectype, false>*/ test_type vec2(values2, 3, 1);
+    vector_ex<vectype, ExampleAllocator<IntObj>> vec2;
 //    DEBUG(FMT("&list2[0] = %p") << &values2[0]);
     test1(vec2);
 
+    DEBUG(PINK_MSG << "PreallocVect<IntObj>" << ENDCOLOR);
+//    typedef vector_ex<vectype, ExampleAllocator<vectype>> test_type;
+    typedef PreallocVector<vectype/*, false*/> test_type;
 //    struct thing3 { PreallocVector<int, true> vec3; int values3[10]; thing3(): vec3(3, 1), values3({11, 22, 33, 44, 55, 66, 77, 88, 99, 1010}) {}; } thing3;
     vectype values3[10] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 1010};
-    /*PreallocVector<vectype, true>*/ test_type vec3(values3, 3, 1);
+    /*PreallocVector<vectype, true>*/ test_type vec3(values3, 3+1+1); //, /*std::initializer_list<IntObj>{1, 2}*/ 2);
 //    DEBUG(FMT("&list3[0] = %p") << &values3[0]);
-    test1(vec3);
+    test1(vec3, false);
+
+    DEBUG(PINK_MSG << "PreallocVect<IntObj>" << ENDCOLOR);
+    typedef PreallocVector<vectype/*, false*/> test_type;
+    struct { test_type vec4/*(3+1+1)*/; vectype storage[5]; } x{test_type(3+1+1)};
+    test1(x.vec4, false);
 
 //    return 0;
 }
