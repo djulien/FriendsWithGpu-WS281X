@@ -178,6 +178,137 @@ private: //helpers
 };
 
 
+class API2
+{
+    class Nested
+    {
+        int m_i;
+        std::string m_s;
+        SrcLine m_srcline;
+    public: //ctor/dtor
+        explicit Nested(int i = 0, std::string s = "hello", SrcLine srcline = 0): m_i(i), m_s(s), m_srcline(srcline) { MSG(CYAN_MSG << "Nested ctor" << ENDCOLOR_ATLINE(m_srcline)); }
+        ~Nested() { MSG(CYAN_MSG << "Nested dtor" << ENDCOLOR_ATLINE(m_srcline)); }
+    public: //operators
+        /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const Nested& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+        { 
+            ostrm << "i " << me.m_i << ", s '" << me.m_s << "', srcline " << shortsrc(me.m_srcline, SRCLINE);
+            return ostrm;
+        }
+    public: //methods
+        void thing(bool b = false, SrcLine srcline = 0) { MSG(BLUE_MSG << "Nested::thing: b " << b << ", " << *this << ENDCOLOR_ATLINE(srcline)); }
+    public: //named variants
+            struct CtorParams //NOTE: needs to be exposed for ctor chaining
+            {
+                int i = 56;
+                std::string s = "78";
+                SrcLine srcline = 0;
+            };
+        template <typename CALLBACK>
+        explicit Nested(CALLBACK&& named_params)
+        {
+            struct CtorParams params;
+            auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+            MSG(BLUE_MSG << "get params ..." << ENDCOLOR);
+            thunk(named_params, params);
+            MSG(BLUE_MSG << "... got params" << ENDCOLOR);
+//no        Nested(params.i, params.s, params.srcline); //NOTE: this creates a temp, not a ctor chain!
+            MSG(BLUE_MSG << "ctor ret" << ENDCOLOR);
+        }
+        template <typename CALLBACK>
+        void thing(CALLBACK&& named_params)
+        {
+            struct ThingParams
+            {
+                bool b = true;
+                SrcLine srcline = 0; //SRCLINE; //debug call stack
+            };
+            /*static*/ struct ThingParams params; //reinit each time; comment out for sticky defaults
+            auto thunk = [](auto get_params, struct ThingParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+            thunk(named_params, params);
+            thing(params.b, params.srcline);
+        }
+    };
+    bool m_b;
+    int m_i;
+    Nested m_n;
+    SrcLine m_srcline;
+public: //ctor/dtor
+    explicit API2(bool b = false, int i = -1, std::string s = "huh?", SrcLine srcline = 0): m_b(b), m_i(i), m_n(i, s, srcline), m_srcline(srcline) { MSG(CYAN_MSG << "API2 ctor" << ENDCOLOR_ATLINE(m_srcline)); }
+    ~API2() { MSG(CYAN_MSG << "API2 dtor" << ENDCOLOR_ATLINE(m_srcline)); }
+public: //operators
+    /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const API2& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    {
+//        std::cout << "srcline = " << FMT("%p") << me.m_srcline << "\n" << std::flush;
+        ostrm << "b " << me.m_b << ", " << me.m_i << ", srcline " << shortsrc(me.m_srcline, SRCLINE) << ", nested {" << me.m_n << "}";
+        return ostrm;
+    }
+public: //methods
+    void func(int i = 2, SrcLine srcline = 0) { MSG(BLUE_MSG << "API2::func: i " << i << ENDCOLOR_ATLINE(srcline)); m_n.thing(i != 2, srcline); }
+public: //named variants
+        struct CtorParams: public Nested::CtorParams //NOTE: needs to be exposed for ctor chaining
+        {
+            bool b = false;
+            int i = 1234;
+            SrcLine srcline = 0;
+        };
+
+
+    template <typename CALLBACK>
+    static struct CtorParams& unpack(CALLBACK&& named_params)
+    {
+        static struct CtorParams params; //need "static" to preserve address after return
+//        struct CtorParams params; //reinit each time; comment out for sticky defaults
+        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
+//        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
+        auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+        thunk(named_params, params);
+//        ret_params = params;
+//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
+        return params;
+    }
+
+
+    template <typename CALLBACK>
+    explicit API2(CALLBACK&& named_params)
+
+    {
+        struct CtorParams params;
+        auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+        MSG(BLUE_MSG << "get params ..." << ENDCOLOR);
+        thunk(named_params, params);
+        MSG(BLUE_MSG << "... got params" << ENDCOLOR);
+//no        API2(params.b, params.i, params.srcline); //NOTE: this creates a temp, not a ctor chain!
+        MSG(BLUE_MSG << "ctor ret" << ENDCOLOR);
+    }
+#if 0
+    template <typename CALLBACK>
+    explicit API2(CALLBACK&& named_params)
+    {
+        struct CtorParams params;
+        auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+        MSG(BLUE_MSG << "get params ..." << ENDCOLOR);
+        thunk(named_params, params);
+        MSG(BLUE_MSG << "... got params" << ENDCOLOR);
+//no        API2(params.b, params.i, params.srcline); //NOTE: this creates a temp, not a ctor chain!
+        MSG(BLUE_MSG << "ctor ret" << ENDCOLOR);
+    }
+#endif
+    template <typename CALLBACK>
+    void func(CALLBACK&& named_params)
+    {
+        struct FuncParams
+        {
+            bool i = 22;
+            SrcLine srcline = 0; //SRCLINE; //debug call stack
+        };
+        /*static*/ struct FuncParams params; //reinit each time; comment out for sticky defaults
+        auto thunk = [](auto get_params, struct FuncParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+        thunk(named_params, params);
+        func(params.i, params.srcline);
+    }
+};
+
+
 #if 0 //too complicated
 //see https://stackoverflow.com/questions/28746744/passing-lambda-as-function-pointer
 #include<type_traits>
@@ -276,6 +407,8 @@ int main(int argc, const char* argv[])
         << "fpm " << sizeof(API::FuncParams) << ", "
         << "\n" << std::flush;
 
+    MSG(PINK_MSG << "API1 test" << ENDCOLOR);
+    { //scope
     API A(NAMED{ SRCLINE; });
 //    A.func(PARAMS(p) { p.i = 222; p.s = "strstrstr"; });
 
@@ -325,7 +458,10 @@ int main(int argc, const char* argv[])
 #endif
 //    A.func([] API_FUNC { i = 333; });
     A.func(NAMED{ _.i = 333; /*SRCLINE*/; });
+    }
+    std::cout << "----\n" << std::flush;
 
+    { //scope
 //API X(stmt)  =>  API X(ctor(stmt));
 //    API B([] API_CTOR { i = 2; b = true; s = "str"; /*o = new other(4)*/; });
     std::string my_str = "str";
@@ -335,6 +471,29 @@ int main(int argc, const char* argv[])
     B.func(NAMED{ _.i = 55; SRCLINE; });
 //    B.func(SRCLINE, &(auto x = [&](auto& _){ _.i = 55; }));
 //#define NAMED  SRCLINE, auto cb = [&](auto& _), &cb
+    }
+
+    MSG(PINK_MSG << "API2 test" << ENDCOLOR);
+    { //scope
+    API2 x;
+    x.func();
+    x.func(56);
+    MSG(BLUE_MSG << "x: " << x << ENDCOLOR);
+    }
+    std::cout << "----\n" << std::flush;
+
+    { //scope
+    API2 y(true, 33, "here", SRCLINE);
+    y.func(10);
+    MSG(BLUE_MSG << "y: " << y << ENDCOLOR);
+    }
+    std::cout << "----\n" << std::flush;
+
+    { //scope
+    API2 z(NAMED{ _.i = 44; _.b = true; SRCLINE; });
+    z.func(100);
+    MSG(BLUE_MSG << "z: " << z << ENDCOLOR);
+    }
 
     return 0;
 }
