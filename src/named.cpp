@@ -178,6 +178,25 @@ private: //helpers
 };
 
 
+struct Unpacked {}; //ctor disambiguation tag
+template <typename UNPACKED, typename CALLBACK>
+static UNPACKED& unpack(UNPACKED& params, CALLBACK&& named_params)
+{
+//        static struct CtorParams params; //need "static" to preserve address after return
+//        struct CtorParams params; //reinit each time; comment out for sticky defaults
+//        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
+//        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
+    auto thunk = [](auto get_params, UNPACKED& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+//        MSG(BLUE_MSG << "get params ..." << ENDCOLOR);
+    thunk(named_params, params);
+//        MSG(BLUE_MSG << "... got params" << ENDCOLOR);
+//        ret_params = params;
+//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
+    MSG(BLUE_MSG << "unpack ret" << ENDCOLOR);
+    return params;
+}
+
+
 class API2
 {
     class Nested
@@ -204,16 +223,8 @@ class API2
                 SrcLine srcline = 0;
             };
         template <typename CALLBACK>
-        explicit Nested(CALLBACK&& named_params)
-        {
-            struct CtorParams params;
-            auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
-            MSG(BLUE_MSG << "get params ..." << ENDCOLOR);
-            thunk(named_params, params);
-            MSG(BLUE_MSG << "... got params" << ENDCOLOR);
-//no        Nested(params.i, params.s, params.srcline); //NOTE: this creates a temp, not a ctor chain!
-            MSG(BLUE_MSG << "ctor ret" << ENDCOLOR);
-        }
+        explicit Nested(CALLBACK&& named_params): Nested(unpack(temp_params, named_params), Unpacked{}) {}
+
         template <typename CALLBACK>
         void thing(CALLBACK&& named_params)
         {
@@ -227,6 +238,9 @@ class API2
             thunk(named_params, params);
             thing(params.b, params.srcline);
         }
+private:
+        struct CtorParams temp_params; //need a place to unpack params (instance-specific)
+        explicit Nested(const CtorParams& params, Unpacked): Nested(params.i, params.s, params.srcline) {}
     };
     bool m_b;
     int m_i;
@@ -250,36 +264,29 @@ public: //named variants
             bool b = false;
             int i = 1234;
             SrcLine srcline = 0;
+//            CtorParams() { MSG("CtorParams ctor\n"); }
+//            ~CtorParams() { MSG("CtorParams dtor\n"); }
         };
-
-
     template <typename CALLBACK>
-    static struct CtorParams& unpack(CALLBACK&& named_params)
+    explicit API2(CALLBACK&& named_params): API2(unpack(temp_params, named_params), Unpacked{}) {}
+#if 0
+    template <typename CALLBACK>
+    static struct CtorParams& unpack(struct CtorParams& params, CALLBACK&& named_params)
     {
-        static struct CtorParams params; //need "static" to preserve address after return
+//        static struct CtorParams params; //need "static" to preserve address after return
 //        struct CtorParams params; //reinit each time; comment out for sticky defaults
-        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
+//        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
 //        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
         auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+//        MSG(BLUE_MSG << "get params ..." << ENDCOLOR);
         thunk(named_params, params);
+//        MSG(BLUE_MSG << "... got params" << ENDCOLOR);
 //        ret_params = params;
 //        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
+        MSG(BLUE_MSG << "unpack ret" << ENDCOLOR);
         return params;
     }
-
-
-    template <typename CALLBACK>
-    explicit API2(CALLBACK&& named_params)
-
-    {
-        struct CtorParams params;
-        auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
-        MSG(BLUE_MSG << "get params ..." << ENDCOLOR);
-        thunk(named_params, params);
-        MSG(BLUE_MSG << "... got params" << ENDCOLOR);
-//no        API2(params.b, params.i, params.srcline); //NOTE: this creates a temp, not a ctor chain!
-        MSG(BLUE_MSG << "ctor ret" << ENDCOLOR);
-    }
+#endif
 #if 0
     template <typename CALLBACK>
     explicit API2(CALLBACK&& named_params)
@@ -306,6 +313,9 @@ public: //named variants
         thunk(named_params, params);
         func(params.i, params.srcline);
     }
+private:
+    explicit API2(const CtorParams& params, Unpacked): API2(params.b, params.i, params.s, params.srcline) {}
+    struct CtorParams temp_params; //need a place to unpack params (instance-specific)
 };
 
 
