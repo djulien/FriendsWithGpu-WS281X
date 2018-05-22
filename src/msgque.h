@@ -180,6 +180,22 @@ template <int MAX_THREADs = 0, bool ISMT = IsMultiThreaded(MAX_THREADs), bool IS
 class MsgQue //: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
 {
     struct Unpacked {}; //ctor disambiguation tag
+    template <typename UNPACKED, typename CALLBACK>
+    static UNPACKED& unpack(UNPACKED& params, CALLBACK&& named_params) //named param unpackager
+    {
+//        static struct CtorParams params; //need "static" to preserve address after return
+//        struct CtorParams params; //reinit each time; comment out for sticky defaults
+//        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
+//        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
+        auto thunk = [](auto get_params, UNPACKED& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
+//        MSG(BLUE_MSG << "get params ..." << ENDCOLOR);
+        thunk(named_params, params);
+//        MSG(BLUE_MSG << "... got params" << ENDCOLOR);
+//        ret_params = params;
+//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
+        MSG(BLUE_MSG << "unpack ret" << ENDCOLOR);
+        return params;
+    }
 //in-proc specialization:
 //    static inline std::enable_if<!IsMultiProc(MAX_THREADs), std::thread::id /*auto*/> thrid() { return std::this_thread::get_id(); }
 //    static inline std::stringstream& ss(bool init = false)
@@ -350,11 +366,7 @@ private:
             return ofs;
         }
 public: //named param variants:
-//        QueData(const CtorParams& params, Unpacked): m_srcline(params.srcline), m_msgs(params.msgs), m_ids(list_space, SIZEOF(list_space) /*ABS(MAX_THREADs)*/) { IF_DEBUG(strzcpy(m_name, params.name, sizeof(m_name))); }
-        template <typename CALLBACK>
-        QueData(CALLBACK&& named_params)
-        {
-            struct CtorParams //: public CtorParams
+            struct CtorParams //: public CtorParams //NOTE: needs to be exposed for ctor chaining
             {
                 IF_DEBUG(const char* name = 0);
                 int msgs = 0;
@@ -364,36 +376,19 @@ public: //named param variants:
 //            int shmkey = 0; //shmem handling info
 //            bool want_reinit = false; //true;
             };
-            struct CtorParams params;
-            auto thunk = [](auto get_params, struct CtorParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
-            thunk(named_params, params);
-//        ret_params = params;
-//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
-            QueData(IF_DEBUG_comma(params.name) params.msgs, params.srcline);
-        }
-//    MsgQue* send(int msg, /*bool broadcast = false,*/ SrcLine srcline = 0)
+//        QueData(const CtorParams& params, Unpacked): m_srcline(params.srcline), m_msgs(params.msgs), m_ids(list_space, SIZEOF(list_space) /*ABS(MAX_THREADs)*/) { IF_DEBUG(strzcpy(m_name, params.name, sizeof(m_name))); }
         template <typename CALLBACK>
-        QueData* send(CALLBACK&& named_params)
-        {
+        explicit QueData(CALLBACK&& named_params): QueData(unpack(ctor_params, named_params), Unpacked{}) {}
+//    MsgQue* send(int msg, /*bool broadcast = false,*/ SrcLine srcline = 0)
             struct SendParams
             {
                 int msg = 1<<0; //msg# to send
                 bool broadcast = false; //send to all listeners when new msg arrives
                 SrcLine srcline = 0; //SRCLINE; //debug call stack
             }; //FuncParams() { s = "none"; i = 999; b = true; }}; // FuncParams;
-            /*static*/ struct SendParams params; //reinit each time; comment out for sticky defaults
-//        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
-//        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
-            auto thunk = [](auto get_params, struct SendParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
-            thunk(named_params, params);
-//        ret_params = params;
-//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
-            return send(params.msg, /*params.broadcast,*/ params.srcline);
-        }
-//    MsgQue* send(int msg, /*bool broadcast = false,*/ SrcLine srcline = 0)
         template <typename CALLBACK>
-        int rcv(CALLBACK&& named_params)
-        {
+        auto send(CALLBACK&& named_params) { struct SendParams send_params; return send(unpack(send_params, named_params), Unpacked{}); }
+//    MsgQue* send(int msg, /*bool broadcast = false,*/ SrcLine srcline = 0)
             struct RcvParams
             {
 //#if 0
@@ -411,16 +406,13 @@ public: //named param variants:
                 int poll = 10;
                 SrcLine srcline = 0; //debug call stack
             };
-            /*static*/ struct RcvParams params; //reinit each time; comment out for sticky defaults
-//        new (&params) struct CtorParams; //placement new: reinit each time; comment out for sticky defaults
-//        MSG("ctor params: var1 " << params.var1 << ", src line " << params.srcline);
-            auto thunk = [](auto get_params, struct RcvParams& params){ get_params(params); }; //NOTE: must be captureless, so wrap it
-            thunk(named_params, params);
-//        ret_params = params;
-//        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
-//            return rcv(params.filter, params.operand, /*params.busycb,*/ params.remove, params.srcline);
-            return rcv(params.wanted, params.unwanted, /*params.busycb,*/ params.remove, params.poll, params.srcline);
-        }
+        template <typename CALLBACK>
+        auto rcv(CALLBACK&& named_params) { struct RcvParams rcv_params; return rcv(unpack(send_params, named_params), Unpacked{}); }
+    private: //named variant helpers
+        struct CtorParams ctor_params; //need a place to unpack params (instance-specific, single threaded is okay for ctor)
+        explicit QueData(const CtorParams& params, Unpacked): QueData(IF_DEBUG_comma(params.name) params.msgs, params.srcline) {}
+        auto send(const SendParams& params, Unpacked) { return send(params.msg, params.broadcast, params.srcline); }
+        auto rcv(const RcvParams& params, Unpacked) { return rcv(params.wanted, params.unwanted, /*params.busycb,*/ params.remove, params.poll, params.srcline); }
 //#if 1
 //    private:
     public: //auto-lock wrapper
@@ -507,7 +499,11 @@ public: //ctor/dtor
 //    MyClass() = delete; //don't generate default ctor
 //    struct CtorParams: public B0::CtorParams, public B1::CtorParams, public B2::CtorParams {};
 //    MyClass() = default;
-    explicit MsgQue()
+    explicit MsgQue(IF_DEBUG_comma(const char* name = 0) int shmkey = 0, bool persist = true, bool want_reinit = false, /*volatile*/ int msgs = 0, SrcLine m_srcline = 0): m_ptr(NAMED{ _.shmkey = shmkey; _.persist = persist; _.srcline = srcline; })
+    {
+        if (!m_ptr.existed() || want_reinit) new (m_ptr) /*decltype(*m_ptr)*/ QueData(IF_DEBUG_comma(name) msgs, srcline); //placement new; init after shm alloc but before usage; don't init if already there
+        DEBUG_MSG(CYAN_MSG << "MsgQue ctor (unpacked): " << FMT("@%p") << &*m_ptr << FMT(", shmkey 0x%x") << shmkey << ", persist " << persist << ", reinit " << want_reinit << ", " << *m_ptr << ENDCOLOR);
+    }
 #if 0
     explicit MsgQue(): MsgQue(NAMED{ /*SRCLINE*/; }) { DEBUG_MSG(BLUE_MSG << "ctor1" << ENDCOLOR); }
     template <typename CALLBACK> //accept any arg type (only want caller's lambda function)
@@ -527,8 +523,21 @@ public: //operators
 //no-NOTE: need ref here because std::unique_lock<> copy ctor is declared deleted in mutex.h
 //CAUTION: uses copy ctor here (needed because can't cast rvalue/temp to lvalue)
     inline typename QueData::unlock_after operator->() { DEBUG_MSG("U->\n"); return typename QueData::unlock_after(m_ptr); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
-private: //helpers
+public: //named variants
+        struct CtorParams: public QueData::CtorParams //decltype(*this) {}; //NOTE: needs to be exposed for ctor chaining
+        {
+//multi-process specialization: adds params to control shm alloc/dealloc
+            int shmkey; //shmem handling info
+            bool persist;
+            bool want_reinit;
+        };
+    template <typename CALLBACK>
+    explicit MsgQue(CALLBACK&& named_params): MsgQue(unpack(ctor_params, named_params), Unpacked{}) {}
+private: //named variant helpers
+    struct CtorParams ctor_params; //need a place to unpack params (instance-specific)
+    explicit MsgQue(const CtorParams& params, Unpacked): MsgQue(IF_DEBUG_comma(params.name) params.shmkey, params.persist, params.want_reinit, params.msgs, params.srcline) {}
 #if 0
+private: //helpers
     struct CtorParams: public QueData::CtorParams //decltype(*this) {};
     {
 //multi-process specialization: adds params to control shm alloc/dealloc

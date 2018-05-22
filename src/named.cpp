@@ -238,7 +238,7 @@ class API2
             thunk(named_params, params);
             thing(params.b, params.srcline);
         }
-private:
+private: //named variant helpers
         struct CtorParams temp_params; //need a place to unpack params (instance-specific)
         explicit Nested(const CtorParams& params, Unpacked): Nested(params.i, params.s, params.srcline) {}
     };
@@ -268,7 +268,7 @@ public: //named variants
 //            ~CtorParams() { MSG("CtorParams dtor\n"); }
         };
     template <typename CALLBACK>
-    explicit API2(CALLBACK&& named_params): API2(unpack(temp_params, named_params), Unpacked{}) {}
+    explicit API2(CALLBACK&& named_params): API2(unpack(ctor_params, named_params), Unpacked{}) {}
 #if 0
     template <typename CALLBACK>
     static struct CtorParams& unpack(struct CtorParams& params, CALLBACK&& named_params)
@@ -300,6 +300,14 @@ public: //named variants
         MSG(BLUE_MSG << "ctor ret" << ENDCOLOR);
     }
 #endif
+        struct FuncParams
+        {
+            bool i = 22;
+            SrcLine srcline = 0; //SRCLINE; //debug call stack
+        };
+    template <typename CALLBACK>
+    auto func(CALLBACK&& named_params) { struct FuncParams func_params; return func(unpack(func_params, named_params), Unpacked{}); }
+#if 0
     template <typename CALLBACK>
     void func(CALLBACK&& named_params)
     {
@@ -313,9 +321,12 @@ public: //named variants
         thunk(named_params, params);
         func(params.i, params.srcline);
     }
-private:
+#endif
+private: //named variant helpers
+    struct CtorParams ctor_params; //need a place to unpack params (instance-specific)
     explicit API2(const CtorParams& params, Unpacked): API2(params.b, params.i, params.s, params.srcline) {}
-    struct CtorParams temp_params; //need a place to unpack params (instance-specific)
+    auto func(const FuncParams& params, Unpacked) { return func(params.i, params.srcline); }
+//    struct FuncParams func_params; //need a place to unpack params (instance-specific)
 };
 
 
