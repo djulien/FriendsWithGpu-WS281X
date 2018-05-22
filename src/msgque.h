@@ -193,7 +193,7 @@ class MsgQue //: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
 //        MSG(BLUE_MSG << "... got params" << ENDCOLOR);
 //        ret_params = params;
 //        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
-        MSG(BLUE_MSG << "unpack ret" << ENDCOLOR);
+        DEBUG_MSG(BLUE_MSG << "unpack ret" << ENDCOLOR);
         return params;
     }
 //in-proc specialization:
@@ -362,7 +362,7 @@ private:
 //    ss << THRID;
 //    ss << ofs;
 //    return ss.str();
-            ATOMIC_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << "', thread id " << id << " => thr inx " << ofs << ENDCOLOR);
+            DEBUG_MSG(CYAN_MSG << timestamp() << "pid '" << getpid() << "', thread id " << id << " => thr inx " << ofs << ENDCOLOR);
             return ofs;
         }
 public: //named param variants:
@@ -407,7 +407,7 @@ public: //named param variants:
                 SrcLine srcline = 0; //debug call stack
             };
         template <typename CALLBACK>
-        auto rcv(CALLBACK&& named_params) { struct RcvParams rcv_params; return rcv(unpack(send_params, named_params), Unpacked{}); }
+        auto rcv(CALLBACK&& named_params) { struct RcvParams rcv_params; return rcv(unpack(rcv_params, named_params), Unpacked{}); }
     private: //named variant helpers
         struct CtorParams ctor_params; //need a place to unpack params (instance-specific, single threaded is okay for ctor)
         explicit QueData(const CtorParams& params, Unpacked): QueData(IF_DEBUG_comma(params.name) params.msgs, params.srcline) {}
@@ -499,7 +499,7 @@ public: //ctor/dtor
 //    MyClass() = delete; //don't generate default ctor
 //    struct CtorParams: public B0::CtorParams, public B1::CtorParams, public B2::CtorParams {};
 //    MyClass() = default;
-    explicit MsgQue(IF_DEBUG_comma(const char* name = 0) int shmkey = 0, bool persist = true, bool want_reinit = false, /*volatile*/ int msgs = 0, SrcLine m_srcline = 0): m_ptr(NAMED{ _.shmkey = shmkey; _.persist = persist; _.srcline = srcline; })
+    explicit MsgQue(IF_DEBUG_comma(const char* name = 0) int shmkey = 0, bool persist = true, bool want_reinit = false, /*volatile*/ int msgs = 0, SrcLine srcline = 0): m_ptr(NAMED{ _.shmkey = shmkey; _.persist = persist; _.srcline = srcline; })
     {
         if (!m_ptr.existed() || want_reinit) new (m_ptr) /*decltype(*m_ptr)*/ QueData(IF_DEBUG_comma(name) msgs, srcline); //placement new; init after shm alloc but before usage; don't init if already there
         DEBUG_MSG(CYAN_MSG << "MsgQue ctor (unpacked): " << FMT("@%p") << &*m_ptr << FMT(", shmkey 0x%x") << shmkey << ", persist " << persist << ", reinit " << want_reinit << ", " << *m_ptr << ENDCOLOR);
