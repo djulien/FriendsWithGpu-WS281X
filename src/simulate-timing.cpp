@@ -1,5 +1,4 @@
 #!/bin/bash -x
-echo -e '\e[1;31m TODO: msgque, shmalloc, atomic, fix ipc unit test with atomic() \e[0m'
 echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O$OPT -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++14 -o "${BASH_SOURCE%.*}" -x c++ - <<//EOF; echo -e '\e[0m'
 #line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 
@@ -249,8 +248,8 @@ int processed = 0;
 
 //#if WANT_IPC //NUM_WKERs < 0 //ipc
 #include "shmkeys.h"
-MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
-MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; IF_IPC(_.shmkey = SHMKEY2); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+MsgQue<NUM_WKERs> mainq(NAMED{ _.name = "mainq"; IF_IPC(_.shmkey = SHMKEY1); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
+MsgQue<NUM_WKERs> wkerq(NAMED{ _.name = "wkerq"; IF_IPC(_.shmkey = SHMKEY2); SRCLINE; }); ///*_.extra = 0*/; _.want_reinit = false; });
 //#else
 // MsgQue<NUM_WKERs> mainq(NAMED {_.name = "mainq"; SRCLINE; });
 // MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; SRCLINE; });
@@ -262,17 +261,17 @@ MsgQue<NUM_WKERs> wkerq(NAMED {_.name = "wkerq"; IF_IPC(_.shmkey = SHMKEY2); SRC
 void wker_main()
 {
     sleep(2); //give parent head start
-    int myinx = MsgQue<NUM_WKERs>::thrinx();
+    int myinx = mainq->thrinx(); //MsgQue<NUM_WKERs>::thrinx();
     int frnum = 0;
     WKER_MSG(CYAN_MSG, "started, render " << frnum << " for " << WKER_DELAY << " msec");
     for (;;)
     {
         busy_msec(WKER_DELAY); //simulate render()
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "rendered " << frnum << ", now notify main");
-        mainq->send(1 << myinx);
+        mainq->send(NAMED{ _.msg = 1 << myinx; SRCLINE; });
 
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "now wait for next req");
-        frnum = wkerq->rcv(&MsgQue::not_wanted, frnum);
+        frnum = wkerq->rcv(NAMED{ _.unwanted = ~(_.wanted = frnum); SRCLINE; }); //&MsgQue::not_wanted, frnum);
         WKER_MSG(BLUE_MSG, "woke with req for " << frnum << ", now render for " << WKER_DELAY << " msec");
         if (frnum < 0) break;
     }
@@ -348,7 +347,7 @@ void wker_main()
 int main()
 {
 //    int myid = thrid();
-    int myinx = MsgQue<NUM_WKERs>::thrinx();
+    int myinx = mainq->thrinx();
 #if 0 //calibrate
     std::cout << timestamp() << "start\n";
     for (volatile int i = 0; i < 200000; ++i); //NOTE: need volatile to prevent optimization; system calls allow threads to overlap; need real busy wait loop here
@@ -365,7 +364,7 @@ int main()
 #endif
     int frnum = 0;
     std::vector<IpcThread<WANT_IPC>> wkers;
-    MAIN_MSG(CYAN_MSG, "thread " << myid << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << mainq.get() << FMT(", &wkerq = %p") << wkerq.get());
+    MAIN_MSG(CYAN_MSG, "thread " << myinx << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << &mainq << FMT(", &wkerq = %p") << &wkerq);
 //    pending = 10;
     for (int n = 0; n < ABS(NUM_WKERs); ++n) wkers.emplace_back(wker_main);
     MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");
@@ -374,13 +373,13 @@ int main()
     {
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "now wait for replies");
 //        const char* status = "on time";
-        mainq->rcv(&MsgQue::wanted, ((1 << ABS(NUM_WKERs)) - 1) << 1, true); //wait for all wkers to respond (blocking)
+        mainq->rcv(NAMED{ _.wanted = ((1 << ABS(NUM_WKERs)) - 1) << 1; _.remove = true; SRCLINE; }); //wait for all wkers to respond (blocking)
         MAIN_MSG(PINK_MSG, "all wkers ready, now encode() for " << MAIN_ENCODE_DELAY << " msec");
         busy_msec(MAIN_ENCODE_DELAY); //simulate encode()
         if (++frnum >= DURATION) frnum = -1; //break;
         const char* status = (frnum < 0)? "quit": "frreq";
         /*if (WANT_DETAILS)*/ MAIN_MSG(PINK_MSG, "encoded, now notify wkers (" << status << ") and finish render() for " << MAIN_PRESENT_DELAY << " msec");
-        wkerq->clear()->send(frnum, true); //wake *all* wkers
+        wkerq->clear()->send(NAMED{ _.msg = frnum; _.broadcast = true; SRCLINE; }); //wake *all* wkers
 //        MAIN_MSG(PINK_MSG, "notified wkers (" << status << "), now finish render() for " << MAIN_PRESENT_DELAY << " msec");
         sleep_msec(MAIN_PRESENT_DELAY); //simulate render present()
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "presented");
@@ -388,7 +387,7 @@ int main()
     }
     for (auto& w: wkers) w.join(); //    std::vector<std::thread> wkers;
     MAIN_MSG(CYAN_MSG, "quit");
-    wkerq.clear(); //leave queue in empty state (benign; avoid warning)
+    wkerq->clear(); //leave queue in empty state (benign; avoid warning)
 }
 #if 0 //explicit mutex + cond var
 int main()

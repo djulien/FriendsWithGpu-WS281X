@@ -25,7 +25,7 @@
 #include <sys/ipc.h>
 #include <sys/shm.h> //shmctl(), shmget(), shmat(), shmdt()
 #include <errno.h>
-#include <stdexcept> //std::runtime_error
+#include <stdexcept> //std::runtime_error()
 #include <mutex> //std::mutex, lock
 #include <atomic> //std::atomic
 #include <type_traits> //std::conditional<>, std::enable_if<>

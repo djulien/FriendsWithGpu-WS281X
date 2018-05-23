@@ -8,6 +8,7 @@
 
 #define MSGQUE_DEBUG
 #define MSGQUE_DETAILS
+//#define SIGNAL_DEBUG
 
 #ifndef _MSGQUE_H
 #define _MSGQUE_H
@@ -18,7 +19,8 @@
 #include <thread> //std::this_thread
 //for example see http://en.cppreference.com/w/cpp/thread/condition_variable
 #include <type_traits> //std::conditional<>, std::decay<>, std::remove_reference<>, std::remove_pointer<>
-#include <tr2/type_traits> //std::tr2::direct_bases<>, std::tr2::bases<>
+//#include <tr2/type_traits> //std::tr2::direct_bases<>, std::tr2::bases<>
+#include <stdexcept> //std::runtime_error()
 //#include <chrono> //std::chrono
 //#include <string> //std::stol()
 
@@ -28,10 +30,10 @@
 #include "elapsed.h" //timestamp()
 #include "eatch.h"
 #include "signal.h"
+#include "msgcolors.h"
 
 #ifdef MSGQUE_DEBUG
  #include "atomic.h"
- #include "msgcolors.h"
  #define DEBUG_MSG  ATOMIC_MSG
  #define IF_DEBUG(stmt)  stmt //{ stmt; }
  #define IF_DEBUG_comma(stmt)  stmt, //{ stmt; }
@@ -193,7 +195,7 @@ class MsgQue //: public MemPtr<QueData<MAX_THREADs>, WANT_IPC>
 //        MSG(BLUE_MSG << "... got params" << ENDCOLOR);
 //        ret_params = params;
 //        MSG("ret ctor params: var1 " << ret_params.var1 << ", src line " << ret_params.srcline);
-        DEBUG_MSG(BLUE_MSG << "unpack ret" << ENDCOLOR);
+//        DEBUG_MSG(BLUE_MSG << "unpack ret" << ENDCOLOR);
         return params;
     }
 //in-proc specialization:
@@ -252,7 +254,7 @@ private:
         /*static*/ friend std::ostream& operator<<(std::ostream& ostrm, const QueData& me) //https://stackoverflow.com/questions/2981836/how-can-i-use-cout-myclass?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
         { 
 //        ostrm << "MsgQue<" << MAX_THREADs << ">{" << eatch(2) << IF_DEBUG(", name '" << me.m_name << "'" <<) ", msg " << FMT("0x%x") << me.m_msg << ", srcline " << me.m_srcline << "}";
-            ostrm << eatch(2) << IF_DEBUG(", name '" << me.m_name << "'" <<) ", msg " << FMT("0x%x") << me.m_msgs << ", srcline " << me.m_srcline;
+            ostrm << eatch(2) << IF_DEBUG(", name '" << me.m_name << "'" <<) ", msgs " << FMT("0x%x") << me.m_msgs << ", srcline " << me.m_srcline;
             ostrm << ", ids(" << me.m_ids.size() << "): " << me.m_ids.join(",", "(none)"); //only for multi-threaded
 //            ostrm << ", shmkey " << me.m_shmkey << ", want_reinit " << me.m_want_reinit; //only for multi-proc
             return ostrm;
@@ -276,9 +278,9 @@ private:
 //        scoped_lock lock;
 //        std::unique_lock<VOLATILE std::mutex> scoped_lock(m_ptr->mutex);
 //        if (m_count >= MAXLEN) throw new Error("MsgQue.send: queue full (" MAXLEN ")");
-            if (m_msgs & msg) throw "QueData.send: msg already queued"; // + tostr(msg) + " already queued");
+            if (m_msgs & msg) throw std::runtime_error(RED_MSG "QueData.send: msg already queued" ENDCOLOR_NOLINE); // + tostr(msg) + " already queued");
             m_msgs |= msg; //use bitmask for multiple msgs
-            if (!(m_msgs & msg)) throw "QueData.send: msg enqueue failed"; // + tostr(msg) + " failed");
+            if (!(m_msgs & msg)) throw std::runtime_error(RED_MSG "QueData.send: msg enqueue failed" ENDCOLOR_NOLINE); // + tostr(msg) + " failed");
         /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".send " << FMT("0x%x") << msg /*<< " to " << (broadcast? "all": "one")*/ << ", now qued " << FMT("0x%x") << m_msgs << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
 //            if (!broadcast) m_condvar.notify_one(); //wake main thread
 //            else m_condvar.notify_all(); //wake *all* wker threads
@@ -313,7 +315,7 @@ private:
 //            int mask = wanted | ~unwanted;
             for (;;)
             {
-                /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".rcv: wanted " << FMT("0x%x") << wanted << FMT(", unwanted 0x%x") << unwanted << FMT(", msgs 0x%x") << m_msgs << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
+                /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".rcv: wanted " << FMT("0x%x") << wanted << FMT(", unwanted 0x%x") << unwanted << FMT(", msgs 0x%x") << m_msgs << ", poll " << poll_interval << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
 // wanted  unwanted  return?
 //    0         0     msgs != 0   (any)
 //   !0         0     (msgs & wanted) != 0
@@ -323,10 +325,13 @@ private:
                 if (wanted == ~unwanted) { if (m_msgs == wanted) break; } //want exact match
                 else if (!wanted && !unwanted) { if (m_msgs) break; } //any match
                 else if (m_msgs && (m_msgs & wanted) && !(m_msgs & unwanted)) break;
+//                DEBUG_MSG("wait ...\n");
                 m_signal.wait(poll_interval); //spurious event; wait for next event
+//                DEBUG_MSG("... wait\n");
             }
             int retval = m_msgs;
             if (remove) m_msgs = 0; //m_msgs &= ~wanted | unwanted;
+            DEBUG_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << FMT(".rcv: ret 0x%x") << retval << FMT(", remaining msgs 0x%x") << m_msgs << ENDCOLOR);
             return retval;
 #if 0
         auto_ptr<SDL_LockedMutex> lock_HERE(mutex.cast); //SDL_LOCK(mutex));
@@ -430,9 +435,9 @@ public: //named param variants:
 //            ~unlock_after() { DEBUG_MSG("unlock later"); /*if (AUTO_LOCK)*/ m_ptr->m_mutex.unlock(); }
             explicit unlock_after(QueData* ptr): /*base_t*/ /*std::unique_lock<std::mutex>(ptr->m_mutex),*/ m_ptr(ptr) //, m_ismine(false)
             {
-                DEBUG_MSG("lock ctor\n");
+//                DEBUG_MSG("lock ctor\n");
 //NOTE: defer lock to copy ctor because it takes const arg and can't unlock this one
-                DEBUG_MSG("lock now\n");
+//                DEBUG_MSG("lock now\n");
 //                if (m_ptr->m_ulk) throw "already locked";
 //                m_ptr->m_ulk = new QueData::lock_type(ptr->m_mutex); //std::unique_lock<VOLATILE std::mutex>(ptr->m_mutex); }
 //                m_ptr->m_ulk = new std::unique_lock<VOLATILE std::mutex>(ptr->m_mutex);
@@ -441,6 +446,7 @@ public: //named param variants:
             }
             /*explicit*/ unlock_after(const unlock_after& that): m_ptr(that.m_ptr) //copy ctor used by parent's operator->(); rule of 3: https://en.wikipedia.org/wiki/Rule_of_three_%28C++_programming%29
             {
+//                throw std::runtime_error(RED_MSG "shouldn't need copy ctor" ENDCOLOR_NOLINE);
                 DEBUG_MSG("copy ctor\n");
 //                DEBUG_MSG("lock now (copy)");
 //                if (m_ptr->m_ulk) throw "already locked?";
@@ -449,6 +455,7 @@ public: //named param variants:
             }
             /*explicit*/ unlock_after(unlock_after&& that) noexcept //move constructor used by parent's operator->(); rule of 5: https://en.wikipedia.org/wiki/Rule_of_three_%28C++_programming%29
             {
+//                throw std::runtime_error(RED_MSG "shouldn't need move ctor" ENDCOLOR_NOLINE);
                 DEBUG_MSG("move ctor\n");
 //                DEBUG_MSG("lock moved");
 //                m_ptr = that->m_ptr;
@@ -456,21 +463,23 @@ public: //named param variants:
             }
             unlock_after& operator=(const unlock_after& that) //copy assignment op
             {
+//                throw std::runtime_error(RED_MSG "shouldn't need copy asst op" ENDCOLOR_NOLINE);
                 DEBUG_MSG("copy asst op\n");
                 return *this;
             }
             unlock_after& operator=(unlock_after&& that) noexcept //move assignment op
             {
+//                throw std::runtime_error(RED_MSG "shouldn't need move asst op" ENDCOLOR_NOLINE);
                 if (&that != this) { m_ptr = that.m_ptr; that.m_ptr = 0; } //take ownership
                 return *this;
             }
             ~unlock_after() //dtor
             {
-                DEBUG_MSG("lock dtor\n");
+//                DEBUG_MSG("lock dtor\n");
                 if (!m_ptr) return;
 //                if (!m_ismine) return;
 //                if (!m_ptr->m_ulk) return;
-                DEBUG_MSG("unlocked now (after)\n");
+//                DEBUG_MSG("unlocked now (after)\n");
                 m_ptr->m_signal.unlock();
             }
         public:
@@ -522,7 +531,7 @@ public: //operators
 //    inline std::enable_if<ISMT_copy, unlock_after> operator->() { DEBUG_MSG("U->\n"); return unlock_after(this); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 //no-NOTE: need ref here because std::unique_lock<> copy ctor is declared deleted in mutex.h
 //CAUTION: uses copy ctor here (needed because can't cast rvalue/temp to lvalue)
-    inline typename QueData::unlock_after operator->() { DEBUG_MSG("U->\n"); return typename QueData::unlock_after(m_ptr); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
+    inline typename QueData::unlock_after operator->() { /*DEBUG_MSG("U->\n")*/; return typename QueData::unlock_after(m_ptr); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 public: //named variants
         struct CtorParams: public QueData::CtorParams //decltype(*this) {}; //NOTE: needs to be exposed for ctor chaining
         {
@@ -1682,6 +1691,7 @@ template<> const char* FixedAlloc<std::string>::TYPENAME() { return "FixedAlloc<
 void child_proc()
 {
     sleep_msec(500);
+    ATOMIC_MSG("child\n");
     ATOMIC_MSG(PINK_MSG << timestamp() << "child start, thrid " << testq.thrid() << ", thrinx " << testq->thrinx() << ", send now" << ENDCOLOR);
     testq->send(NAMED{ _.msg = 1<<0; SRCLINE; });
 #if 1

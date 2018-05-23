@@ -14,11 +14,12 @@
 #include <thread> //std::this_thread
 #include <type_traits> //std::enable_if<>, std::is_same<>
 #include <stdarg.h> //v_list, va_start, va_arg, va_end
+#include <stdexcept> //std::runtime_error()
 
 #include "srcline.h"
+#include "msgcolors.h"
 #ifdef VECTOR_DEBUG
  #include "atomic.h"
- #include "msgcolors.h"
  #include "elapsed.h" //timestamp()
  #define DEBUG_MSG  ATOMIC_MSG
  #define IF_DEBUG(stmt)  stmt //{ stmt; }
@@ -32,6 +33,7 @@
 // #define DETAILS_MSG(stmt)  {} //noop
 //#endif
 
+#if 1
 #define throwprintf(...)  throw bufprintf(SRCLINE, __VA_ARGS__)
 //template<typename ... ARGS>
 //const char* bufprintf(ARGS&& ... args, SrcLine srcline = 0)
@@ -49,6 +51,7 @@ const char* bufprintf(SrcLine srcline, ...)
     DEBUG_MSG(RED_MSG << buf << ENDCOLOR_ATLINE(srcline));
     return buf;
 }
+#endif
 
 
 //extended vector:

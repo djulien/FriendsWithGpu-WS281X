@@ -19,6 +19,7 @@
 
 #include <iostream> //std::cout, std::flush
 #include <mutex> //std::mutex, std::unique_lock
+#include <stdexcept> //std::runtime_error()
 //#include "msgcolors.h" //SrcLine and colors (used with ATOMIC_MSG)
 
 
@@ -120,12 +121,12 @@
 */
 
 
+#include "msgcolors.h"
 #ifdef ATOMIC_DEBUG
 // #include "ostrfmt.h" //FMT()
 // #include "elapsed.h" //timestamp()
 // #define DEBUG_MSG(msg)  { std::cout << msg << "\n" << std::flush; }
  #define DEBUG_MSG  ATOMIC_MSG
- #include "msgcolors.h"
 #else
 // #define DEBUG_MSG(msg)  {} //noop
  #define DEBUG_MSG_1ARG(msg)  {} //noop
@@ -143,8 +144,8 @@ class LockOnce //: public TopOnly
     int& depth(int limit = 0)
     {
         static int count = 0;
-        if (limit && (count > limit)) throw std::runtime_error("inf loop?");
-        if (count < 0) throw std::runtime_error("nesting underflow");
+        if (limit && (count > limit)) throw std::runtime_error(RED_MSG "inf loop?" ENDCOLOR_NOLINE);
+        if (count < 0) throw std::runtime_error(RED_MSG "nesting underflow" ENDCOLOR_NOLINE);
         return count;
     }
 //    static inline bool istop() { return !depth(); }
