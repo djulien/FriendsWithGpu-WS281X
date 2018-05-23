@@ -284,6 +284,13 @@ class IpcThread //: public Thread_data<IPC>
 {
 //    typedef decltype(thrid()) mypidtype;
     typedef typename std::conditional<IPC, pid_t, std::thread*>::type PIDTYPE;
+    std::string child_pid() //kludge: wrap to avoid "operands to ? have different types" error
+    {
+        std::stringstream ss;
+        if (isParent()) ss << m_pid;
+        else ss << getpid();
+        return ss.str();
+    }
 public: //ctor/dtor
     typedef /*static*/ void (*Callback)(void); //void* data); //TODO: add generic params?
 //    typedef std::function<void()> Callback;
@@ -291,6 +298,7 @@ public: //ctor/dtor
 //    explicit IpcThread(_Callable&& entpt, _Args&&... args)
 //positional params:
 //    explicit IpcThread(SrcLine srcline = 0): IpcThread(IpcPipe::none() /*new IpcPipe(srcline)*/, srcline) {}
+//    explicit IpcThread(Callback/*&*/ entpt): IpcThread(entpt, 0) {}
     explicit IpcThread(Callback/*&*/ entpt, SrcLine srcline = 0): IpcThread(entpt, IpcPipe::none() /*new IpcPipe(srcline)*/, srcline) {}
     explicit IpcThread(IpcPipe& pipe, SrcLine srcline = 0): IpcThread(0, pipe, srcline) {} //m_anychild(false) //: m_pipe(pipe)
 //NOTE: all other ctors come thru here
@@ -302,11 +310,18 @@ public: //ctor/dtor
 //        std::cout << "thread here: is parent? " << !!m_pid << ", me " << getpid() << "\n" << std::flush;
 //        const char* proctype = isChild()? "child": isError()? "error": "parent"; //isParent()? "parent": "child";
 //#pragma message("there's a recursion problem here?")
-        DEBUG_MSG(YELLOW_MSG << timestamp() << "fork (" << proctype() << "): child pid = " << (isParent()? m_pid: getpid()) << ENDCOLOR_ATLINE(srcline));
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "fork (" << proctype() << "): child pid = " << child_pid() << ENDCOLOR_ATLINE(srcline));
 //        std::cout << "thread here2: is parent? " << !!m_pid << ", me " << getpid() << "\n" << std::flush;
         if (isError()) throw std::runtime_error(strerror(errno)); //fork failed
     }
-//named params:
+    ~IpcThread()
+    {
+        if (isParent()) join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
+        auto inx = find(all().begin(), all().end(), this);
+        if (inx != all().end()) all().erase(inx);
+    }
+//named param variants:
+#if 0
     struct CtorParams
     {
         Callback entpt = 0;
@@ -321,16 +336,13 @@ public: //ctor/dtor
         /*static*/ struct CtorParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
 //        if (mySrcLine) params.srcline = mySrcLine;
 //        if (get_params != 0) get_params(params); //params.i, params.s, params.b, params.srcline); //NOTE: must match macro signature; //get_params(params);
-        auto thunk = [](auto arg, struct FuncParams& params){ /*(static_cast<decltype(callback)>(arg))*/ arg(params); }; //NOTE: must be captureless, so wrap it
+        auto thunk = [](auto arg, struct CtorParams& params){ /*(static_cast<decltype(callback)>(arg))*/ arg(params); }; //NOTE: must be captureless, so wrap it
         thunk(get_params, params);
         new (this) IpcThread(params.entpt, params.pipe, params.srcline); //convert from named params to positional params
     }
-    ~IpcThread()
-    {
-        if (isParent()) join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
-        auto inx = find(all().begin(), all().end(), this);
-        if (inx != all().end()) all().erase(inx);
-    }
+//    struct Unpacked {}; //ctor disambiguation tag
+//    explicit IpcThread(const CtorParams& params/*, Unpacked*/): IpcThread(params.entpt, params.pipe, params.srcline) {}
+#endif
 private: //data
     /*std::conditional<IPC, pid_t, std::thread*>*/ PIDTYPE m_pid; //child pid (valid in parent only)
     bool m_anychild;
