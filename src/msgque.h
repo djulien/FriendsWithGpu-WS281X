@@ -536,9 +536,9 @@ public: //named variants
         struct CtorParams: public QueData::CtorParams //decltype(*this) {}; //NOTE: needs to be exposed for ctor chaining
         {
 //multi-process specialization: adds params to control shm alloc/dealloc
-            int shmkey; //shmem handling info
-            bool persist;
-            bool want_reinit;
+            int shmkey = 0; //shmem handling info
+            bool persist = true;
+            bool want_reinit = false;
         };
     template <typename CALLBACK>
     explicit MsgQue(CALLBACK&& named_params): MsgQue(unpack(ctor_params, named_params), Unpacked{}) {}

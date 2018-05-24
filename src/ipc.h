@@ -378,12 +378,14 @@ private: //emulate ipc functions
     typename std::enable_if<!IPC_copy, /*pid_t*/ PIDTYPE>::type fork(Callback entpt = 0) //in-proc (non-ipc) specialization
     {
         if (!entpt) throw std::runtime_error("!ipc fork: thread function missing");
+        DEBUG_MSG(BLUE_MSG << "mt fork, entpt? " << !!entpt << ENDCOLOR);
         m_pid = new std::thread(entpt? entpt: noop); //myexit); //run_child);
         return m_pid; //parent
     }
     template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
     typename std::enable_if<IPC_copy, /*pid_t*/ PIDTYPE>::type fork(Callback entpt = 0) //ipc (multi-proc) specialization
     {
+        DEBUG_MSG(BLUE_MSG << "ipc fork, entpt? " << !!entpt << ENDCOLOR);
         pid_t retval = ::fork();
         if (entpt && (retval == 0)) //child
         {

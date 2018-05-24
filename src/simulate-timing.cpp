@@ -18,7 +18,7 @@ echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 #define WANT_DETAILS  true //false //true
 #define MSGQUE_DEBUG
 #define IPC_DEBUG
-//#define MSGQUE_DETAILS  true
+#define MSGQUE_DETAILS  true
 
 //#define ABS(n)  (((n) < 0)? -(n): (n))
 
@@ -62,10 +62,10 @@ echo -e '\e[1;36m'; OPT=3; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pth
 //busy wait:
 //NOTE: used to simulate real CPU work; cen't use blocking wait() function
 //NOTE: need to calibrate to cpu speed
-void busy_msec(int msec)
+void busy_msec(int msec, SrcLine srcline = 0)
 {
 //NO    for (double started = elapsed_msec(); elapsed_msec() < started + msec; ) //NOTE: can't use elapsed time; allows overlapped time slices
-    ATOMIC_MSG(BLUE_MSG << timestamp() << "busy wait " << msec << " msec" << ENDCOLOR);
+    ATOMIC_MSG(BLUE_MSG << timestamp() << "busy wait " << msec << " msec" << ENDCOLOR_ATLINE(srcline));
     while (msec-- > 0)
         for (volatile int i = 0; i < 300000; ++i); //NOTE: need volatile to prevent optimization; need busy loop to occupy CPU; sleep system calls do not consume CPU time (allows threads to overlap)
 }
@@ -266,12 +266,12 @@ void wker_main()
     WKER_MSG(CYAN_MSG, "started, render " << frnum << " for " << WKER_DELAY << " msec");
     for (;;)
     {
-        busy_msec(WKER_DELAY); //simulate render()
-        if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "rendered " << frnum << ", now notify main");
+        busy_msec(WKER_DELAY, SRCLINE); //simulate render()
+        if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "rendered frnum " << frnum << ", now notify main");
         mainq->send(NAMED{ _.msg = 1 << myinx; SRCLINE; });
 
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "now wait for next req");
-        frnum = wkerq->rcv(NAMED{ _.unwanted = ~(_.wanted = frnum); SRCLINE; }); //&MsgQue::not_wanted, frnum);
+        frnum = wkerq->rcv(NAMED{ /*_.unwanted = ~(_.wanted = frnum)*/ _.wanted = ~frnum; SRCLINE; }); //&MsgQue::not_wanted, frnum);
         WKER_MSG(BLUE_MSG, "woke with req for " << frnum << ", now render for " << WKER_DELAY << " msec");
         if (frnum < 0) break;
     }
@@ -366,7 +366,12 @@ int main()
     std::vector<IpcThread<WANT_IPC>> wkers;
     MAIN_MSG(CYAN_MSG, "thread " << myinx << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << &mainq << FMT(", &wkerq = %p") << &wkerq);
 //    pending = 10;
-    for (int n = 0; n < ABS(NUM_WKERs); ++n) wkers.emplace_back(wker_main);
+    for (int n = 0; n < ABS(NUM_WKERs); ++n)
+    {
+        MAIN_MSG(BLUE_MSG, "launch wker " << n << "/" << wkers.size());
+        wkers.emplace_back(wker_main);
+        MAIN_MSG(BLUE_MSG, "launched wker " << n << "/" << wkers.size());
+    }
     MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");
 //    for (int fr = 0; fr < 10; ++fr) //duration
     for (;;)
@@ -375,7 +380,7 @@ int main()
 //        const char* status = "on time";
         mainq->rcv(NAMED{ _.wanted = ((1 << ABS(NUM_WKERs)) - 1) << 1; _.remove = true; SRCLINE; }); //wait for all wkers to respond (blocking)
         MAIN_MSG(PINK_MSG, "all wkers ready, now encode() for " << MAIN_ENCODE_DELAY << " msec");
-        busy_msec(MAIN_ENCODE_DELAY); //simulate encode()
+        busy_msec(MAIN_ENCODE_DELAY, SRCLINE); //simulate encode()
         if (++frnum >= DURATION) frnum = -1; //break;
         const char* status = (frnum < 0)? "quit": "frreq";
         /*if (WANT_DETAILS)*/ MAIN_MSG(PINK_MSG, "encoded, now notify wkers (" << status << ") and finish render() for " << MAIN_PRESENT_DELAY << " msec");
@@ -488,7 +493,15 @@ int main()
 #endif
 
 //EOF
-#clean up shmem objects before running:
 set +x
-echo -e '\e[1;33m'; awk '/#define/{ if (NF > 2) print "ipcrm -vM " $3; }' < shmkeys.h | bash |& grep -v "invalid key" | awk '/removing shared memory segment id/{ id = gensub(/\'/, "", "g", $6); printf "%s %s %s %s %s 0x%x", $1, $2, $3, $4, $5, id; }'; echo -e '\e[0m'
+#if [ $? -eq 0 ]; then
+if [ -f $BIN ]; then
+    echo -e "\e[1;32m compiled OK, now run it ...\e[0m"
+    #clean up shmem objects before running:
+    #set +x
+    echo -e '\e[1;33m'; awk '/#define/{ if (NF > 2) print "ipcrm -vM " $3; }' < shmkeys.h | bash |& grep -v "invalid key" | awk '/removing shared memory segment/{ print gensub(/^(.*) '\''([0-9]+)'\''\s*$/, "\\1 0x\\2", "g", $0); }'; echo -e '\e[0m'
+    ${BASH_SOURCE%.*}
+else
+    echo -e "\e[1;31m compile FAILED \e[0m"
+fi
 #eof
