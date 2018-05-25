@@ -310,12 +310,13 @@ public: //ctor/dtor
 //        std::cout << "thread here: is parent? " << !!m_pid << ", me " << getpid() << "\n" << std::flush;
 //        const char* proctype = isChild()? "child": isError()? "error": "parent"; //isParent()? "parent": "child";
 //#pragma message("there's a recursion problem here?")
-        DEBUG_MSG(YELLOW_MSG << timestamp() << "fork (" << proctype() << "): child pid = " << child_pid() << ENDCOLOR_ATLINE(srcline));
+        DEBUG_MSG(YELLOW_MSG << timestamp() << FMT("ctor@%p") << this << " fork (" << proctype() << "): child pid = " << child_pid() << ENDCOLOR_ATLINE(srcline));
 //        std::cout << "thread here2: is parent? " << !!m_pid << ", me " << getpid() << "\n" << std::flush;
         if (isError()) throw std::runtime_error(strerror(errno)); //fork failed
     }
     ~IpcThread()
     {
+        DEBUG_MSG(YELLOW_MSG << timestamp() << FMT("dtor@%p") << this << " join (" << proctype() << ")? " << isParent() << ENDCOLOR);
         if (isParent()) join(SRCLINE); //waitpid(-1, NULL /*&status*/, /*options*/ 0); //NOTE: will block until child state changes
         auto inx = find(all().begin(), all().end(), this);
         if (inx != all().end()) all().erase(inx);
