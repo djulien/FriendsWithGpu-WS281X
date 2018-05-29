@@ -271,7 +271,7 @@ void wker_main()
         mainq->send(NAMED{ _.msg = 1 << myinx; SRCLINE; });
 
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "now wait for next req");
-        frnum = wkerq->rcv(NAMED{ /*_.unwanted = ~(_.wanted = frnum)*/ _.wanted = ~frnum; SRCLINE; }); //&MsgQue::not_wanted, frnum);
+        frnum = wkerq->rcv(NAMED{ /*_.unwanted = ~(_.wanted = frnum) _.wanted = ~frnum*/ _.msg = frnum + 1; _.msgtype = decltype(wkerq)::MsgType::WantExact; _.remove = false; SRCLINE; }); //&MsgQue::not_wanted, frnum);
         WKER_MSG(BLUE_MSG, "woke with req for " << frnum << ", now render for " << WKER_DELAY << " msec");
         if (frnum < 0) break;
     }
@@ -364,26 +364,27 @@ int main()
 #endif
     int frnum = 0;
     std::vector<IpcThread<WANT_IPC>> wkers;
+    wkers.reserve(ABS(NUM_WKERs)); //CAUTION: reserve space to avoid realloc and copy ctor invokation during loop (which would mess up the wkers)
     MAIN_MSG(CYAN_MSG, "thread " << myinx << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << &mainq << FMT(", &wkerq = %p") << &wkerq);
 //    pending = 10;
 //http://www.bogotobogo.com/cplusplus/C11/3_C11_Threading_Lambda_Functions.php
 //https://stackoverflow.com/questions/41063112/problems-creating-vector-of-threads-in-a-loop?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
 //https://codereview.stackexchange.com/questions/32817/multithreading-c-loop
     for (int n = 0; n < ABS(NUM_WKERs); ++n)
-    {
-        IpcThread<WANT_IPC> wker(wker_main);
-        wkers.push_back(std::move(wker)); //threads must be moved, not copied; http://thispointer.com/c11-how-to-create-vector-of-thread-objects/
+//    {
+//        IpcThread<WANT_IPC> wker(wker_main);
+//        wkers.push_back(std::move(wker)); //threads must be moved, not copied; http://thispointer.com/c11-how-to-create-vector-of-thread-objects/
 //        MAIN_MSG(BLUE_MSG, "launch wker " << n << "/" << wkers.size());
-//broken        wkers.emplace_back(wker_main); //NOTE: sends obj out of scope and calls dtor!
+        wkers.emplace_back(wker_main); //NOTE: sends obj out of scope and calls dtor!
 //        MAIN_MSG(BLUE_MSG, "launched wker " << n << "/" << wkers.size());
-    }
-    MAIN_MSG(PINK_MSG, "launched " << wkers.size() << " wkers");
+//    }
+    MAIN_MSG(PINK_MSG, "launched " << wkers.size() << "/" << wkers.capacity() << " wkers");
 //    for (int fr = 0; fr < 10; ++fr) //duration
     for (;;)
     {
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "now wait for replies");
 //        const char* status = "on time";
-        mainq->rcv(NAMED{ _.wanted = ((1 << ABS(NUM_WKERs)) - 1) << 1; _.remove = true; SRCLINE; }); //wait for all wkers to respond (blocking)
+        mainq->rcv(NAMED{ /*_.unwanted = ~(_.wanted =*/ _.msg = ((1 << ABS(NUM_WKERs)) - 1) << 1; _.msgtype = decltype(mainq)::MsgType::WantExact; _.remove = true; SRCLINE; }); //wait for all wkers to respond (blocking)
         MAIN_MSG(PINK_MSG, "all wkers ready, now encode() for " << MAIN_ENCODE_DELAY << " msec");
         busy_msec(MAIN_ENCODE_DELAY, SRCLINE); //simulate encode()
         if (++frnum >= DURATION) frnum = -1; //break;
