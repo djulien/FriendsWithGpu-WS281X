@@ -351,7 +351,10 @@ private:
 //#include "ostrfmt.h" //FMT()
 
 
-#define SIZEOF(thing)  (sizeof(thing) / sizeof(thing[0]))
+#ifndef SIZEOF
+ #define SIZEOF(thing)  (sizeof(thing) / sizeof((thing)[0]))
+#endif
+
 #define divup(num, den)  (((num) + (den) - 1) / (den))
 #define rdup(num, den)  (divup(num, den) * (den))
 //#define size32_t  uint32_t //don't need huge sizes in shared memory; cut down on wasted bytes

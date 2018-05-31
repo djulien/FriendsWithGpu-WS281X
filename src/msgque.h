@@ -52,6 +52,10 @@
  #define ABS(n)  (((n) < 0)? -(n): (n))
 #endif
 
+#ifndef SIZEOF
+ #define SIZEOF(thing)  (sizeof(thing) / sizeof((thing)[0]))
+#endif
+
 //#ifndef MAX
 // #define MAX(a, b)  (((a) < (b))? (a): (b))
 //#endif

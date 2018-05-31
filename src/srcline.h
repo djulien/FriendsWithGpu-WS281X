@@ -94,11 +94,16 @@ static bool isunique(const char* folder, const char* basename, const char* ext)
 
 //shorten src file name:
 #include <stdio.h> //snprintf()
+#include <atomic> //std::atomic<>
+
 //#define _GNU_SOURCE //select GNU version of basename()
 //#include <stdlib.h> //atoi()
 SrcLine shortsrc(SrcLine srcline, SrcLine defline) //int line = 0)
 {
-    static char buf[60]; //static to preserve after return to caller
+//NO-needs to be thread-safe:    static char buf[60]; //static to preserve after return to caller
+    static std::atomic<int> ff;
+    static char buf_pool[4][60]; //static to preserve after return to caller; kuldge: use buf pool in lieu of mem mgmt of ret bufs
+    char* buf = buf_pool[ff++ % SIZEOF(buf_pool)];
     if (!srcline) srcline = defline;
     if (!srcline) srcline = SRCLINE;
 //std::cout << "raw file " << srcline << "\n" << std::flush;
@@ -117,7 +122,7 @@ SrcLine shortsrc(SrcLine srcline, SrcLine defline) //int line = 0)
     const char* extp = strrchr(srcline, '.');
     if (!extp || !isunique(svsrc, srcline, extp)) extp = srcline + std::min<size_t>(bp - srcline, strlen(srcline)); //drop extension if unambiguous
 //    if (!extp || !isunique([svrc,srcline,extp](auto& _) { _.folder = svsrc; _.basename = srcline; _.ext = extp; }) extp = srcline + std::min<size_t>(bp - srcline, strlen(srcline)); //drop extension if unambiguous
-    snprintf(buf, sizeof(buf), "%.*s%s", (int)(extp - srcline), srcline, bp); //line);
+    snprintf(buf, sizeof(buf_pool[0]), "%.*s%s", (int)(extp - srcline), srcline, bp); //line);
     return buf;
 }
 

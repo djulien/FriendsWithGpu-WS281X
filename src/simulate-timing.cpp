@@ -385,15 +385,15 @@ int main()
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "now wait for replies");
 //        const char* status = "on time";
         mainq->rcv(NAMED{ /*_.unwanted = ~(_.wanted =*/ _.msg = ((1 << ABS(NUM_WKERs)) - 1) << 1; _.msgtype = decltype(mainq)::MsgType::WantExact; _.remove = true; SRCLINE; }); //wait for all wkers to respond (blocking)
-        MAIN_MSG(PINK_MSG, "all wkers ready, now encode() for " << MAIN_ENCODE_DELAY << " msec");
+        MAIN_MSG(PINK_MSG, "all wkers ready, now encode[" << frnum << "] for " << MAIN_ENCODE_DELAY << " msec");
         busy_msec(MAIN_ENCODE_DELAY, SRCLINE); //simulate encode()
         if (++frnum >= DURATION) frnum = -1; //break;
         const char* status = (frnum < 0)? "quit": "frreq";
-        /*if (WANT_DETAILS)*/ MAIN_MSG(PINK_MSG, "encoded, now notify wkers (" << status << ") and finish render() for " << MAIN_PRESENT_DELAY << " msec");
+        /*if (WANT_DETAILS)*/ MAIN_MSG(PINK_MSG, "encoded, now notify wkers (" << status << ") and finish render[" << frnum << "] for " << MAIN_PRESENT_DELAY << " msec");
         wkerq->clear()->send(NAMED{ _.msg = frnum; _.broadcast = true; SRCLINE; }); //wake *all* wkers
 //        MAIN_MSG(PINK_MSG, "notified wkers (" << status << "), now finish render() for " << MAIN_PRESENT_DELAY << " msec");
         sleep_msec(MAIN_PRESENT_DELAY); //simulate render present()
-        if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "presented");
+        if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "presented[" << frnum << "]");
         if (frnum < 0) break;
     }
     for (auto& w: wkers) w.join(); //    std::vector<std::thread> wkers;
