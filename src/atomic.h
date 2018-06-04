@@ -49,7 +49,7 @@
 //#define ATOMIC(stmt)  { std::unique_lock<std::mutex, std::defer_lock> lock(atomic_mut); stmt; }
 //#define ATOMIC(stmt)  { LockOnce lock; stmt; }
 //#define ATOMIC(stmt)  { std::unique_ptr<LockOnce> lock(new LockOnce()); stmt; }
-#define ATOMIC_1ARG(stmt)  { /*InOut here("atomic-1arg")*/; LockOnce<WANT_IPC> lock; stmt; }
+#define ATOMIC_1ARG(stmt)  { /*InOut here("atomic-1arg")*/; LockOnce<WANT_IPC> lock(true, 10, SRCLINE); stmt; }
 //#define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; LockOnce<WANT_IPC> lock(want_lock); stmt; }
 #define ATOMIC_2ARGS(stmt, want_lock)  { /*InOut here("atomic-2args")*/; if (want_lock) ATOMIC_1ARG(stmt) else stmt; }
 //#define ATOMIC_2ARGS(stmt, want_lock)  { InOut here("atomic-2args"); if (lock_once) LockOnce lock(want_lock); stmt; }
@@ -140,43 +140,61 @@
 template <bool IPC = false>
 class LockOnce //: public TopOnly
 {
+//    template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
+//    using DepthCounter = typename std::enable_if<IPC_copy, int>::type; //only need one per process
+//    template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
+//    using DepthCounter = typename std::enable_if<!IPC_copy, thread_local int>::type; //want to detect top level within each thread; need one per thread
 //    bool m_istop;
+    typedef /*std::mutex*/ MutexWithFlag MutexType;
     int& depth(int limit = 0)
     {
-        static int count = 0;
+//        static thread_local int count = 0; //want to detect top level within each thread
+//        static DepthCounter count = 0;
+        int& count = get_count();
         if (limit && (count > limit)) throw std::runtime_error(RED_MSG "inf loop?" ENDCOLOR_NOLINE);
         if (count < 0) throw std::runtime_error(RED_MSG "nesting underflow" ENDCOLOR_NOLINE);
         return count;
     }
 //    static inline bool istop() { return !depth(); }
 //    static std::mutex m_mutex; //in-process mutex (all threads have same address space)
-    std::unique_lock<std::mutex> m_lock;
+    std::unique_lock<MutexType> m_lock;
 public: //ctor/dtor
 //    LockOnce(bool ignored = false): m_lock(mutex()) {} //{ mutex().lock(); } //: base_type(mutex()) {}
-    explicit LockOnce(bool want_lock = true, int limit = 10): m_lock(mutex(), std::defer_lock) { maybe_lock(want_lock, limit); } // ++recursion(); }
-    ~LockOnce() { --depth(); } //mutex().unlock(); }
+    explicit LockOnce(bool want_lock = true, int limit = 10, SrcLine srcline = 0): m_lock(mutex(srcline), std::defer_lock) { maybe_lock(want_lock, limit, srcline); } // ++recursion(); }
+    ~LockOnce() { /*std::cout << " U? "*/; --depth(); } //mutex().unlock(); }
 private: //members
-    void maybe_lock(bool want_lock, int limit = 0)
+    void maybe_lock(bool want_lock, int limit = 0, SrcLine srcline = 0)
     {
         bool istop = !depth(limit)++;
+//        char debug[10], *bp = debug;
+//        *bp++ = ' '; *bp++ = want_lock? 'W': 'w'; *bp++ = istop? 'T': 't'; *bp++ = m_lock.mutex()? 'M': 'm'; strcpy(bp, " ");
+//        std::cout << debug;
         want_lock &= istop && m_lock.mutex();
-        DEBUG_MSG(BLUE_MSG << "LockOnce: want lock? " << want_lock << ENDCOLOR, istop);
+        DEBUG_MSG(BLUE_MSG << "LockOnce: want lock? " << want_lock << ENDCOLOR_ATLINE(srcline), istop);
         if (want_lock) m_lock.lock(); //only lock mutex if ready and caller wants lock
+        std::cout << (istop? 'T': 'n');
     } 
 //local memory (non-ipc) specialization:
     template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
-    static typename std::enable_if<!IPC_copy, std::mutex&>::type mutex() //use wrapper to avoid trailing static decl at global scope
+    static typename std::enable_if<!IPC_copy, MutexType&>::type mutex(SrcLine srcline = 0) //use wrapper to avoid trailing static decl at global scope
     {
-        static int ready = 0;
-        int wasready = ready;
-        static std::mutex m_mutex;
+        static MutexType m_mutex;
+        static bool ready = false;
+        bool wasready = ready;
+        ready = true;
 //        bool istop = !depth(limit)++;
-        DEBUG_MSG(CYAN_MSG << "LockOnce: " << FMT("heap mutex @%p,") << &m_mutex << " was ready? " << wasready << ENDCOLOR, !ready++);
+        DEBUG_MSG(CYAN_MSG << "LockOnce: " << FMT("heap mutex @%p") << &m_mutex << ", locked? " << m_mutex.islocked << ", was ready? " << wasready << ENDCOLOR_ATLINE(srcline), !ready++);
         return m_mutex;
+    }
+    template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
+    typename std::enable_if<!IPC_copy, int&>::type get_count() //use wrapper for specialization and to avoid trailing static decl at global scope
+    {
+        static thread_local int count = 0; //want to detect top level within each thread; need one per thread
+        return count;
     }
 //shared memory (ipc) specialization:
     template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
-    static typename std::enable_if<IPC_copy, std::mutex&>::type mutex() //use wrapper to avoid trailing static decl at global scope
+    static typename std::enable_if<IPC_copy, MutexType&>::type mutex(SrcLine srcline = 0) //use wrapper to avoid trailing static decl at global scope
     {
 //CAUTION: recursive; need to satisfy unique_lock<> on deeper levels without mutex ready yet
 //        static std::mutex m_mutex;
@@ -198,14 +216,20 @@ private: //members
 #else
 //        bool wasready = ready++;
 //        bool istop = !depth(limit)++;
-        static MemPtr<std::mutex, IPC> m_mutex(NAMED{ _.shmkey = ATOMIC_MSG_SHMKEY; _.persist = true; SRCLINE; }); //smart ptr to shmem
+        static MemPtr<MutexType, IPC> m_mutex(NAMED{ _.shmkey = ATOMIC_MSG_SHMKEY; _.persist = true; _.srcline = srcline? srcline: SRCLINE; }); //smart ptr to shmem
         static int ready = m_mutex.existed(); //don't init if already there
-        int wasready = ready;
-        if (!ready++) new (m_mutex) std::mutex(); //placement new; init after shm alloc but before any nested DEBUG_MSG
-        DEBUG_MSG(CYAN_MSG << "LockOnce: " << FMT("shmem mutex @%p,") << &*m_mutex << " was ready? " << wasready << ENDCOLOR, ready == 1);
+        bool wasready = ready;
+        if (!ready++) new (&*m_mutex) MutexType(); //placement new; init after shm alloc but before any nested DEBUG_MSG
+        DEBUG_MSG(CYAN_MSG << "LockOnce: " << FMT("shmem mutex @%p") << &*m_mutex << ", locked? " << m_mutex->islocked << ", was ready? " << wasready << ENDCOLOR_ATLINE(srcline), ready == 1);
         return *m_mutex;
 // #error "TODO"
 #endif
+    }
+    template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
+    typename std::enable_if<IPC_copy, int&>::type get_count() //use wrapper for specialization and to avoid trailing static decl at global scope
+    {
+        static int count = 0; //only need one per process
+        return count;
     }
 }; 
 

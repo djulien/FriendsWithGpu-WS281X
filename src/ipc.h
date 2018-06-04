@@ -310,7 +310,7 @@ public: //ctor/dtor
 //        std::cout << "thread here: is parent? " << !!m_pid << ", me " << getpid() << "\n" << std::flush;
 //        const char* proctype = isChild()? "child": isError()? "error": "parent"; //isParent()? "parent": "child";
 //#pragma message("there's a recursion problem here?")
-        DEBUG_MSG(YELLOW_MSG << timestamp() << FMT("ctor@%p") << this << " fork (" << proctype() << "): child pid = " << child_pid() << ENDCOLOR_ATLINE(srcline));
+        DEBUG_MSG(YELLOW_MSG << timestamp() << "IpcThread<" << IPC << FMT("> ctor@%p") << this << " fork (" << proctype() << "): child pid = " << child_pid() << ENDCOLOR_ATLINE(srcline));
 //        std::cout << "thread here2: is parent? " << !!m_pid << ", me " << getpid() << "\n" << std::flush;
         if (isError()) throw std::runtime_error(strerror(errno)); //fork failed
     }
@@ -386,8 +386,10 @@ private: //emulate ipc functions
     template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error
     typename std::enable_if<IPC_copy, /*pid_t*/ PIDTYPE>::type fork(Callback entpt = 0) //ipc (multi-proc) specialization
     {
+        throw std::runtime_error("ipc fork within ctor broken");
         DEBUG_MSG(BLUE_MSG << "ipc fork, entpt? " << !!entpt << ENDCOLOR);
         pid_t retval = ::fork();
+        std::cout << "here1\n" << std::flush;
         if (entpt && (retval == 0)) //child
         {
 //        if (!isChild()) return; //parent or error
@@ -397,6 +399,7 @@ private: //emulate ipc functions
             DEBUG_MSG(RED_MSG << timestamp() << "child " << getpid() << " exit" << ENDCOLOR);
             exit(0); //kludge; don't want to execute remainder of caller
         }
+        DEBUG_MSG(YELLOW_MSG << "fork ret to parent" << ENDCOLOR);
         return retval; //m_pid; //parent
     }
     template <bool IPC_copy = IPC> //kludge: avoid "dependent scope" error

@@ -21,6 +21,7 @@
 #include <type_traits> //std::conditional<>, std::decay<>, std::remove_reference<>, std::remove_pointer<>
 //#include <tr2/type_traits> //std::tr2::direct_bases<>, std::tr2::bases<>
 #include <stdexcept> //std::runtime_error()
+#include <functional> //std::function<>
 //#include <chrono> //std::chrono
 //#include <string> //std::stol()
 
@@ -302,8 +303,8 @@ private:
 //    struct RcvParams { bool (MsgQue::*filter)(int val) = 0, int operand = 0, bool remove = false, SrcLine srcline = SRCLINE; };
 //        template <typename CALLBACK>
 //        int rcv(/*bool (QueData::*filter)(int val)*/ QueFilter filter = &QueData::any, int operand = 0, /*bool (*cb)() decltype(wanted) cb*/ /*CALLBACK&& busycb = 0,*/ bool remove = false, SrcLine srcline = 0)
-        enum MsgType { WantExact, WantAny, WantOther, WantNone };
-        int rcv(int msg = 0, MsgType msgtype = WantExact, /*bool (*cb)() decltype(wanted) cb*/ /*CALLBACK&& busycb = 0,*/ bool remove = true, int poll_interval = 10, SrcLine srcline = 0)
+        enum FilterType { WantExact, WantAny, WantOther, WantNone };
+        int rcv(int msg = 0, FilterType filttype = WantExact, /*bool (*cb)() decltype(wanted) cb*/ /*CALLBACK&& busycb = 0,*/ bool remove = true, int poll_interval = 10, SrcLine srcline = 0)
 //    int rcv(SrcLine mySrcLine = 0, void (*get_params)(struct RcvParams&) = 0)
         {
 //        /*static*/ struct RcvParams params; // = {"none", 999, true}; //allow caller to set func params without allocating struct; static retains values for next call (CAUTION: shared between instances)
@@ -318,22 +319,28 @@ private:
 //            return base_t::rcv(filter, operand, waitfor, remove, srcline);
 //            while (!(this->*filter)(operand)) //ignore spurious wakeups
 //            int mask = wanted | ~unwanted;
-//            auto filter = (msgtype == WantExact)? [m_msgs = this->m_msgs, msg]() { return (m_msgs == msg); }:
-//                (msgtype == WantAny)? [m_msgs = this->m_msgs, msg] { return (m_msgs & msg); }:
-//                (msgtype == WantOther)? [m_msgs = this->m_msgs, msg] { return (m_msgs != msg); }:
-//                (msgtype == WantNone)? [m_msgs = this->m_msgs, msg] { return !(m_msgs & msg); }:
-//                [] { return true; };
-            auto filter = [this /*m_msgs = this->m_msgs&*/, msg, msgtype]()
-            {
-                if (msgtype == WantExact) return (m_msgs == msg);
-                if (msgtype == WantAny) return !!(m_msgs & msg);
-                if (msgtype == WantOther) return (m_msgs != msg);
-                if (msgtype == WantNone) return !(m_msgs & msg);
-                return true;
-            };
+//https://stackoverflow.com/questions/48397297/initializing-capturing-lambda-in-ternary-operator/48397328
+            auto filter = (filttype == WantExact)? std::function<bool()>{ [this /*m_msgs = this->m_msgs&*/, msg]() { return (m_msgs == msg); }}:
+                (filttype == WantAny)? std::function<bool()>{ [this /*m_msgs = this->m_msgs&*/, msg] { return !!(m_msgs & msg); }}:
+                (filttype == WantOther)? std::function<bool()>{ [this /*m_msgs = this->m_msgs&*/, msg] { return (m_msgs != msg); }}:
+                (filttype == WantNone)? std::function<bool()>{ [this /*m_msgs = this->m_msgs&*/, msg] { return !(m_msgs & msg); }}:
+                    std::function<bool()>{ [] { return true; }};
+//            auto filter = [this /*m_msgs = this->m_msgs&*/, msg, msgtype]()
+//            {
+//                if (msgtype == WantExact) return (m_msgs == msg);
+//                if (msgtype == WantAny) return !!(m_msgs & msg);
+//                if (msgtype == WantOther) return (m_msgs != msg);
+//                if (msgtype == WantNone) return !(m_msgs & msg);
+//                return true;
+//            };
+            const char* filt_type = (filttype == WantExact)? "want exact":
+                (filttype == WantAny)? "want any":
+                (filttype == WantOther)? "want other":
+                (filttype == WantNone)? "want none":
+                "don't care";
             for (;;)
             {
-                /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".rcv: wanted " << FMT("0x%x") << msg << /*FMT(", unwanted 0x%x") << unwanted*/ ", msgtype " << msgtype << FMT(", msgs 0x%x") << m_msgs << ", matched? " << filter() << ", remove? " << remove << ", poll " << poll_interval << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
+                /*if (MSGQUE_DETAILS)*/ DETAILS_MSG(BLUE_MSG << timestamp() << "QueData-" << m_name << ".rcv: wanted " << FMT("0x%x") << msg << /*FMT(", unwanted 0x%x") << unwanted*/ ", filttype " << filttype << " (" << filt_type << FMT("), msgs 0x%x") << m_msgs << ", matched? " << filter() << ", remove? " << remove << ", poll " << poll_interval << FMT(", adrs %p") << this << ENDCOLOR_ATLINE(srcline));
 // wanted  unwanted  return?
 //    0         0     msgs != 0   (any)
 //   !0         0     (msgs & wanted) != 0
@@ -433,7 +440,7 @@ public: //named param variants:
 //                int wanted = 0; //filter for wanted msgs
 //                int unwanted = 0; //filter for unwanted msgs
                 int msg = 0;
-                MsgType msgtype = WantExact;
+                FilterType filter_type = WantExact;
 //#endif
 //            QueBusy busycb = 0; //additional logic when queue is busy
                 bool remove = true; //remove queue entry when received
@@ -446,7 +453,7 @@ public: //named param variants:
         struct CtorParams ctor_params; //need a place to unpack params (instance-specific, single threaded is okay for ctor)
         explicit QueData(const CtorParams& params, Unpacked): QueData(IF_DEBUG_comma(params.name) params.msgs, params.srcline) {}
         auto send(const SendParams& params, Unpacked) { return send(params.msg, params.broadcast, params.srcline); }
-        auto rcv(const RcvParams& params, Unpacked) { return rcv(params.msg, params.msgtype, /*params.busycb,*/ params.remove, params.poll, params.srcline); }
+        auto rcv(const RcvParams& params, Unpacked) { return rcv(params.msg, params.filter_type, /*params.busycb,*/ params.remove, params.poll, params.srcline); }
 //#if 1
 //    private:
     public: //auto-lock wrapper
@@ -540,7 +547,7 @@ public: //ctor/dtor
     explicit MsgQue(IF_DEBUG_comma(const char* name = 0) int shmkey = 0, bool persist = true, bool want_reinit = false, /*volatile*/ int msgs = 0, SrcLine srcline = 0): m_ptr(NAMED{ _.shmkey = shmkey; _.persist = persist; _.srcline = srcline; })
     {
         if (!m_ptr.existed() || want_reinit) new (m_ptr) /*decltype(*m_ptr)*/ QueData(IF_DEBUG_comma(name) msgs, srcline); //placement new; init after shm alloc but before usage; don't init if already there
-        DEBUG_MSG(CYAN_MSG << "MsgQue ctor (unpacked): " << FMT("@%p") << &*m_ptr << FMT(", shmkey 0x%x") << shmkey << ", persist " << persist << ", reinit " << want_reinit << ", " << *m_ptr << ENDCOLOR);
+        DEBUG_MSG(CYAN_MSG << "MsgQue<" << MAX_THREADs << "," << ISMT << "," << ISIPC << "> ctor (unpacked): " << FMT("@%p") << &*m_ptr << FMT(", shmkey 0x%x") << shmkey << ", persist " << persist << ", reinit " << want_reinit << ", " << *m_ptr << ENDCOLOR);
     }
 #if 0
     explicit MsgQue(): MsgQue(NAMED{ /*SRCLINE*/; }) { DEBUG_MSG(BLUE_MSG << "ctor1" << ENDCOLOR); }
@@ -560,7 +567,7 @@ public: //operators
 //    inline std::enable_if<ISMT_copy, unlock_after> operator->() { DEBUG_MSG("U->\n"); return unlock_after(this); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 //no-NOTE: need ref here because std::unique_lock<> copy ctor is declared deleted in mutex.h
 //CAUTION: uses copy ctor here (needed because can't cast rvalue/temp to lvalue)
-    typedef typename QueData::MsgType MsgType; //let caller use it
+    typedef typename QueData::FilterType FilterType; //let caller use it
     inline typename QueData::unlock_after operator->() { /*DEBUG_MSG("U->\n")*/; return typename QueData::unlock_after(m_ptr); } //, [](this_type* ptr) { ptr->m_mutex.unlock(); }); } //deleter example at: http://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr
 public: //named variants
         struct CtorParams: public QueData::CtorParams //decltype(*this) {}; //NOTE: needs to be exposed for ctor chaining

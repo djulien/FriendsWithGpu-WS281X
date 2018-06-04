@@ -125,7 +125,7 @@ struct MemHdr
 public:
     static MemHdr* alloc(size_t& size, key_t key = 0, bool* existed = 0)
     {
-        if (existed) existed = false;
+        if (existed) *existed = false;
         if (key) throw std::runtime_error("key not applicable to non-shared memory");
         return static_cast<MemHdr*>(::malloc(size));
     }
@@ -295,6 +295,13 @@ public: //ctor/dtor
     ~MemPtr() { /*if (m_ptr)*/ if (!m_persist) memfree<IPC>(m_ptr); }
     template <typename CALLBACK> //accept any arg type (only want caller's lambda function)
     explicit MemPtr(CALLBACK&& named_params): MemPtr(unpack(named_params), Unpacked{}) {}
+public: //operators
+    operator TYPE*() { return m_ptr; }
+    TYPE* operator->() { return m_ptr; }
+public: //members
+    key_t memkey() { return ::memkey<IPC>(m_ptr); }
+    size_t memsize() { return ::memsize<IPC>(m_ptr); }
+    bool existed() { return ::existed<IPC>(m_ptr); }
 private: //named param helpers
     struct Unpacked {}; //ctor disambiguation tag
     struct CtorParams
@@ -314,13 +321,6 @@ private: //named param helpers
         thunk(named_params, params);
         return params;
     }
-public: //operators
-    operator TYPE*() { return m_ptr; }
-    TYPE* operator->() { return m_ptr; }
-public: //members
-    key_t memkey() { return ::memkey<IPC>(m_ptr); }
-    size_t memsize() { return ::memsize<IPC>(m_ptr); }
-    bool existed() { return ::existed<IPC>(m_ptr); }
 private:
 #if 1
 //helper class to ensure unlock() occurs after member function returns

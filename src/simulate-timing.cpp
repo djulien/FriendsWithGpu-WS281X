@@ -1,6 +1,7 @@
 #!/bin/bash -x
+#cat > /dev/null <<//EOF
 echo -e '\e[1;36m'; OPT=3; BIN=${BASH_SOURCE%.*}; rm -f $BIN; g++ -D__SRCFILE__="\"${BASH_SOURCE##*/}\"" -fPIC -pthread -Wall -Wextra -Wno-unused-parameter -m64 -O$OPT -fno-omit-frame-pointer -fno-rtti -fexceptions  -w -Wall -pedantic -Wvariadic-macros -g -std=c++14 -o "$BIN" -x c++ - <<//EOF; echo -e '\e[0m'
-#line 4 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
+#line 5 __SRCFILE__ #compensate for shell commands above; NOTE: +1 needed (sets *next* line)
 
 //simulate multi-threaded (multi-process) timing
 //self-compiling c++ file; run this file to compile it; //https://stackoverflow.com/questions/17947800/how-to-compile-code-from-stdin?lq=1
@@ -18,6 +19,7 @@ echo -e '\e[1;36m'; OPT=3; BIN=${BASH_SOURCE%.*}; rm -f $BIN; g++ -D__SRCFILE__=
 #define WANT_DETAILS  true //false //true
 #define MSGQUE_DEBUG
 #define IPC_DEBUG
+//#define ATOMIC_DEBUG
 #define MSGQUE_DETAILS  true
 
 //#define ABS(n)  (((n) < 0)? -(n): (n))
@@ -270,8 +272,8 @@ void wker_main()
         if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "rendered frnum " << frnum << ", now notify main");
         mainq->send(NAMED{ _.msg = 1 << myinx; SRCLINE; });
 
-        if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "now wait for next req");
-        frnum = wkerq->rcv(NAMED{ /*_.unwanted = ~(_.wanted = frnum) _.wanted = ~frnum*/ _.msg = frnum + 1; _.msgtype = decltype(wkerq)::MsgType::WantExact; _.remove = false; SRCLINE; }); //&MsgQue::not_wanted, frnum);
+        if (WANT_DETAILS) WKER_MSG(BLUE_MSG, "now wait for next req " << frnum + 1);
+        frnum = wkerq->rcv(NAMED{ /*_.unwanted = ~(_.wanted = frnum) _.wanted = ~frnum*/ _.msg = frnum; _.filter_type = decltype(wkerq)::FilterType::WantOther; _.remove = false; SRCLINE; }); //wait for next fr# *or* eof
         WKER_MSG(BLUE_MSG, "woke with req for " << frnum << ", now render for " << WKER_DELAY << " msec");
         if (frnum < 0) break;
     }
@@ -365,7 +367,7 @@ int main()
     int frnum = 0;
     std::vector<IpcThread<WANT_IPC>> wkers;
     wkers.reserve(ABS(NUM_WKERs)); //CAUTION: reserve space to avoid realloc and copy ctor invokation during loop (which would mess up the wkers)
-    MAIN_MSG(CYAN_MSG, "thread " << myinx << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << &mainq << FMT(", &wkerq = %p") << &wkerq);
+    MAIN_MSG(PINK_MSG, "thread " << myinx << " launch " << NUM_WKERs << " wkers, " << FMT("&mainq = %p") << &mainq << FMT(", &wkerq = %p") << &wkerq);
 //    pending = 10;
 //http://www.bogotobogo.com/cplusplus/C11/3_C11_Threading_Lambda_Functions.php
 //https://stackoverflow.com/questions/41063112/problems-creating-vector-of-threads-in-a-loop?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
@@ -384,7 +386,7 @@ int main()
     {
         if (WANT_DETAILS) MAIN_MSG(PINK_MSG, "now wait for replies");
 //        const char* status = "on time";
-        mainq->rcv(NAMED{ /*_.unwanted = ~(_.wanted =*/ _.msg = ((1 << ABS(NUM_WKERs)) - 1) << 1; _.msgtype = decltype(mainq)::MsgType::WantExact; _.remove = true; SRCLINE; }); //wait for all wkers to respond (blocking)
+        mainq->rcv(NAMED{ /*_.unwanted = ~(_.wanted =*/ _.msg = ((1 << ABS(NUM_WKERs)) - 1) << 1; _.filter_type = decltype(mainq)::FilterType::WantExact; _.remove = true; SRCLINE; }); //wait for all wkers to respond (blocking)
         MAIN_MSG(PINK_MSG, "all wkers ready, now encode[" << frnum << "] for " << MAIN_ENCODE_DELAY << " msec");
         busy_msec(MAIN_ENCODE_DELAY, SRCLINE); //simulate encode()
         if (++frnum >= DURATION) frnum = -1; //break;
@@ -505,7 +507,26 @@ if [ -f $BIN ]; then
     echo -e "\e[1;32m compiled OK, now run it ...\e[0m"
     #clean up shmem objects before running:
     #set +x
-    echo -e '\e[1;33m'; awk '/#define/{ if (NF > 2) print "ipcrm -vM " $3; }' < shmkeys.h | bash |& grep -v "invalid key" | awk '/removing shared memory segment/{ print gensub(/^(.*) '\''([0-9]+)'\''\s*$/, "\\1 0x\\2", "g", $0); }'; echo -e '\e[0m'
+#    echo -e '\e[1;33m'; awk '/#define/{ if (NF > 2) print "ipcrm -vM " $3; }' < shmkeys.h | bash |& grep -v "invalid key" | awk '/[0-9]+/{ print "raw:" $0; val = gensub(/.*[^0-9]([0-9]+)[^0-9].*/, "\\1", "g", $0); print "val=" val; print gensub(/[0-9]+/, sprintf("0x%x", val), "g", $0); }'; echo -e '\e[0m'
+    echo -e '\e[1;33m'; awk  -f- <<-//EOF; echo -e '\e[0m'
+        BEGIN{
+            cmd = "ipcs -m | cat shmkeys.h -";
+            while ((cmd | getline) > 0)
+            {
+#                print "in" NF ":" \$0;
+                if ((NF == 3) && (\$1 == "#define")) keys[strtonum(\$3)] = \$2;
+                if ((NF >= 6) && match(\$2, /^[0-9]+$/) && keys[strtonum(\$1)])
+                {
+                    key = keys[strtonum(\$1)]; id = \$2;
+                    "ipcrm -vM " \$1 | getline IPCRM;
+                    print gensub(id, key, "g", IPCRM);
+                }
+            }
+            close(cmd);
+        }
+#        /#define/{ if (NF > 2) ids[$3] = $2; next; }
+#        { if (NF > 5) print keys[$1] " = " (ids[$3]? ids[$3]: $2); }
+//EOF
     $BIN
 else
     echo -e "\e[1;31m compile FAILED \e[0m"
