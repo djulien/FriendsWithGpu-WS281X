@@ -9,6 +9,7 @@
 //ver 1.0  DJ  3/20/17  finally got texture working on RPi
 //ver 1.0a DJ  3/25/17  add getchar to allow single-step + color changes
 //ver 1.0b DJ  11/22/17  add shim for non-OpenGL version of GpuCanvas
+//ver 1.0c DJ  6/4/18  minor external cleanup
 
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output colors
@@ -20,10 +21,10 @@ const {blocking, wait, getchar} = require('blocking-style');
 //const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
 
 //display settings:
-const FPS = 60; //how fast to run in auto mode (performance testing)
+const FPS = 60; //how fast to run in auto mode (for performance testing)
 const NUM_UNIV = 24; //can't exceed #VGA output pins unless external mux used
 const UNIV_LEN = 60; //24/6; //Screen.height; //Screen.gpio? Screen.height: Math.round(Screen.height / Math.round(Screen.scanw / 24)); ///can't exceed #display lines; for dev try to use ~ square pixels (on-screen only, for debug)
-debug("Screen %d x %d, is RPi? %d, GPIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.gpio);
+debug("Screen %d x %d, is RPi? %d, vgaIO? %d".cyan_lt, Screen.width, Screen.height, Screen.isRPi, Screen.vgaIO);
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //show extra debug info:
@@ -63,7 +64,7 @@ blocking(function*()
 //console.log("canvas", Object.keys(canvas)); //, Object.keys(canvas.prototype));
 //    canvas.UnivType(5, UnivTypes.WS281X);
 //    canvas.UnivType(7, UnivTypes.PLAIN_SSR);
-    canvas.UnivType(1, UnivTypes.CHPLEX_SSR); //| UnivTypes.CHECKSUM | UnivTypes.ACTIVE_HIGH);
+    canvas.UnivType[1] = UnivTypes.CHPLEX_SSR; //| UnivTypes.CHECKSUM | UnivTypes.ACTIVE_HIGH);
     canvas.DumpFile = "dump.log";
 //    canvas.UnivType(1, UnivTypes.CHPLEX_SSR); //| UnivTypes.CHECKSUM | UnivTypes.ACTIVE_HIGH);
 //console.log("hello");
@@ -71,20 +72,20 @@ blocking(function*()
 //    for (var i = 0; i < canvas.width; ++i) buf.push(canvas.UnivType(i));
 //console.log("univ types: ", buf.join(","));
 
-    if (OPTS.SHOW_INTRO && !Screen.gpio) //show title image for 10 sec
+    if (OPTS.SHOW_INTRO && !Screen.vgaIO) //show title image for 10 sec
     {
 //        canvas.fill(MAGENTA);
         canvas.load(__dirname + "/images/one-by-one24x24-5x5.png");
         canvas.duration = OPTS.SHOW_INTRO; //set progress bar limit
-        canvas.push.WS281X_FMT(false); //turn off formatting while showing bitmap (debug)
+        canvas.WS281X_FMT.push(false); //turn off formatting while showing bitmap (debug)
         for (canvas.elapsed = 0; canvas.elapsed <= canvas.duration; ++canvas.elapsed) //update progress bar while waiting
         {
 //if (!(canvas.elapsed % 4)) canvas.SHOW_PROGRESS = !canvas.SHOW_PROGRESS;
-            canvas.paint(); //this only needed to update progress bar
+            canvas.paint(); //this only updates progress bar
             if (canvas.elapsed < canvas.duration) yield wait(1); //don't need to wait final time, just paint
         }
 //        canvas.fill(BLACK);
-        canvas.pop.WS281X_FMT(); //restore previous value
+        canvas.WS281X_FMT.pop(); //restore previous value
     }
 
     console.error(`begin, turn on ${canvas.width} x ${canvas.height} = ${canvas.width * canvas.height} pixels 1 by 1`.green_lt);
@@ -115,12 +116,12 @@ blocking(function*()
             {
                 var cmd = yield getchar(`Next pixel (${x}, ${y}), ${color} ${canvas.WS281X_FMT? "": "no-"}fmt?`.pink_lt);
                 if (cmd == "q") { console.error("quit".green_lt); return; }
-                if (cmd == "f") { canvas.WS281X_FMT = !canvas.WS281X_FMT; continue; } //toggle formatting
+                if (cmd == "f") { canvas.WS281X_FMT.toggle(); continue; } //toggle formatting
                 if (cmd == "a") { canvas.render_stats(true); started = now_sec() - canvas.elapsed / FPS; break; } ///back-dated to compensate for pixels that are already set
                 if (cmd in PALETTE) { color = cmd; continue; } //change color
                 break; //advance to next pixel
             }
-            canvas.pixel(x, y, PALETTE[color]);
+            canvas.pixel[x, y] = PALETTE[color];
             canvas.paint();
         }
     if (started) debug("auto fps: target %d, actual %d, #render/sec %d".cyan_lt, FPS, Math.round(10 * canvas.elapsed / (now_sec() - started)) / 10, Math.round(10 * canvas.render_stats()) / 10);
