@@ -14,9 +14,8 @@
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output colors
 const {debug} = require('./shared/debug');
-const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
-
 const {blocking, wait, getchar} = require('blocking-style');
+const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
 //const {Screen} = require('./shared/screen');
 //const {GpuCanvas/*, rAF*/} = require('./shared/GpuCanvas');
 
@@ -31,7 +30,7 @@ debug("Screen %d x %d, is RPi? %d, vgaIO? %d".cyan_lt, Screen.width, Screen.heig
 //NOTE: these only apply when dpi24 overlay is *not* loaded (otherwise interferes with WS281X timing)
 const OPTS =
 {
-    SHOW_INTRO: 10, //how long to show intro (on screen only)
+    SHOW_INTRO: 10, //how long to show intro (on screen only, in seconds)
 //    SHOW_SHSRC: true, //show shader source code
 //    SHOW_VERTEX: true, //show vertex info (corners)
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits

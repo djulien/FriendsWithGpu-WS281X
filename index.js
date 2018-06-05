@@ -114,13 +114,31 @@ class GpuCanvas
     constructor(args)
     {
         const opts = ctor_opts(arguments);
+        this.devmode = firstOf((opts || {}).DEV_MODE, OPTS.DEV_MODE[1], true);
         const title = firstOf((opts || {}).TITLE || OPTS.TITLE[1], "(title)");
         const num_wkers = firstOf((opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0);
         if (num_wkers > os.cpus().length) debug(`#wkers ${num_wkers} exceeds #cores ${os.cpus().length}`.yellow_lt);
-        this.devmode = firstOf((opts || {}).DEV_MODE, OPTS.DEV_MODE[1], true);
-
-//??        THIS.atomic = atomic_method;    
-        this.UnivType = []; //TODO -> C++
+//for proxy info see: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy
+//for intercepting method calls, see http://2ality.com/2017/11/proxy-method-calls.html
+//        this.UnivType = []; //TODO -> C++
+        this.UnivType = new Proxy(function(){}, //[]; //use proxy object to trigger updates
+        {
+            get: function(target, propname, receiver)
+            {
+                const targetValue = Reflect.get(target, propname, receiver);
+                if (typeof targetValue == 'function')
+                {
+                    return function (...args)
+                    {
+                        debug(`GpuCanvas: call '${propname}' with ${args.length} args`);
+                        return targetValue.apply(this, args);
+                    }
+                }
+                debug(`GpuCanvas: get '${propname}'`);
+            //        return Reflect.get(target, propname, receiver);
+                return targetValue;
+            },
+        };
         if (opts.UNIV_TYPE) for (var i = 0; i < opts.width; ++i) this.UnivType[i] = opts.UNIV_TYPE;
 
 //        const SHMKEY = 0xbeef; //make value easy to find (for debug)
@@ -129,7 +147,7 @@ class GpuCanvas
 //            new Uint32Array(THIS.width * THIS.height); //create pixel buf for caller; NOTE: platform byte order
 //        if ((WANT_SHARED === false) || cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
         this.elapsed = 0;
-//make fmt pushable for simpler debug control in caller:
+//make fmt pushable for simpler debug/control in caller:
         const fmt = [firstOf((opts || {}).WS281X_FMT, OPTS.WS281X_FMT[1], true);
         Object.defineProperty(this, "WS281X_FMT",
         {
@@ -138,6 +156,8 @@ class GpuCanvas
         });
     }
 
+/*
+//??        THIS.atomic = atomic_method;    
     THIS.pixel = pixel_method;
     THIS.fill = fill_method;
     THIS.load_img = load_img_method;
@@ -161,12 +181,12 @@ class GpuCanvas
     const auto_play = firstOf((opts || {}).AUTO_PLAY, OPTS.AUTO_PLAY[1], true);
 //        process.nextTick(delay_playback.bind(THIS, auto_play)); //give caller a chance to define custom methods
 //debug(optimatizationStatus(THIS.));
-//        /*process.nextTick*/ step(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
+//        / *process.nextTick* / step(cluster.isMaster? master_async.bind(THIS, num_wkers, auto_play): worker_async.bind(THIS)); //give caller a chance to define custom methods
 //for setImmediate vs. process.nextTick, see https://stackoverflow.com/questions/15349733/setimmediate-vs-nexttick
     THIS.playback = cluster.isMaster? master_async: worker_async; //allow caller to override these
     if (cluster.isMaster && auto_play) setImmediate(function() { step(THIS.playback); }); //defer execution so caller can override playback()
     return THIS;
-
+*/
 }
 
 
