@@ -22,10 +22,10 @@ const os = require('os');
 //const {blocking, wait} = require('blocking-style');
 //const cluster = require('cluster');
 //const JSON = require('circular-json'); //CAUTION: replace std JSON with circular-safe version
-const {debug/*, elapsed*/} = require('./shared/debug');
+const {debug} = require('./shared/debug');
 //const memwatch = require('memwatch-next');
 //const {Screen, GpuCanvas, UnivTypes} = require('gpu-friends-ws281x');
-const {Screen, GpuCanvas/*, wait, elapsed, cluster, AtomicAdd, optimizationStatus*/} = require('gpu-friends-ws281x');
+const {Screen, GpuCanvas, UnivTypes/*, wait, elapsed, cluster, AtomicAdd, optimizationStatus*/} = require('gpu-friends-ws281x');
 //const EPOCH = cluster.isWorker? elapsed(+process.env.EPOCH): elapsed(); //use consistent time base for logging
 //debug(`epoch ${EPOCH}, master? ${cluster.isMaster}`.blue_lt); //TODO: fix shared time base
 //console.log(JSON.stringify(Screen));
@@ -62,9 +62,9 @@ process.exit();
 /// Config settings:
 //
 
-const DURATION = 60-55+25; //30; //10; //60; //how long to run (sec)
+const DURATION = 60 -55+25; //how long to run (sec)
 //const PAUSE = 5; //how long to pause at end
-const FPS = 30-28; //2; //animation speed (max depends on screen settings)
+const FPS = 30 -28; //target animation speed (may not be achievable; max depends on screen settings)
 
 
 //display settings:
@@ -76,7 +76,7 @@ const OPTS =
 //    SHOW_LIMITS: true, //show various GLES/GLSL limits
     SHOW_PROGRESS: true, //show progress bar at bottom of screen
     DEV_MODE: true, //disable WS281X formatting on screen (for demo purposes); TODO: use process.env.NODE_ENV?
-    WANT_STATS: true, //collect perf stats
+    WANT_STATS: true, //collect performance stats
 //    AUTO_PLAY: false, //true, //start playback
 //    WS281X_DEBUG: true, //show timing debug info
 //    UNIV_TYPE: UnivTypes.CHPLEX_SSR,
@@ -91,16 +91,16 @@ const OPTS =
 //    NUM_WKERS: os.cpus().length, //1 bkg wker for each core (optimal)
 //    NUM_WKERS: 6, //hard-coded #bkg wkers
 };
-if (OPTS.DEV_MODE) Screen.gpio = true; //force full screen (dev/test only)
+if (OPTS.DEV_MODE) Screen.vgaIO = true; //force full screen (dev/test only)
 
 
 //canvas settings:
 //const SPEED = 0.5; //animation step speed (sec)
 //const FPS = 30; //estimated animation speed
 const NUM_UNIV = 24; //#universes; can't exceed #VGA output pins (24) without external mux
-const UNIV_LEN = Screen.gpio? Screen.height: 30; //universe length; can't exceed #display lines; show larger pixels in dev mode
-const WKER_UNIV = OPTS.NUM_WKERS? Math.ceil(NUM_UNIV / OPTS.NUM_WKERS): NUM_UNIV; //#univ to render by each bkg wker
-debug("Screen %d x %d @%d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.width, Screen.height, trunc(Screen.fps, 10), Screen.isRPi, Screen.gpio, process.env.NODE_ENV || "(dev)");
+const UNIV_LEN = Screen.vgaIO? Screen.height: 30; //universe length; can't exceed #display lines; show larger pixels in dev mode
+const WKER_UNIV = Math.ceil(NUM_UNIV / (OPTS.NUM_WKERS || 1)); //#univ to render by each bkg wker
+debug("Screen %d x %d @%d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.width, Screen.height, round(Screen.fps, 10), Screen.isRPi, Screen.vgaIO, process.env.NODE_ENV || "(dev)");
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //GPU canvas:
@@ -143,7 +143,7 @@ else //whole-house on main or bkg thread
     models.push(new PinFinder({name: "WholeHouse"})); //, wker: OPTS.NUM_WKERS? 0: undefined}));
 //    models.push((!OPTS.NUM_WKERS || canvas.isWorker)? new PinFinder(): new BkgWker());
 */
-debug(`${canvas.prtype}# ${canvas.WKER_ID} '${process.pid}' has ${models.length} model(s) to render: ${models.map(m => { return m.name || m.constructor.name}).join(",")}`.blue_lt);
+debug(`${canvas.proctype}# ${canvas.WKER_ID} '${process.pid}' has ${models.length} model(s) to render: ${models.map(m => { return m.name || m.constructor.name}).join(",")}`.blue_lt);
 //console.log(JSON.stringify(models));
 //process.exit();
 
@@ -171,7 +171,7 @@ const BLACK = 0xff000000; //NOTE: alpha must be on to take effect
 //NOTE: use function ctor instead of ES6 class syntax to allow hoisting
 function PinFinder(opts)
 {
-    if (!(this instanceof PinFinder)) return new PinFinder(opts); //{univ_num, name, wker}
+    if (!(this instanceof PinFinder)) return new PinFinder(opts); //{univ, name, wker}
 //    {
 //        if (OPTS.NUM_WKERS && canvas.isMaster) return opts; //don't need real model; return placeholder
 //    }
@@ -242,7 +242,7 @@ canvas.playback =
 function* playback() //onexit)
 {
 throw new Error("todo".red_lt);
-    debug(`begin: startup took %d sec, now run fx for %d sec`.green_lt, trunc(process.uptime(), 10), DURATION);
+    debug(`begin: startup took %d sec, now run fx for %d sec`.green_lt, round(process.uptime(), 10), DURATION);
     var perf = {render: 0, /*idle: 0,*/ paint: 0, cpu: process.cpuUsage()};
 //    this.on('stats', stats_cb, perf);
 //    canvas.wait_stats = true; //request wait() stats
@@ -323,12 +323,12 @@ throw new Error("todo".red_lt);
     idle_time *= 1000 / frnum; //= 1000 * idle_time / frnum;
     paint_time *= 1000 / frnum;
     var frtime = 1000 * canvas.elapsed / frnum;
-    if (wait.stats) wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
-    debug(`avg render time: ${trunc(render_time, 10)} msec (${trunc(1000 / render_time, 10)} fps), avg frame rate: ${trunc(frtime, 10)} msec (${trunc(1000 / frtime, 10)} fps), avg idle: ${trunc(idle_time, 10)} msec (${trunc(100 * idle_time / frtime, 10)}%), ${frnum} frames`.blue_lt);
+    if (wait.stats) wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${round(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${round(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
+    debug(`avg render time: ${round(render_time, 10)} msec (${round(1000 / render_time, 10)} fps), avg frame rate: ${round(frtime, 10)} msec (${round(1000 / frtime, 10)} fps), avg idle: ${round(idle_time, 10)} msec (${round(100 * idle_time / frtime, 10)}%), ${frnum} frames`.blue_lt);
     cpu = process.cpuUsage(cpu);
-    debug(`cpu usage: ${JSON.stringify(cpu)} usec = ${trunc((cpu.user + cpu.system) / 1e4 / canvas.elapsed, 10)}% of elapsed`.blue_lt);
+    debug(`cpu usage: ${JSON.stringify(cpu)} usec = ${round((cpu.user + cpu.system) / 1e4 / canvas.elapsed, 10)}% of elapsed`.blue_lt);
 */
-    debug(`end: ran for ${trunc(canvas.elapsed, 10)} sec`.green_lt); //, now pause for ${PAUSE} sec`.green_lt);
+    debug(`end: ran for ${round(canvas.elapsed, 10)} sec`.green_lt); //, now pause for ${PAUSE} sec`.green_lt);
 //    yield this.wait(PAUSE); //pause to show screen stats longer
 //    canvas.StatsAdjust = DURATION - canvas.elapsed; //-END_DELAY; //exclude pause from final stats
 //    canvas.close();
@@ -362,26 +362,26 @@ function stats(perf, numfr)
 //    var perf = {render: 0, idle: 0, paint: 0, cpu: process.cpuUsage()}, timestamp;
 //debug(JSON.stringify(wait.stats));
     debug("------ stats -----".blue_lt);
-    if (canvst = canvas.render_stats) //cut down on verbosity; //console.log(canvas.wait_stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
-        console.log(`#fr ${canvst.numfr}, #err ${canvst.numerr}, #dirty ${canvst.num_dirty} (${pct(canvst.num_dirty / canvst.numfr)}%), \
-            elapsed ${trunc(canvst.elapsed, 10)} sec (${trunc(canvst.fps, 10)} fps), avg ${trunc(1000 / canvst.fps, 10)} msec = \
-            caller ${trunc(canvst.caller_time, 10)} (${pct(canvst.caller_time / 1000 * canvst.fps)}%) + \
-            encode ${trunc(canvst.encode_time, 10)} (${pct(canvst.encode_time / 1000 * canvst.fps)}%) + \
-            update ${trunc(canvst.update_time, 10)} (${pct(canvst.update_time / 1000 * canvst.fps)}%) + \
-            render ${trunc(canvst.render_time, 10)} (${pct(canvst.render_time / 1000 * canvst.fps)}%), \
-            frame rate: ${canvst.frrate.map(fr => { return trunc(fr, 10); })} msec (avg ${trunc(canvst.avg_fps, 10)} fps)`.replace(/\s+/gm, " ").yellow_lt);
-    if (canvst = canvas.wait_stats) //cut down on verbosity; //console.log(canvas.wait_stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${trunc(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${trunc(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
-        console.log(`wait stats: overdue frames ${commas(canvst.true)}/${commas(canvst.count)} (${pct(canvst.true / canvst.count)}%), \
-            avg wait ${trunc(canvst.total_delay / canvst.count, 10)} msec, \
-            min wait[${canvst.min_when}] ${trunc(canvst.min_delay, 10)} msec, \
-            max wait[${canvst.max_when}] ${trunc(canvst.max_delay, 10)} msec`.replace(/\s+/gm, " ")[canvst.true? "red_lt": "green_lt"]);
-    console.log(`avg frame: ${trunc(perf.time * 1e3 / numfr, 10)} msec (${trunc(numfr / perf.time, 10)} fps) = \
-        avg render: ${trunc(perf.render * 1e3 / numfr, 10)} msec @${trunc(numfr / perf.render, 10)} fps (${pct(perf.render / perf.time)}%) + \
-        avg idle: ${trunc(perf.idle * 1e3 / numfr, 10)} msec (${pct(perf.idle / perf.time)}%) + \
-        avg paint: ${trunc(perf.paint * 1e3 / numfr, 10)} msec (${pct(perf.paint / perf.time)}%), \
+    if (canvst = canvas.render_stats) //cut down on verbosity; //console.log(canvas.wait_stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${round(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${round(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
+        console.log(`#fr ${canvst.numfr}, #err ${canvst.numerr}, #dirty ${canvst.num_dirty} (${percent(canvst.num_dirty / canvst.numfr)}%), \
+            elapsed ${round(canvst.elapsed, 10)} sec (${round(canvst.fps, 10)} fps), avg ${round(1000 / canvst.fps, 10)} msec = \
+            caller ${round(canvst.caller_time, 10)} (${percent(canvst.caller_time / 1000 * canvst.fps)}%) + \
+            encode ${round(canvst.encode_time, 10)} (${percent(canvst.encode_time / 1000 * canvst.fps)}%) + \
+            update ${round(canvst.update_time, 10)} (${percent(canvst.update_time / 1000 * canvst.fps)}%) + \
+            render ${round(canvst.render_time, 10)} (${percent(canvst.render_time / 1000 * canvst.fps)}%), \
+            frame rate: ${canvst.frrate.map(fr => { return round(fr, 10); })} msec (avg ${round(canvst.avg_fps, 10)} fps)`.replace(/\s+/gm, " ").yellow_lt);
+    if (canvst = canvas.wait_stats) //cut down on verbosity; //console.log(canvas.wait_stats.report); //wait.stats.report(); //debug(`overdue frames: ${commas(wait.stats.true)}/${commas(wait.stats.false + wait.stats.true)} (${round(100 * wait.stats.true / (wait.stats.false + wait.stats.true), 10)}%), avg delay ${round(wait.stats.total, 10)} msec, min delay[${}] ${} msec, max delay[] ${} msec`[wait.stats.false? "red_lt": "green_lt"]);
+        console.log(`wait stats: overdue frames ${commas(canvst.true)}/${commas(canvst.count)} (${percent(canvst.true / canvst.count)}%), \
+            avg wait ${round(canvst.total_delay / canvst.count, 10)} msec, \
+            min wait[${canvst.min_when}] ${round(canvst.min_delay, 10)} msec, \
+            max wait[${canvst.max_when}] ${round(canvst.max_delay, 10)} msec`.replace(/\s+/gm, " ")[canvst.true? "red_lt": "green_lt"]);
+    console.log(`avg frame: ${round(perf.time * 1e3 / numfr, 10)} msec (${round(numfr / perf.time, 10)} fps) = \
+        avg render: ${round(perf.render * 1e3 / numfr, 10)} msec @${round(numfr / perf.render, 10)} fps (${percent(perf.render / perf.time)}%) + \
+        avg idle: ${round(perf.idle * 1e3 / numfr, 10)} msec (${percent(perf.idle / perf.time)}%) + \
+        avg paint: ${round(perf.paint * 1e3 / numfr, 10)} msec (${percent(perf.paint / perf.time)}%), \
         ${numfr} frames`.replace(/\s+/gm, " ").blue_lt);
-    var cpu = micro(process.cpuUsage(perf.cpu));
-    console.log(`cpu usage: ${cpu.user} user + ${cpu.system} system = ${cpu.user + cpu.system} sec (${pct((cpu.user + cpu.system) / perf.time)}% elapsed)`.blue_lt);
+    var cpu = usec2sec(process.cpuUsage(perf.cpu));
+    console.log(`cpu usage: ${cpu.user} user + ${cpu.system} system = ${cpu.user + cpu.system} sec (${percent((cpu.user + cpu.system) / perf.time)}% elapsed)`.blue_lt);
     debug("------ /stats -----".blue_lt);
     stats.reported = true;
 }
@@ -402,7 +402,7 @@ function stats(perf, numfr)
 
 
 //convert usec to sec:
-function micro(obj)
+function usec2sec(obj)
 {
     Object.keys(obj).forEach(key => { obj[key] /= 1e6; });
     return obj;
@@ -419,14 +419,14 @@ function commas(val)
 
 
 //show %:
-function pct(val)
+function percent(val)
 {
-    return trunc(100 * val, 10); //+ "%";
+    return round(100 * val, 10); //+ "%";
 }
 
 
-//truncate decimal places:
-function trunc(val, digits)
+//round to specified #decimal places:
+function round(val, digits)
 {
     return Math.floor(val * (digits || 1) + 0.5) / (digits || 1); //round to desired precision
 }

@@ -118,6 +118,7 @@ class GpuCanvas
         const title = firstOf((opts || {}).TITLE || OPTS.TITLE[1], "(title)");
         const num_wkers = firstOf((opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0);
         if (num_wkers > os.cpus().length) debug(`#wkers ${num_wkers} exceeds #cores ${os.cpus().length}`.yellow_lt);
+        this.WKER_ID = -1; //TODO: main (parent) thread; 0..n-1 are wkers
 //for proxy info see: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy
 //for intercepting method calls, see http://2ality.com/2017/11/proxy-method-calls.html
 //        this.UnivType = []; //TODO -> C++
@@ -205,14 +206,14 @@ function ctor_opts(args)
 //combine, make local copy of args:
     const my_opts = {};
     if (typeof arguments[narg - 1] == "object") Object.assign(my_opts, arguments[--narg]); //named args at end
-    switch (narg) //handle fixed position (unnamed) args
+    switch (narg) //handle fixed position (unnamed) args (old api, backwards compatible)
     {
-        case 4: my_opts.WS281X_FMT = arguments[3]; //old api; backwards compatible
-        case 3: my_opts.h = arguments[2];
-        case 2: my_opts.w = arguments[1];
-        case 1: my_opts.title = arguments[0];
+        case 2: my_opts.w = arguments[0]; my_opts.h = arguments[1]; break; //w, h
+        case 4: my_opts.WS281X_FMT = arguments[3]; //title, w, h, fmt (falls thru)
+        case 3: my_opts.h = arguments[2]; my_opts.w = arguments[1]; //title, w, h (falls thru)
+        case 1: my_opts.title = arguments[0]; //title (falls thru)
         case 0: break;
-        default: throw new Error(`GpuCanvas ctor only expects 3 unnamed args, got ${narg}`.red_lt);
+        default: throw new Error(`GpuCanvas ctor only expects 4 unnamed args, got ${narg}`.red_lt);
     }
     debug(`GpuCanvas.ctor(opts ${JSON.stringify(my_opts)})`.blue_lt);
 //validate:

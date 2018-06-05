@@ -38,6 +38,7 @@ const OPTS =
 //    UNIV_TYPE: UnivTypes.CHPLEX_SSR, //set default univ type
 //    WS281X_FMT: true, //force WS281X formatting on screen
 //    WS281X_DEBUG: true, //show timing debug info; NOTE: debug display will slow RPi down from 60 FPS to 20 FPS
+    NUM_WKERS: 1, //whole-house bg render
 };
 
 //ARGB primary colors:
