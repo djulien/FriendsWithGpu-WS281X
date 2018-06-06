@@ -121,7 +121,7 @@ class GpuCanvas
         this.WKER_ID = -1; //TODO: main (parent) thread; 0..n-1 are wkers
 //for proxy info see: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy
 //for intercepting method calls, see http://2ality.com/2017/11/proxy-method-calls.html
-//        this.UnivType = []; //TODO -> C++
+//        this.UnivType = []; //TODO -> C++; see https://github.com/TooTallNate/ref-array/
         this.UnivType = new Proxy(function(){}, //[]; //use proxy object to trigger updates
         {
             get: function(target, propname, receiver)
