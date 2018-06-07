@@ -1,3 +1,12 @@
+C++ class (use shm)
+- pix ary
+- std::mutex/cond instead of SDL
+- msgque<IPC> -> bkg thread
+
+Nan wrapper
+
+JS wrapper
+
 //to check symbols:
 //nm -gC yourLib.so
 //readelf -Ws lib.so

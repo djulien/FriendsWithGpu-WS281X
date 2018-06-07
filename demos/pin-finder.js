@@ -109,13 +109,14 @@ debug("Screen %d x %d @%d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.widt
 //debug(`pid '${process.pid}' master? ${cluster.isMaster}, wker? ${cluster.isWorker}`.cyan_lt);
 const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 
-if (canvas.isMaster)
-{
-    debug("TODO: MP3 any".yellow_lt);
-    debug("TODO: http stats server/monitor".yellow_lt);
-    debug("TODO: js encode".yellow_lt);
-    debug("TODO: emit warnings?".yellow_lt);    
-}
+//if (canvas.isMaster)
+//{
+//    debug("TODO: MP3 any".yellow_lt);
+//    debug("TODO: http stats server/monitor".yellow_lt);
+//    debug("TODO: js encode".yellow_lt);
+//    debug("TODO: emit warnings?".yellow_lt);    
+//    debug("TODO: .fseq reader?".yellow_lt);    
+//}
 
 //no worky:
 //process.on('uncaughtException', err => {
@@ -183,7 +184,8 @@ function PinFinder(opts)
     this.univ_begin = multi_univ? opts.univ[0]: (opts || {}).univ || 0;
     this.univ_end = multi_univ? opts.univ.slice(-1)[0]: (typeof (opts || {}).univ != "undefined")? opts.univ + 1: NUM_UNIV; //range vs. single univ vs. whole-house
     this.name = (opts || {}).name || `PinFinder[${this.univ_begin}-${this.univ_end - 1}]`; //`PinFinder#${PinFinder.count}`;
-    this.affinity = (typeof (opts || {}).affinity != "undefined")? opts.affinity: models.length % (OPTS.NUM_WKERS || 1); //which thread to run on; default to round robin assignment
+    this.affinity = (typeof (opts || {}).affinity != "undefined")? opts.affinity: (PinFinder.count || 0)/*models.length*/ % (OPTS.NUM_WKERS || 1); //which thread to run on; default to round robin assignment
+    if (isNaN(++PinFinder.count)) PinFinder.count = 1;
     if (OPTS.NUM_WKERS && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; bypass remaining init
 //        this.pixels = canvas.pixels.slice(begin_univ * UNIV_LEN, end_univ * UNIV_LEN); //pixels for this/these universe(s) (screen column(s))
 //        this.repeat = 9 - (univ & 7); //patterm repeat factor; 9..2
@@ -198,7 +200,7 @@ PinFinder.prototype.render =
 function render(frnum, timestamp)
 {
 //        if (isNaN(++this.frnum)) this.frnum = 0; //frame# (1 animation step per frame)
-    for (var u = this.univ_begin, uofs = u * canvas.height; u < this.univ_end; ++u, uofs += canvas.height)
+    for (var u = this.univ_begin/*, uofs = u * canvas.height*/; u < this.univ_end; ++u) //, uofs += canvas.height)
     {
         var color = [RED, GREEN, BLUE][u >> 3]; //Math.floor(x / 8)];
         var repeat = 9 - (u & 7); //(x % 8);
@@ -211,7 +213,7 @@ function render(frnum, timestamp)
 //                    var repeat = 9 - (x % 8);
 //                    canvas.pixel(x, y, ((y - t) % repeat)? BLACK: color);
 //                    canvas.pixel(x, y, c? BLACK: color);
-            canvas.pixels[uofs + n] = ((n - frnum) % repeat)? BLACK: color;
+            canvas.pixels[/*uofs + n*/[u, n]] = ((n - frnum) % repeat)? BLACK: color;
 //                canvas.pixels[uofs + n] = csel? BLACK: this.color;
 //            this.pixels[y] = ((y - frnum) % this.repeat)? BLACK: this.color;
     }

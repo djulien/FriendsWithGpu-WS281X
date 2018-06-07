@@ -11,14 +11,27 @@ const fs = require('fs');
 const os = require('os');
 const glob = require('glob');
 
+const {debug} = require('./demos/shared/debug');
+
 //allow easier access to top of stack:
 if (!Array.prototype.top)
     Object.defineProperty(Array.prototype, "top",
     {
-        get: function() { return this[this.length - 1]; },
+        get: function() { return this[this.length - 1]; }, //this.slice(-1)[0]
         set: function(newval) { this[this.length - 1] = newval; },
         enumerable: true, //make it visible in "for" loops (useful for debug)
     });
+
+
+//ARGB colors:
+const BLACK = 0xff000000; //NOTE: need A to affect output
+//const WHITE = 0xffffffff;
+
+//const U32SIZE = Uint32Array.BYTES_PER_ELEMENT; //reduce verbosity
+//const MAGIC = 0x1234beef; //used to detect if shared memory is valid
+//const HDRLEN = 2; //magic + sync count
+
+//const QUIT = -1000; //0x7fffffff; //uint32 value to signal eof
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -29,7 +42,6 @@ if (!Array.prototype.top)
 //const {Screen, GpuCanvas, UnivTypes, /*shmbuf, AtomicAdd,*/ usleep, RwlockOps, rwlock} = require('./build/Release/gpu-canvas.node'); //bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
 const Screen = {}, UnivTypes = {};
 function usleep() {}
-const {debug} = require('./demos/shared/debug');
 
 
 module.exports.Screen = Screen;
@@ -108,38 +120,35 @@ const OPTS =
 
 const GpuCanvas = //allow refs elsewhere in file
 module.exports.GpuCanvas =
+//CAUTION: classes are not hoisted
 class GpuCanvas
 {
-//    constructor(title, w, h, opts)
-    constructor(args)
-    {
-        const opts = ctor_opts(arguments);
+//    if (!(this instanceof Array2D)) return new Array2D(opts);
+//    Proxy.call(this, function(){ this.isAry2D = true; }, hooks);
+    constructor(opts) //constructor(title, w, h, want_fmt, opts)
+{
+//        console.log(`Array2D ctor: ${JSON.stringify(opts)}`.blue_lt);
+        opts = ctor_opts(arguments);
         this.devmode = firstOf((opts || {}).DEV_MODE, OPTS.DEV_MODE[1], true);
-        const title = firstOf((opts || {}).TITLE || OPTS.TITLE[1], "(title)");
-        const num_wkers = firstOf((opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0);
-        if (num_wkers > os.cpus().length) debug(`#wkers ${num_wkers} exceeds #cores ${os.cpus().length}`.yellow_lt);
-        this.WKER_ID = -1; //TODO: main (parent) thread; 0..n-1 are wkers
+        this.title = firstOf((opts || {}).TITLE || OPTS.TITLE[1], "(title)");
+        this.num_wkers = firstOf((opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0);
+        if (this.num_wkers > os.cpus().length) debug(`#wkers ${num_wkers} exceeds #cores ${os.cpus().length}`.yellow_lt);
+//https://stackoverflow.com/questions/37714787/can-i-extend-proxy-with-an-es2015-class
 //for proxy info see: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy
 //for intercepting method calls, see http://2ality.com/2017/11/proxy-method-calls.html
 //        this.UnivType = []; //TODO -> C++; see https://github.com/TooTallNate/ref-array/
-        this.UnivType = new Proxy(function(){}, //[]; //use proxy object to trigger updates
-        {
-            get: function(target, propname, receiver)
-            {
-                const targetValue = Reflect.get(target, propname, receiver);
-                if (typeof targetValue == 'function')
-                {
-                    return function (...args)
-                    {
-                        debug(`GpuCanvas: call '${propname}' with ${args.length} args`);
-                        return targetValue.apply(this, args);
-                    }
-                }
-                debug(`GpuCanvas: get '${propname}'`);
-            //        return Reflect.get(target, propname, receiver);
-                return targetValue;
-            },
-        };
+//new Proxy(function(){ this.isAry2D = true; },
+//        const {w, h} = opts || {};
+//        const defaults = {w: 1, h: 1};
+        const want_debug = true; //reduce xyz() overhead
+        Object.assign(this, /*defaults,*/ opts || {}); //{width, height, depth}
+//store 3D dimensions for closure use; also protects against caller changing dimensions after array is allocated:
+        const width = this.w || this.width || 1, height = this.h || this.height || 1, depth = this.d || this.depth || 1;
+        const pixary /*this.ary*/ = new Array(width * height * depth); //[]; //contiguous for better xfr perf to GPU
+//        const xyz /*this.xy = this.xyz*/ = /*(isNaN(this.w || this.width) || isNaN(this.h || this.height))*/(height * depth == 1)? inx1D: /*isNaN(this.d || this.depth)*/(depth == 1)? inx2D: inx3D;
+//        var [x, y, z] = key.split(","); //[[...]] in caller becomes comma-separated string; //.reduce((prev, cur, inx, all) => { return }, 0);
+        this.WKER_ID = -1; //TODO: main (parent) thread; 0..n-1 are wkers
+        pixary.fill(BLACK);
         if (opts.UNIV_TYPE) for (var i = 0; i < opts.width; ++i) this.UnivType[i] = opts.UNIV_TYPE;
 
 //        const SHMKEY = 0xbeef; //make value easy to find (for debug)
@@ -149,13 +158,81 @@ class GpuCanvas
 //        if ((WANT_SHARED === false) || cluster.isMaster) THIS.pixels.fill(BLACK); //start with all pixels dark
         this.elapsed = 0;
 //make fmt pushable for simpler debug/control in caller:
-        const fmt = [firstOf((opts || {}).WS281X_FMT, OPTS.WS281X_FMT[1], true);
+        const fmt = [firstOf((opts || {}).WS281X_FMT, OPTS.WS281X_FMT[1], true)]; //stack
         Object.defineProperty(this, "WS281X_FMT",
         {
             get: function() { return fmt.top; }.bind(this),
             set: function(newval) { fmt.top = newval; /*this.pivot = this[name]*/; this.paint(); }, //kludge: handle var changes upstream
         });
+
+        debug(`GpuCanvas after ctor: ${JSON.stringify(this)}, #pixels ${pixary.length}`.blue_lt);
+        if (want_debug) this.dump = function(desc) { console.log(`GpuCanvas dump pixels '${desc || ""}': ${pixary.length} ${JSON.stringify(pixary)}`.blue_lt); }
+//create proxy to intercept property accesses:
+//most accesses will be for pixel array, so extra proxy overhead for non-pixel properties is assumed to be insignificant
+//for intercepting method calls, see http://2ality.com/2017/11/proxy-method-calls.html
+//proxy object can also trigger method calls on property updates
+        return new Proxy(this, //return proxy object instead of default "this"; see https://stackoverflow.com/questions/40961778/returning-es6-proxy-from-the-es6-class-constructor?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+        {
+/*NO; ctor already happened (caller)
+            construct: function(target, ctor_args, newTarget) //ctor args: [{width, height}]
+            {
+                const {w, h} = ctor_args[0] || {};
+                const THIS = {pxy_w: w, pxy_h: h}; //wrapped obj
+//                THIS.dump = function() { console.log(`Array2D dump: w ${this.w}. h ${this.h}`.blue_lt); }
+//                THIS.func = function() { console.log("func".blue_lt); }
+                console.log(`Array2D ctor trap: ${typeof target} => ${typeof newTarget}, ${JSON.stringify(THIS)} vs ${JSON.stringify(this)}`.cyan_lt);
+                return THIS;
+            },
+*/    
+            get: function(target, key, rcvr)
+            {
+    //        if (!(propKey in target)) throw new ReferenceError('Unknown property: '+propKey);
+    //        return Reflect.get(target, propKey, receiver);
+//                console.log("get " + key);
+//                if (!(key in target)) target = target.ary; //if not at top level, delegate to array contents
+                const inx = xyz(key), istop = isNaN(inx);
+                const value = istop? target[key]: (inx >= 0)? pixary[inx]: BLACK; //null;
+                if (typeof value == 'function') return function (...args) { return value.apply(this, args); } //Reflect[key](...args);
+                debug(shorten(`GpuCanvas got-${istop? "obj": (inx < 0)? "noop": "ary"}[${typeof key}:${key} => ${typeof inx}:${inx}] = ${typeof value}:${value}`.blue_lt));
+      //        console.log(`ary2d: get '${key}'`);
+    //        return Reflect.get(target, propname, receiver);
+                return value;
+            },
+            set: function(target, key, newval, rcvr)
+            {
+                const inx = xyz(key), istop = isNaN(inx);
+                debug(shorten(`GpuCanvas set-${istop? "obj": (inx < 0)? "noop": "ary"}[${typeof key}:${key} => ${typeof inx}:${inx}] = ${newval}`.blue_lt));
+                return istop? target[key] = newval: (inx >= 0)? /*target.*/pixary[inx] = newval: newval; //Reflect.set(target, key, value, rcvr);
+            },
+        });
+
+//multi-dim array indexing:
+        function xyz(key)
+        {
+            const [x, y, z] = key.split(","); //[[x,y,z]] in caller becomes comma-separated string
+            const inx = (typeof y == "undefined")? (isNaN(x)? x: (+x < pixary.length)? +x: -1): //1D; range check or as-is
+                            (isNaN(x) || isNaN(y))? key: //prop name; not array index
+                            (typeof z == "undefined")? //2D
+                                (/*(+x >= 0) &&*/ (+x < width) && (+y >= 0) && (+y < height))? +x * height + +y: -1: //range check
+                            isNaN(z)? key: //prop name; not array index
+                                (/*(+x >= 0) &&*/ (+x < width) && (+y >= 0) && (+y < height) && (+z >= 0) && (+z < depth))? (+x * height + +y) * depth + +z: -1; //range check
+            if (want_debug && isNaN(++(xyz.seen || {})[key])) //reduce redundant debug info
+            {
+                debug(shorten(`GpuCanvas xyz '${key}' => x ${typeof x}:${x}, y ${typeof y}:${y}, z ${typeof z}:${z} => inx ${typeof inx}:${inx}`.blue_lt));
+                if (!xyz.seen) xyz.seen = {};
+                xyz.seen[key] = 1;
+            }
+            return inx;
+        }
+//cut down on verbosity:
+        function shorten(str)
+        {
+            return (str || "").replace(/undefined(:undefined)?|string:|number:|object:/g, str => { return str.slice(0, 3) + ((str.slice(-1) == ":")? ":": ""); });
+        }
     }
+};
+//inherits(Array2D, Proxy);
+
 
 /*
 //??        THIS.atomic = atomic_method;    
