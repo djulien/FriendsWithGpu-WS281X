@@ -13,11 +13,11 @@
 //ver 1.0a DJ  9/24/17  minor clean up
 //ver 1.0b DJ  11/22/17  add shim for non-OpenGL version of GpuCanvas
 //ver 1.0.18 DJ  1/9/18  updated for multi-threading, simplified
-
+//ver 1.0.18b DJ  6/6/18  minor api cleanup; misc fixes to multi-threading
 
 'use strict'; //find bugs easier
 require('colors').enabled = true; //for console output (all threads)
-const os = require('os');
+const os = require('os'); //cpus()
 //const pathlib = require('path');
 //const {blocking, wait} = require('blocking-style');
 //const cluster = require('cluster');
@@ -68,7 +68,7 @@ const FPS = 30 -28; //target animation speed (may not be achievable; max depends
 
 
 //display settings:
-//NOTE: most of these only apply when GPIO pins are *not* presenting VGA signals (ie, dev mode); otherwise, they interfere with WS281X signal fmt
+//NOTE: some of these only apply when GPIO pins are *not* presenting VGA signals (ie, dev mode); otherwise, they interfere with WS281X signal fmt
 const OPTS =
 {
 //    SHOW_SHSRC: true, //show shader source code
@@ -97,10 +97,10 @@ if (OPTS.DEV_MODE) Screen.vgaIO = true; //force full screen (dev/test only)
 //canvas settings:
 //const SPEED = 0.5; //animation step speed (sec)
 //const FPS = 30; //estimated animation speed
-const NUM_UNIV = 24; //#universes; can't exceed #VGA output pins (24) without external mux
+const NUM_UNIV = 24; //#universes; can't exceed #VGA output pins (24) without external h/w mux
 const UNIV_LEN = Screen.vgaIO? Screen.height: 30; //universe length; can't exceed #display lines; show larger pixels in dev mode
-const WKER_UNIV = Math.ceil(NUM_UNIV / (OPTS.NUM_WKERS || 1)); //#univ to render by each bkg wker
-debug("Screen %d x %d @%d Hz, is RPi? %d, GPIO? %d, env %s".cyan_lt, Screen.width, Screen.height, round(Screen.fps, 10), Screen.isRPi, Screen.vgaIO, process.env.NODE_ENV || "(dev)");
+const WKER_UNIV = Math.ceil(NUM_UNIV / (OPTS.NUM_WKERS || 1)); //#univ for each bkg wker to render
+debug("Screen %d x %d @%d Hz, is RPi? %d, vgaIO? %d, env %s".cyan_lt, Screen.width, Screen.height, round(Screen.fps, 10), Screen.isRPi, Screen.vgaIO, process.env.NODE_ENV || "(dev)");
 //debug("window %d x %d, video cfg %d x %d vis (%d x %d total), vgroup %d, gpio? %s".cyan_lt, Screen.width, Screen.height, Screen.horiz.disp, Screen.vert.disp, Screen.horiz.res, Screen.vert.res, milli(VGROUP), Screen.gpio);
 
 //GPU canvas:
@@ -130,10 +130,18 @@ const canvas = new GpuCanvas(NUM_UNIV, UNIV_LEN, OPTS);
 /// Models/effects rendering:
 //
 
+//spread models across multiple threads:
+//each model handles WKER_UNIV universes
 const models = []; //list of models/effects to be rendered
-//split up models across multiple threads:
-for (var u = 0; u < NUM_UNIV; u += WKER_UNIV)
-    models.push(new PinFinder({univ: [u, Math.min(u + WKER_UNIV, NUM_UNIV)]})); //, get name() { return `Univ#${this.ubegin}..${this.uend - 1}`; }, })); //, wker: Math.floor(u / WKER_UNIV)}));
+for (var u = 0, wker = 0; u < NUM_UNIV; u += WKER_UNIV, ++wker)
+//    if (!OPTS.NUM_WKERS || (canvas.WKER_ID == wker))
+    models.push(new PinFinder({univ: [u, Math.min(u + WKER_UNIV, NUM_UNIV)], affinity: wker})); //, get name() { return `Univ#${this.ubegin}..${this.uend - 1}`; }, })); //, wker: Math.floor(u / WKER_UNIV)}));
+models.mine = function(want_names)
+{
+    return want_names?
+        models.map(m => m.ismine()? m.name || m.constructor.name: "(not this one)"): //list
+        models.reduce((prev, m, inx, all) => prev + m.ismine(), 0); //count only
+}
 /*
 if (OPTS.NUM_WKERS > 1) //split up models across multiple bkg threads
     for (var u = 0; u < NUM_UNIV; ++u)
@@ -144,7 +152,7 @@ else //whole-house on main or bkg thread
     models.push(new PinFinder({name: "WholeHouse"})); //, wker: OPTS.NUM_WKERS? 0: undefined}));
 //    models.push((!OPTS.NUM_WKERS || canvas.isWorker)? new PinFinder(): new BkgWker());
 */
-debug(`${canvas.proctype}# ${canvas.WKER_ID} '${process.pid}' has ${models.length} model(s) to render: ${models.map(m => { return m.name || m.constructor.name}).join(",")}`.blue_lt);
+debug(`${canvas.proctype}# ${canvas.WKER_ID} '${process.pid}' has ${models.mine(false)}/${models.length} model(s) to render: ${models.mine(true)/*.join(",")*/}`.blue_lt);
 //console.log(JSON.stringify(models));
 //process.exit();
 
@@ -180,19 +188,26 @@ function PinFinder(opts)
 //    this.name = (opts || {}).name || `PinFinder#${PinFinder.count}`;
 //    const whole_house = (typeof (opts || {}).univ == "undefined");
 //        this.univ_num = univ_num; //stofs = univ_num * univ_len; //0..23 * screen height (screen column)
-    const multi_univ = ((opts || {}).univ || []).length; //caller wants univ range (although it could be just one)
-    this.univ_begin = multi_univ? opts.univ[0]: (opts || {}).univ || 0;
-    this.univ_end = multi_univ? opts.univ.slice(-1)[0]: (typeof (opts || {}).univ != "undefined")? opts.univ + 1: NUM_UNIV; //range vs. single univ vs. whole-house
-    this.name = (opts || {}).name || `PinFinder[${this.univ_begin}-${this.univ_end - 1}]`; //`PinFinder#${PinFinder.count}`;
-    this.affinity = (typeof (opts || {}).affinity != "undefined")? opts.affinity: (PinFinder.count || 0)/*models.length*/ % (OPTS.NUM_WKERS || 1); //which thread to run on; default to round robin assignment
-    if (isNaN(++PinFinder.count)) PinFinder.count = 1;
-    if (OPTS.NUM_WKERS && (this.affinity != canvas.WKER_ID)) return; //not for this wker thread; bypass remaining init
+    const [univ_begin, univ_end] = (opts || {}).univ;
+//    const multi = ((opts || {}).univ || []).length; //caller wants univ range (although it could be just one)
+//    this.univ_begin = multi? opts.univ[0]: (opts || {}).univ || 0;
+//    this.univ_end = multi? opts.univ.slice(-1)[0]: (typeof (opts || {}).univ != "undefined")? opts.univ + 1: NUM_UNIV; //range vs. single univ vs. whole-house
+    debug(`univ begin ${typeof univ_begin}:${univ_begin}, end ${typeof univ_end}:${univ_end}`);
+    this.name = (opts || {}).name || `PinFinder[${this.univ_begin}..${this.univ_end - 1}]`; //`PinFinder#${PinFinder.count}`;
+//    this.affinity = (typeof (opts || {}).affinity != "undefined")? opts.affinity: (PinFinder.count || 0)/*models.length*/ % (OPTS.NUM_WKERS || 1); //which thread to run on; default to round robin assignment
+//    if (isNaN(++PinFinder.count)) PinFinder.count = 1;
+    if (!ismine()) return; //not for this wker thread; bypass remaining init
 //        this.pixels = canvas.pixels.slice(begin_univ * UNIV_LEN, end_univ * UNIV_LEN); //pixels for this/these universe(s) (screen column(s))
 //        this.repeat = 9 - (univ & 7); //patterm repeat factor; 9..2
 //        this.height = univ_len; //universe length (screen height)
 //        this.color = (opts || {}).color || WHITE;
 //        this.frnum = 0; //frame# (1 animation step per frame)
-//TODO: more init here if needed (after affinity check)
+//TODO: additional init here (models for this wker only)
+}
+PinFinder.prototype.ismine =
+function ismine()
+{
+    return !OPTS.NUM_WKERS || (this.affinity == canvas.WKER_ID);
 }
 //synchronous render:
 //handles 1 or more universes

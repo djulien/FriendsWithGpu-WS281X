@@ -7,11 +7,23 @@
 
 "use strict"; //find bugs easier
 require('colors').enabled = true; //console output colors; allow bkg threads to use it also
-const fs = require('fs');
 const os = require('os');
+const fs = require('fs');
 const glob = require('glob');
 
-const {debug} = require('./demos/shared/debug');
+//cut down on verbosity:
+//const {debug} = require('./demos/shared/debug');
+const debug = function(...args)
+{
+    const debug_inner = require('./demos/shared/debug').debug;
+//    args[0] = (args[0] || "").replace(/undefined(:undefined)?|string:|number:|object:|boolean:/g, str => str.slice(0, 3) + ((str.slice(-1) == ":")? ":": ""));
+//    args[0] = (args[0] || "").replace(/undef(ined(:undefined)?)|str(ing):|num(ber):|obj(ect):|bool(ean):/g, (match, p1, p2, p3, p4, p5, p6) => match.replace(p1 || p2 || p3 || p4 || p5 || p6, ""));
+    args[0] = (args[0] || "").replace(/undef(ined)(:undefined)?|str(ing):|num(ber):|obj(ect):|bool(ean):/g, (match, ...todrop) => /*todrop.slice(0, 6).join("").red_lt +*/ match.replace(todrop.slice(0, 6).join(""), "")); //.replace(parts.join("+", ""));
+    ++debug_inner.nested; //kludge: compensate for extra stack level
+    debug_inner.apply(null, args);
+}
+//debug("undefined  undefined:undefined  undefined:x");
+//debug("string  string:string  string:x");
 
 //allow easier access to top of stack:
 if (!Array.prototype.top)
@@ -40,7 +52,9 @@ const BLACK = 0xff000000; //NOTE: need A to affect output
 //
 
 //const {Screen, GpuCanvas, UnivTypes, /*shmbuf, AtomicAdd,*/ usleep, RwlockOps, rwlock} = require('./build/Release/gpu-canvas.node'); //bindings('gpu-canvas'); //fixup(bindings('gpu-canvas'));
-const Screen = {}, UnivTypes = {};
+const Screen = {};
+Screen.width = 1024; Screen.height = 768; Screen.fps = 30; //TODO:
+const UnivTypes = {};
 function usleep() {}
 
 
@@ -73,7 +87,7 @@ function isRPi()
 //TODO: read memory; for now, just query device tree overlays
 function vgaIO()
 {
-    const DVOs = "/sys/firmware/devicetree/base"; //device overlays
+    const DVOs = "/sys/firmware/devicetree/base"; //folder for device overlays
     if (vgaIO.hasOwnProperty('cached')) return vgaIO.cached;
 //check if various device tree overlays are loaded:
 //dpi24 or vga565/666 send video to GPIO pins
@@ -128,7 +142,7 @@ class GpuCanvas
     constructor(opts) //constructor(title, w, h, want_fmt, opts)
 {
 //        console.log(`Array2D ctor: ${JSON.stringify(opts)}`.blue_lt);
-        opts = ctor_opts(arguments);
+        opts = ctor_opts(Array.from(arguments));
         this.devmode = firstOf((opts || {}).DEV_MODE, OPTS.DEV_MODE[1], true);
         this.title = firstOf((opts || {}).TITLE || OPTS.TITLE[1], "(title)");
         this.num_wkers = firstOf((opts || {}).NUM_WKERS, OPTS.NUM_WKERS[1], 0);
@@ -165,7 +179,7 @@ class GpuCanvas
             set: function(newval) { fmt.top = newval; /*this.pivot = this[name]*/; this.paint(); }, //kludge: handle var changes upstream
         });
 
-        debug(`GpuCanvas after ctor: ${JSON.stringify(this)}, #pixels ${pixary.length}`.blue_lt);
+        debug(`after ctor: ${JSON.stringify(this)}, #pixels ${pixary.length}`.blue_lt);
         if (want_debug) this.dump = function(desc) { console.log(`GpuCanvas dump pixels '${desc || ""}': ${pixary.length} ${JSON.stringify(pixary)}`.blue_lt); }
 //create proxy to intercept property accesses:
 //most accesses will be for pixel array, so extra proxy overhead for non-pixel properties is assumed to be insignificant
@@ -193,7 +207,7 @@ class GpuCanvas
                 const inx = xyz(key), istop = isNaN(inx);
                 const value = istop? target[key]: (inx >= 0)? pixary[inx]: BLACK; //null;
                 if (typeof value == 'function') return function (...args) { return value.apply(this, args); } //Reflect[key](...args);
-                debug(shorten(`GpuCanvas got-${istop? "obj": (inx < 0)? "noop": "ary"}[${typeof key}:${key} => ${typeof inx}:${inx}] = ${typeof value}:${value}`.blue_lt));
+                debug(shorten(`got-${istop? "obj": (inx < 0)? "noop": "ary"}[${typeof key}:${key} => ${typeof inx}:${inx}] = ${typeof value}:${value}`.blue_lt));
       //        console.log(`ary2d: get '${key}'`);
     //        return Reflect.get(target, propname, receiver);
                 return value;
@@ -201,7 +215,7 @@ class GpuCanvas
             set: function(target, key, newval, rcvr)
             {
                 const inx = xyz(key), istop = isNaN(inx);
-                debug(shorten(`GpuCanvas set-${istop? "obj": (inx < 0)? "noop": "ary"}[${typeof key}:${key} => ${typeof inx}:${inx}] = ${newval}`.blue_lt));
+                debug(shorten(`set-${istop? "obj": (inx < 0)? "noop": "ary"}[${typeof key}:${key} => ${typeof inx}:${inx}] = ${newval}`.blue_lt));
                 return istop? target[key] = newval: (inx >= 0)? /*target.*/pixary[inx] = newval: newval; //Reflect.set(target, key, value, rcvr);
             },
         });
@@ -218,16 +232,11 @@ class GpuCanvas
                                 (/*(+x >= 0) &&*/ (+x < width) && (+y >= 0) && (+y < height) && (+z >= 0) && (+z < depth))? (+x * height + +y) * depth + +z: -1; //range check
             if (want_debug && isNaN(++(xyz.seen || {})[key])) //reduce redundant debug info
             {
-                debug(shorten(`GpuCanvas xyz '${key}' => x ${typeof x}:${x}, y ${typeof y}:${y}, z ${typeof z}:${z} => inx ${typeof inx}:${inx}`.blue_lt));
+                debug(shorten(`xyz '${key}' => x ${typeof x}:${x}, y ${typeof y}:${y}, z ${typeof z}:${z} => inx ${typeof inx}:${inx}`.blue_lt));
                 if (!xyz.seen) xyz.seen = {};
                 xyz.seen[key] = 1;
             }
             return inx;
-        }
-//cut down on verbosity:
-        function shorten(str)
-        {
-            return (str || "").replace(/undefined(:undefined)?|string:|number:|object:/g, str => { return str.slice(0, 3) + ((str.slice(-1) == ":")? ":": ""); });
         }
     }
 };
@@ -265,7 +274,6 @@ class GpuCanvas
     if (cluster.isMaster && auto_play) setImmediate(function() { step(THIS.playback); }); //defer execution so caller can override playback()
     return THIS;
 */
-}
 
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -276,33 +284,34 @@ class GpuCanvas
 //get and validate ctor opts:
 function ctor_opts(args)
 {
-    var narg = arguments.length;
-    debug(`#args: ${narg}, last is '${typeof arguments[narg - 1]}'`.blue_lt);
+    debug(`#args: ${args.length}, last is '${typeof args.top}'`.blue_lt);
 //        const [title, width, height, opts] = arguments;
 //        if (!opts) opts = (typeof opts == "boolean")? {WS281X_FMT: opts}: {};
 //combine, make local copy of args:
     const my_opts = {};
-    if (typeof arguments[narg - 1] == "object") Object.assign(my_opts, arguments[--narg]); //named args at end
-    switch (narg) //handle fixed position (unnamed) args (old api, backwards compatible)
+    if (typeof args.top == "object") { Object.assign(my_opts, args.top); args.pop(); } //named args at end
+    switch (args.length) //handle fixed position (unnamed) args (old api, backwards compatible)
     {
-        case 2: my_opts.w = arguments[0]; my_opts.h = arguments[1]; break; //w, h
-        case 4: my_opts.WS281X_FMT = arguments[3]; //title, w, h, fmt (falls thru)
-        case 3: my_opts.h = arguments[2]; my_opts.w = arguments[1]; //title, w, h (falls thru)
-        case 1: my_opts.title = arguments[0]; //title (falls thru)
+        case 2: my_opts.w = args[0]; my_opts.h = args[1]; break; //w, h
+        case 4: my_opts.WS281X_FMT = args[3]; //title, w, h, fmt (falls thru)
+        case 3: my_opts.h = args[2]; my_opts.w = args[1]; //title, w, h (falls thru)
+        case 1: my_opts.title = args[0]; //title (falls thru)
         case 0: break;
-        default: throw new Error(`GpuCanvas ctor only expects 4 unnamed args, got ${narg}`.red_lt);
+        default: throw new Error(`GpuCanvas ctor only expects 4 unnamed args, got ${args.length}`.red_lt);
     }
-    debug(`GpuCanvas.ctor(opts ${JSON.stringify(my_opts)})`.blue_lt);
+    debug(`ctor(my ${args.length} opts ${JSON.stringify(my_opts)})`.blue_lt);
 //validate:
+    const devmode = firstOf((my_opts || {}).DEV_MODE, OPTS.DEV_MODE[1], true);
     Object.keys(my_opts || {}).forEach((key, inx, all) =>
     {
 //        if (/*opts[key] &&*/ !allowed_OPTS[key]) throw new Error(`Option '${key}' not supported until maybe 2018 (OpenGL re-enabled)`.red_lt);
-        const [opt_mode, def_val] = OPTS[key];
+        const [opt_mode, def_val] = OPTS[key] || [];
         if (!opt_mode/*(key in OPTS)*/) throw new Error(`GpuCanvas: option '${key}' not supported until maybe later`.red_lt);
 //        if (!all.WS281X_FMT || (['WS281X_FMT', 'UNIV_TYPE', 'WANT_SHARED'].indexOf(key) != -1)) return;
 //        all[inx] = null; //don't show other stuff in live mode (interferes with output signal)
 //        console.error(`Ignoring option '${key}' for live mode`.yellow_lt);
-        if (all.DEV_MODE) return; //all options okay in dev mode
+        debug(`check opt[${inx}/${all.length}] '${key}' ${typeof my_opts[key]}:${my_opts[key]} vs. allowed mode ${typeof opt_mode}:${opt_mode}, def val ${typeof def_val}:${def_val}, dev mode? ${devmode /*my_opts.DEV_MODE*/}`.blue_lt)
+        if (/*my_opts.DEV_MODE*/ devmode) return; //all options okay in dev mode
         if (opt_mode != DEVONLY) return; //option okay in live mode
         if (all[key] == def_val) return; //default value ok in live mode
 //            all[inx] = null; //don't show other stuff in live mode (interferes with output signal)

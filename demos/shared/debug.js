@@ -1,6 +1,6 @@
 //debug logger:
 //patterned after https://github.com/visionmedia/debug (uses DEBUG env var for control),
-// but auto-defines name, uses indents, and allows caller to specify color and detail level
+// but auto-defines name, uses indents, and allows caller to specify color and detail level or adjust stack
 //turn debug on with:
 // DEBUG=* node caller.js
 // DEBUG=thing1,thing2 node caller.js
